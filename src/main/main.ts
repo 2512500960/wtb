@@ -9,17 +9,25 @@
  * `./src/main.js` using webpack. This gives us some performance wins.
  */
 import path from 'path';
-import { app, BrowserWindow, shell, ipcMain, dialog } from 'electron';
+import { app, BrowserWindow, shell, ipcMain, dialog, type MessageBoxOptions } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import fs from 'fs';
+import * as Hjson from 'hjson';
 import MenuBuilder from './menu';
 import { resolveHtmlPath } from './util';
 
 class AppUpdater {
   constructor() {
     log.transports.file.level = 'info';
+    try {
+      const logFilePath = log.transports.file.getFile().path;
+      log.info(`electron-log file: ${logFilePath}`);
+    } catch (error) {
+      log.warn('Unable to determine electron-log file path', error);
+    }
+
     autoUpdater.logger = log;
     autoUpdater.checkForUpdatesAndNotify();
   }
@@ -107,6 +115,119 @@ const getYggdrasilStderrPath = (): string => {
   return path.join(getYggdrasilDataDir(), 'yggdrasil.stderr.log');
 };
 
+type PeArch = 'x86' | 'x64' | 'arm64' | 'unknown';
+
+const getPeArch = (filePath: string): PeArch | null => {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    const buf = fs.readFileSync(filePath);
+    if (buf.length < 0x40) return 'unknown';
+    // DOS header
+    if (buf[0] !== 0x4d || buf[1] !== 0x5a) return 'unknown'; // 'MZ'
+    const peOffset = buf.readUInt32LE(0x3c);
+    if (!Number.isFinite(peOffset) || peOffset <= 0 || peOffset + 6 >= buf.length) return 'unknown';
+    // PE signature
+    if (
+      buf[peOffset] !== 0x50 ||
+      buf[peOffset + 1] !== 0x45 ||
+      buf[peOffset + 2] !== 0x00 ||
+      buf[peOffset + 3] !== 0x00
+    ) {
+      return 'unknown';
+    }
+    const machine = buf.readUInt16LE(peOffset + 4);
+    switch (machine) {
+      case 0x014c:
+        return 'x86';
+      case 0x8664:
+        return 'x64';
+      case 0xaa64:
+        return 'arm64';
+      default:
+        return 'unknown';
+    }
+  } catch {
+    return 'unknown';
+  }
+};
+
+const readTextFileTail = (filePath: string, maxChars: number = 2000): string | null => {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    const text = fs.readFileSync(filePath, { encoding: 'utf8' });
+    if (text.length <= maxChars) return text.trim();
+    return text.slice(-maxChars).trim();
+  } catch {
+    return null;
+  }
+};
+
+const ensureDir = (dirPath: string): void => {
+  fs.mkdirSync(dirPath, { recursive: true });
+};
+
+const stripUtf8Bom = (text: string): string => {
+  // Windows PowerShell `Out-File -Encoding utf8` writes UTF-8 with BOM.
+  // Yggdrasil may fail to parse HJSON if a BOM is present.
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+};
+
+const generateYggdrasilConfIfMissing = (yggExe: string, confPath: string): void => {
+  if (fs.existsSync(confPath)) return;
+
+  const result = spawnSync(yggExe, ['-genconf'], {
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  if (result.status !== 0) {
+    const stderr = (result.stderr || '').toString().trim();
+    throw new Error(`yggdrasil -genconf 失败（exit=${result.status}）${stderr ? `: ${stderr}` : ''}`);
+  }
+
+  const confText = (result.stdout || '').toString();
+  if (!confText.trim()) {
+    throw new Error('yggdrasil -genconf 输出为空，无法生成配置文件');
+  }
+  fs.writeFileSync(confPath, stripUtf8Bom(confText), { encoding: 'utf8' });
+};
+
+const updateYggdrasilConfP2PDataDir = (confPath: string, desiredDataDir: string): void => {
+  const raw = stripUtf8Bom(fs.readFileSync(confPath, { encoding: 'utf8' }));
+  // Use Hjson round-trip mode to preserve comments/formatting as much as possible.
+  const doc: any = (Hjson as any).rt?.parse ? (Hjson as any).rt.parse(raw) : Hjson.parse(raw);
+
+  if (!doc.P2P || typeof doc.P2P !== 'object') {
+    doc.P2P = {};
+  }
+  doc.P2P.data_dir = desiredDataDir;
+
+  const out: string = (Hjson as any).rt?.stringify
+    ? (Hjson as any).rt.stringify(doc, { quotes: 'all', separator: true, space: 2 })
+    : Hjson.stringify(doc, { quotes: 'all', separator: true, space: 2 });
+
+  fs.writeFileSync(confPath, stripUtf8Bom(out) + '\n', { encoding: 'utf8' });
+};
+
+const buildYggdrasilStartupHint = (baseDir: string): string | null => {
+  const yggExe = path.join(baseDir, 'yggdrasil.exe');
+  const wintunDll = path.join(baseDir, 'wintun.dll');
+  const exeArch = getPeArch(yggExe);
+  const dllArch = getPeArch(wintunDll);
+
+  // The exact Windows loader error in your log corresponds to ERROR_BAD_EXE_FORMAT (193).
+  // Most commonly: DLL arch mismatch (e.g. 32-bit or arm64 wintun.dll with 64-bit yggdrasil.exe).
+  if (exeArch && dllArch && exeArch !== 'unknown' && dllArch !== 'unknown' && exeArch !== dllArch) {
+    return `检测到架构不匹配：yggdrasil.exe=${exeArch}, wintun.dll=${dllArch}。这会导致“%1 is not a valid Win32 application”。请替换为与 yggdrasil.exe 相同架构的 wintun.dll（当前仅支持 Windows x64）。`;
+  }
+
+  return null;
+};
+
 const runPowerShell = (
   command: string,
   options?: { ignoreStdio?: boolean },
@@ -132,13 +253,78 @@ const runPowerShell = (
   };
 };
 
-const runElevatedPowerShellAndWait = (script: string): void => {
+const runPowerShellAsync = (
+  command: string,
+  options?: { ignoreStdio?: boolean; timeoutMs?: number },
+): Promise<{ stdout: string; stderr: string; exitCode: number | null }> => {
+  ensureWindowsOrThrow();
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const child = spawn(
+      'powershell.exe',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command],
+      {
+        windowsHide: true,
+        stdio: options?.ignoreStdio ? 'ignore' : ['ignore', 'pipe', 'pipe'],
+      },
+    );
+
+    const timeoutMs = options?.timeoutMs;
+    const timer = timeoutMs
+      ? setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          try {
+            child.kill();
+          } catch {
+            // ignore
+          }
+          reject(new Error(`PowerShell timed out after ${timeoutMs}ms`));
+        }, timeoutMs)
+      : null;
+
+    let stdout = '';
+    let stderr = '';
+
+    if (!options?.ignoreStdio) {
+      child.stdout?.on('data', (d) => {
+        stdout += d.toString();
+      });
+      child.stderr?.on('data', (d) => {
+        stderr += d.toString();
+      });
+    }
+
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+    };
+
+    child.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    });
+    child.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve({ stdout, stderr, exitCode: code });
+    });
+  });
+};
+
+const runElevatedPowerShellAndWaitAsync = async (script: string): Promise<void> => {
   ensureWindowsOrThrow();
   const command = `Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-Command',${psSingleQuote(
     script,
   )}) -Wait`;
   // Note: output isn't important here; the elevated script writes state (pid/logs/config) to disk.
-  runPowerShell(command, { ignoreStdio: true });
+  const result = await runPowerShellAsync(command, { ignoreStdio: true, timeoutMs: 120_000 });
+  if (result.exitCode !== 0) {
+    throw new Error(`Elevated PowerShell failed (exit=${result.exitCode ?? 'null'})`);
+  }
 };
 
 const runElevatedStartProcessAndGetPid = (
@@ -194,7 +380,7 @@ const readYggdrasilPidFromFile = (): number | null => {
   }
 };
 
-const startYggdrasil = (): ServiceStatus => {
+const startYggdrasil = async (): Promise<ServiceStatus> => {
   ensureWindowsOrThrow();
 
   if (yggdrasilPid && isProcessAlive(yggdrasilPid)) {
@@ -215,8 +401,13 @@ const startYggdrasil = (): ServiceStatus => {
     throw new Error(`yggdrasil.exe not found at: ${yggExe}`);
   }
 
+  const archHint = buildYggdrasilStartupHint(baseDir);
+  if (archHint) {
+    throw new Error(archHint);
+  }
+
   // Explain why we need elevation (minimum privilege: only this service).
-  const choice = dialog.showMessageBoxSync({
+  const msgBoxOptions: MessageBoxOptions = {
     type: 'info',
     buttons: ['取消', '继续'],
     defaultId: 1,
@@ -224,22 +415,31 @@ const startYggdrasil = (): ServiceStatus => {
     title: '需要管理员权限',
     message: '启动 Yggdrasil 需要管理员权限。',
     detail: '需要管理员权限来创建 TUN 网卡，并启动 Yggdrasil 服务。\n\n点击“继续”后将弹出 Windows UAC 提示。',
-  });
-  if (choice !== 1) {
+  };
+  const { response } = mainWindow
+    ? await dialog.showMessageBox(mainWindow, msgBoxOptions)
+    : await dialog.showMessageBox(msgBoxOptions);
+  if (response !== 1) {
     return { name: 'yggdrasil', state: 'stopped', details: '已取消管理员权限请求' };
   }
 
   // Generate config + start yggdrasil from an elevated PowerShell, writing state into the app directory.
   const dataDir = getYggdrasilDataDir();
+  const p2pDataDir = path.join(dataDir, 'datasource');
   const pidPath = getYggdrasilPidPath();
   const stdoutPath = getYggdrasilStdoutPath();
   const stderrPath = getYggdrasilStderrPath();
+
+  // Ensure local state directory + config exist (no elevation needed).
+  ensureDir(dataDir);
+  ensureDir(p2pDataDir);
+  generateYggdrasilConfIfMissing(yggExe, confPath);
+  // Use forward slashes to keep HJSON path portable and avoid escape issues.
+  updateYggdrasilConfP2PDataDir(confPath, p2pDataDir.replace(/\\/g, '/'));
+
   const script = [
     "$ErrorActionPreference = 'Stop'",
     `New-Item -ItemType Directory -Force -Path ${psSingleQuote(dataDir)} | Out-Null`,
-    `if (!(Test-Path -LiteralPath ${psSingleQuote(confPath)})) { & ${psSingleQuote(
-      yggExe,
-    )} -genconf | Out-File -FilePath ${psSingleQuote(confPath)} -Encoding utf8 }`,
     `$p = Start-Process -FilePath ${psSingleQuote(yggExe)} -ArgumentList @('-useconffile',${psSingleQuote(
       confPath,
     )}) -WorkingDirectory ${psSingleQuote(baseDir)} -RedirectStandardOutput ${psSingleQuote(
@@ -250,11 +450,24 @@ const startYggdrasil = (): ServiceStatus => {
     `$p.Id | Out-File -FilePath ${psSingleQuote(pidPath)} -Encoding ascii`,
   ].join('; ');
 
-  runElevatedPowerShellAndWait(script);
-
+  await runElevatedPowerShellAndWaitAsync(script);
+  log.info(getAppDataDir());
+  log.info('yggdrasil start requested (elevated on-demand).');
   const pid = readYggdrasilPidFromFile();
   if (!pid || !isProcessAlive(pid)) {
-    throw new Error('yggdrasil 启动失败：未能获取有效 PID（可能被 UAC 取消或启动异常）');
+    const stderrTail = readTextFileTail(getYggdrasilStderrPath());
+    const commonHint = stderrTail?.includes('wintun.dll')
+      ? '看起来是 wintun.dll 加载失败（常见原因：DLL 架构不匹配）。'
+      : undefined;
+    throw new Error(
+      [
+        'yggdrasil 启动失败：未能获取有效 PID（可能被 UAC 取消或启动异常）',
+        commonHint,
+        stderrTail ? `yggdrasil.stderr.log（末尾）:\n${stderrTail}` : undefined,
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
+    );
   }
 
   yggdrasilPid = pid;
@@ -262,7 +475,7 @@ const startYggdrasil = (): ServiceStatus => {
   return { name: 'yggdrasil', state: 'running', details: `pid=${pid}` };
 };
 
-const stopYggdrasil = (): ServiceStatus => {
+const stopYggdrasil = async (): Promise<ServiceStatus> => {
   ensureWindowsOrThrow();
 
   // Don't prompt on app quit; only stop when explicitly requested.
@@ -271,7 +484,7 @@ const stopYggdrasil = (): ServiceStatus => {
     return { name: 'yggdrasil', state: 'stopped' };
   }
 
-  const choice = dialog.showMessageBoxSync({
+  const msgBoxOptions: MessageBoxOptions = {
     type: 'warning',
     buttons: ['取消', '继续'],
     defaultId: 1,
@@ -279,8 +492,11 @@ const stopYggdrasil = (): ServiceStatus => {
     title: '需要管理员权限',
     message: '停止 Yggdrasil 需要管理员权限。',
     detail: '需要管理员权限来停止已启动的 Yggdrasil 进程。\n\n点击“继续”后将弹出 Windows UAC 提示。',
-  });
-  if (choice !== 1) {
+  };
+  const { response } = mainWindow
+    ? await dialog.showMessageBox(mainWindow, msgBoxOptions)
+    : await dialog.showMessageBox(msgBoxOptions);
+  if (response !== 1) {
     return { name: 'yggdrasil', state: 'running', details: `pid=${pid}` };
   }
 
@@ -294,7 +510,7 @@ const stopYggdrasil = (): ServiceStatus => {
     )} -Force -ErrorAction SilentlyContinue }`,
   ].join('; ');
 
-  runElevatedPowerShellAndWait(script);
+  await runElevatedPowerShellAndWaitAsync(script);
   yggdrasilPid = null;
   log.info(`yggdrasil stop requested. pid=${pid}`);
   return { name: 'yggdrasil', state: 'stopped' };
@@ -334,7 +550,7 @@ ipcMain.handle('services:getAll', async () => {
 ipcMain.handle('services:start', async (_event, serviceName: ServiceName) => {
   try {
     if (serviceName === 'yggdrasil') {
-      return startYggdrasil();
+      return await startYggdrasil();
     }
 
     const ygg = getYggdrasilStatus();
@@ -353,7 +569,7 @@ ipcMain.handle('services:start', async (_event, serviceName: ServiceName) => {
 ipcMain.handle('services:stop', async (_event, serviceName: ServiceName) => {
   try {
     if (serviceName === 'yggdrasil') {
-      return stopYggdrasil();
+      return await stopYggdrasil();
     }
 
     const ygg = getYggdrasilStatus();

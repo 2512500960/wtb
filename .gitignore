@@ -27,3 +27,11 @@ npm-debug.log.*
 *.css.d.ts
 *.sass.d.ts
 *.scss.d.ts
+wtb-data/yggdrasil/datasource/datastore/001035.ldb
+wtb-data/yggdrasil/yggdrasil.conf
+wtb-data/yggdrasil/datasource/datastore/CURRENT
+wtb-data/yggdrasil/datasource/datastore/CURRENT.bak
+wtb-data/yggdrasil/datasource/datastore/LOCK
+wtb-data/yggdrasil/datasource/datastore/LOG
+wtb-data/yggdrasil/datasource/datastore/MANIFEST-000023
+wtb-data/
