@@ -3,7 +3,11 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 
 export type SendChannels = 'ipc-example';
-export type InvokeChannels = 'services:getAll' | 'services:start' | 'services:stop';
+export type InvokeChannels =
+  | 'services:getAll'
+  | 'services:start'
+  | 'services:stop'
+  | 'yggdrasilctl:run';
 export type Channels = SendChannels;
 
 const electronHandler = {

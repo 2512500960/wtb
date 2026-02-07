@@ -17,6 +17,7 @@ import fs from 'fs';
 import * as Hjson from 'hjson';
 import MenuBuilder from './menu';
 import { resolveHtmlPath } from './util';
+import { loadBundledPublicPeers, pickRandomPublicPeerAddresses } from './public_ygg_peers';
 
 class AppUpdater {
   constructor() {
@@ -93,6 +94,10 @@ const getYggdrasilBaseDir = (): string => {
 
 const getYggdrasilExePath = (): string => {
   return path.join(getYggdrasilBaseDir(), 'yggdrasil.exe');
+};
+
+const getYggdrasilCtlExePath = (): string => {
+  return path.join(getYggdrasilBaseDir(), 'yggdrasilctl.exe');
 };
 
 const getYggdrasilDataDir = (): string => {
@@ -172,6 +177,32 @@ const stripUtf8Bom = (text: string): string => {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 };
 
+const updateYggdrasilConfPeers = (confPath: string, peersToAdd: string[]): void => {
+  if (!peersToAdd.length) return;
+  const raw = stripUtf8Bom(fs.readFileSync(confPath, { encoding: 'utf8' }));
+  const doc: any = (Hjson as any).rt?.parse ? (Hjson as any).rt.parse(raw) : Hjson.parse(raw);
+
+  if (!Array.isArray(doc.Peers)) {
+    doc.Peers = [];
+  }
+
+  const existing = new Set<string>(doc.Peers.filter((x: any) => typeof x === 'string'));
+  for (const addr of peersToAdd) {
+    if (typeof addr !== 'string') continue;
+    const trimmed = addr.trim();
+    if (!trimmed) continue;
+    if (existing.has(trimmed)) continue;
+    doc.Peers.push(trimmed);
+    existing.add(trimmed);
+  }
+
+  const out: string = (Hjson as any).rt?.stringify
+    ? (Hjson as any).rt.stringify(doc, { quotes: 'all', separator: true, space: 2 })
+    : Hjson.stringify(doc, { quotes: 'all', separator: true, space: 2 });
+
+  fs.writeFileSync(confPath, stripUtf8Bom(out) + '\n', { encoding: 'utf8' });
+};
+
 const generateYggdrasilConfIfMissing = (yggExe: string, confPath: string): void => {
   if (fs.existsSync(confPath)) return;
 
@@ -194,6 +225,17 @@ const generateYggdrasilConfIfMissing = (yggExe: string, confPath: string): void 
     throw new Error('yggdrasil -genconf 输出为空，无法生成配置文件');
   }
   fs.writeFileSync(confPath, stripUtf8Bom(confText), { encoding: 'utf8' });
+
+  // After generating a fresh config, inject a small random set of public peers.
+  // This improves bootstrapping without requiring a manual edit.
+  try {
+    const baseDir = path.dirname(yggExe);
+    const publicPeers = loadBundledPublicPeers(baseDir);
+    const selected = pickRandomPublicPeerAddresses(publicPeers, 5);
+    updateYggdrasilConfPeers(confPath, selected);
+  } catch (error) {
+    log.warn('Failed to inject public peers into yggdrasil.conf', error);
+  }
 };
 
 const updateYggdrasilConfP2PDataDir = (confPath: string, desiredDataDir: string): void => {
@@ -317,14 +359,16 @@ const runPowerShellAsync = (
 
 const runElevatedPowerShellAndWaitAsync = async (script: string): Promise<void> => {
   ensureWindowsOrThrow();
+  // Don't use -Wait on the outer Start-Process to avoid hanging on redirected output streams.
+  // Instead, the script writes state to disk (pid file) which we can poll.
   const command = `Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-Command',${psSingleQuote(
     script,
-  )}) -Wait`;
+  )})`;
   // Note: output isn't important here; the elevated script writes state (pid/logs/config) to disk.
-  const result = await runPowerShellAsync(command, { ignoreStdio: true, timeoutMs: 120_000 });
-  if (result.exitCode !== 0) {
-    throw new Error(`Elevated PowerShell failed (exit=${result.exitCode ?? 'null'})`);
-  }
+  // We launch the elevated process and return immediately - the caller should poll for the pid file.
+  await runPowerShellAsync(command, { ignoreStdio: true, timeoutMs: 30_000 });
+  // Give the elevated PowerShell time to start and execute the script
+  await new Promise((resolve) => setTimeout(resolve, 2000));
 };
 
 const runElevatedStartProcessAndGetPid = (
@@ -453,7 +497,18 @@ const startYggdrasil = async (): Promise<ServiceStatus> => {
   await runElevatedPowerShellAndWaitAsync(script);
   log.info(getAppDataDir());
   log.info('yggdrasil start requested (elevated on-demand).');
-  const pid = readYggdrasilPidFromFile();
+
+  // Poll for the PID file to be created (may take time due to TUN adapter setup)
+  let pid: number | null = null;
+  const maxRetries = 30; // Wait up to 30 seconds
+  for (let i = 0; i < maxRetries; i++) {
+    pid = readYggdrasilPidFromFile();
+    if (pid && isProcessAlive(pid)) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+
   if (!pid || !isProcessAlive(pid)) {
     const stderrTail = readTextFileTail(getYggdrasilStderrPath());
     const commonHint = stderrTail?.includes('wintun.dll')
@@ -511,6 +566,10 @@ const stopYggdrasil = async (): Promise<ServiceStatus> => {
   ].join('; ');
 
   await runElevatedPowerShellAndWaitAsync(script);
+
+  // Wait a moment for the process to stop and PID file to be deleted
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+
   yggdrasilPid = null;
   log.info(`yggdrasil stop requested. pid=${pid}`);
   return { name: 'yggdrasil', state: 'stopped' };
@@ -541,6 +600,104 @@ const getAllServiceStatuses = (): ServiceStatus[] => {
     { name: 'ipfs', state: 'stopped', details: lockedDetails ?? 'not implemented yet' },
     { name: 'web', state: 'stopped', details: lockedDetails ?? 'not implemented yet' },
   ];
+};
+
+type YggdrasilCtlCommand =
+  | 'getself'
+  | 'getpeers'
+  | 'getsessions'
+  | 'getpaths'
+  | 'gettree'
+  | 'gettun'
+  | 'getp2ppeers'
+  | 'getmulticastinterfaces'
+  | 'list';
+
+type YggdrasilCtlResult = {
+  ok: boolean;
+  command: YggdrasilCtlCommand;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+};
+
+const yggdrasilCtlAllowedCommands: ReadonlySet<string> = new Set<string>([
+  'getself',
+  'getpeers',
+  'getsessions',
+  'getpaths',
+  'gettree',
+  'gettun',
+  'getp2ppeers',
+  'getmulticastinterfaces',
+  'list',
+]);
+
+const runYggdrasilCtl = async (
+  command: YggdrasilCtlCommand,
+  timeoutMs: number = 5000,
+): Promise<YggdrasilCtlResult> => {
+  ensureWindowsOrThrow();
+
+  if (!yggdrasilCtlAllowedCommands.has(command)) {
+    throw new Error(`Unsupported yggdrasilctl command: ${command}`);
+  }
+
+  const exePath = getYggdrasilCtlExePath();
+  if (!fs.existsSync(exePath)) {
+    throw new Error(`yggdrasilctl.exe not found at: ${exePath}`);
+  }
+
+  const start = Date.now();
+  const args = [command];
+
+  return await new Promise<YggdrasilCtlResult>((resolve, reject) => {
+    const child = spawn(exePath, args, {
+      windowsHide: true,
+      cwd: getYggdrasilBaseDir(),
+      env: process.env,
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    const timer = setTimeout(() => {
+      try {
+        child.kill();
+      } catch {
+        // ignore
+      }
+    }, timeoutMs);
+
+    child.stdout?.on('data', (buf) => {
+      stdout += buf.toString('utf8');
+    });
+    child.stderr?.on('data', (buf) => {
+      stderr += buf.toString('utf8');
+    });
+
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      const durationMs = Date.now() - start;
+      const exitCode = typeof code === 'number' ? code : null;
+      const ok = exitCode === 0;
+
+      resolve({
+        ok,
+        command,
+        exitCode,
+        stdout: (stdout || '').toString(),
+        stderr: (stderr || '').toString(),
+        durationMs,
+      });
+    });
+  });
 };
 
 ipcMain.handle('services:getAll', async () => {
@@ -581,6 +738,29 @@ ipcMain.handle('services:stop', async (_event, serviceName: ServiceName) => {
     const message = error instanceof Error ? error.message : String(error);
     log.error(`Failed to stop service ${serviceName}:`, error);
     return { name: serviceName, state: 'stopped', details: message } satisfies ServiceStatus;
+  }
+});
+
+ipcMain.handle('yggdrasilctl:run', async (_event, command: YggdrasilCtlCommand) => {
+  try {
+    // Most commands require Yggdrasil to be running; surfacing a friendly error helps UX.
+    const ygg = getYggdrasilStatus();
+    if (command !== 'list' && ygg.state !== 'running') {
+      throw new Error('Yggdrasil 未运行，无法获取状态。请先在首页启动 Yggdrasil。');
+    }
+
+    return await runYggdrasilCtl(command);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log.error(`yggdrasilctl failed: command=${command}`, error);
+    return {
+      ok: false,
+      command,
+      exitCode: null,
+      stdout: '',
+      stderr: message,
+      durationMs: 0,
+    } satisfies YggdrasilCtlResult;
   }
 });
 

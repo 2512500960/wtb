@@ -6,17 +6,16 @@ body {
   position: relative;
   color: white;
   height: 100vh;
-  background: linear-gradient(
-    200.96deg,
-    #fedc2a -29.09%,
-    #dd5789 51.77%,
-    #7a2c9e 129.35%
-  );
+  background: linear-gradient(200.96deg,
+      #fedc2a -29.09%,
+      #dd5789 51.77%,
+      #7a2c9e 129.35%);
   font-family: sans-serif;
-  overflow-y: hidden;
+  overflow-y: auto;
   display: flex;
   justify-content: center;
-  align-items: center;
+  align-items: flex-start;
+  padding: 24px 0;
 }
 
 .LauncherRoot {
@@ -41,7 +40,7 @@ body {
 
 .LauncherGrid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  grid-template-columns: repeat(4, minmax(180px, 1fr));
   gap: 18px;
 }
 
@@ -196,7 +195,8 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.22);
   cursor: pointer;
   transition: transform 0.12s ease, background 0.12s ease, border 0.12s ease;
-  min-height: 170px;
+  min-height: 130px;
+  min-width: 130px;
 }
 
 .LauncherTile.isDisabled {
@@ -264,6 +264,108 @@ body {
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.12);
   border: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.StatusControls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.StatusSummary {
+  font-weight: 700;
+  opacity: 0.92;
+}
+
+.StatusLabel {
+  font-weight: 700;
+  opacity: 0.92;
+}
+
+.StatusSelect {
+  min-width: min(520px, 100%);
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(0, 0, 0, 0.18);
+  color: rgba(255, 255, 255, 0.92);
+  outline: none;
+}
+
+.StatusMeta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  opacity: 0.95;
+}
+
+.StatusOk,
+.StatusBad {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.16);
+  font-weight: 800;
+  letter-spacing: 0.2px;
+}
+
+.StatusBlock {
+  margin-top: 12px;
+}
+
+.StatusBlocks {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.StatusBlockHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.StatusBlockDesc {
+  opacity: 0.85;
+  font-weight: 700;
+}
+
+.StatusIO {
+  margin-top: 10px;
+}
+
+.StatusBlockTitle {
+  font-size: 12px;
+  font-weight: 800;
+  opacity: 0.9;
+  margin-bottom: 6px;
+}
+
+.StatusPre {
+  margin: 0;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  max-height: 48vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    'Liberation Mono', 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.StatusEmpty {
+  margin-top: 12px;
+  opacity: 0.85;
 }
 
 button {

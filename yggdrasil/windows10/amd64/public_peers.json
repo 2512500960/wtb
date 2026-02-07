@@ -1,0 +1,2370 @@
+[
+  {
+    "address": "tcp://37.186.113.100:1514",
+    "protocol": "tcp",
+    "ipVersion": "ipv4",
+    "region": "armenia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://37.186.113.100:1515",
+    "protocol": "quic",
+    "ipVersion": "ipv4",
+    "region": "armenia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://37.186.113.100:1515",
+    "protocol": "tls",
+    "ipVersion": "ipv4",
+    "region": "armenia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "ws://37.186.113.100:1516",
+    "protocol": "ws",
+    "ipVersion": "ipv4",
+    "region": "armenia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "wss://ygg-evn-1.wgos.org:443",
+    "protocol": "wss",
+    "ipVersion": "unknown",
+    "region": "armenia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://syd.joel.net.au:8443",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "australia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://sirsegv.moe:7676",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "australia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://yg-syd.magicum.net:23700",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "australia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://yg-syd.magicum.net:23701",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "australia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://yg-mel.magicum.net:23800",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "australia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://yg-mel.magicum.net:23801",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "australia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://ygg7.mk16.de:1337?key=000000086278b5f3ba1eb63acb5b7f6e406f04ce83990dee9c07f49011e375ae",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "austria",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://ygg7.mk16.de:1338?key=000000086278b5f3ba1eb63acb5b7f6e406f04ce83990dee9c07f49011e375ae",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "austria",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://ygg7.mk16.de:1339?key=000000086278b5f3ba1eb63acb5b7f6e406f04ce83990dee9c07f49011e375ae",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "austria",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "ws://ygg7.mk16.de:1340?key=000000086278b5f3ba1eb63acb5b7f6e406f04ce83990dee9c07f49011e375ae",
+    "protocol": "ws",
+    "ipVersion": "unknown",
+    "region": "austria",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://109.176.250.101:65534",
+    "protocol": "tls",
+    "ipVersion": "ipv4",
+    "region": "austria",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://[2a02:1b8:10:147::1:1ea]:65534",
+    "protocol": "tls",
+    "ipVersion": "ipv6",
+    "region": "austria",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://Yggdrasil.UnderEu.Net:37001",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "brazil",
+    "status": "online 2 days",
+    "reliability": "97%"
+  },
+  {
+    "address": "quic://Yggdrasil.UnderEu.Net:37003",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "brazil",
+    "status": "online 2 days",
+    "reliability": "93%"
+  },
+  {
+    "address": "tcp://ygg3.mk16.de:1337?key=000003acdaf2a60e8de2f63c3e63b7e911d02380934f09ee5c83acb758f470c1",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "canada",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://ygg3.mk16.de:1338?key=000003acdaf2a60e8de2f63c3e63b7e911d02380934f09ee5c83acb758f470c1",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "canada",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://ygg3.mk16.de:1339?key=000003acdaf2a60e8de2f63c3e63b7e911d02380934f09ee5c83acb758f470c1",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "canada",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "ws://ygg3.mk16.de:1340?key=000003acdaf2a60e8de2f63c3e63b7e911d02380934f09ee5c83acb758f470c1",
+    "protocol": "ws",
+    "ipVersion": "unknown",
+    "region": "canada",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://scarlet.mboa.dev:3443",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "canada",
+    "status": "online 21 hours",
+    "reliability": "93%"
+  },
+  {
+    "address": "tcp://ygg-1.okade.pro:20000",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "chile",
+    "status": "online 5 days",
+    "reliability": "98%"
+  },
+  {
+    "address": "tcp://ygg.nadeko.net:44441",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "chile",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://ygg.nadeko.net:44442",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "chile",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://[2a03:3b40:fe:ab::1]:993",
+    "protocol": "tls",
+    "ipVersion": "ipv6",
+    "region": "czechia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://37.205.14.171:993",
+    "protocol": "tls",
+    "ipVersion": "ipv4",
+    "region": "czechia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://ygg-hel-1.wgos.org:45170",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "finland",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://ygg-hel-1.wgos.org:45171",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "finland",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://ygg-hel-1.wgos.org:45171",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "finland",
+    "status": "online 1 day",
+    "reliability": "94%"
+  },
+  {
+    "address": "ws://ygg-hel-1.wgos.org:45172",
+    "protocol": "ws",
+    "ipVersion": "unknown",
+    "region": "finland",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://[2a01:4f9:2b:2d8f::2]:1337",
+    "protocol": "tls",
+    "ipVersion": "ipv6",
+    "region": "finland",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://95.217.35.92:1337",
+    "protocol": "tls",
+    "ipVersion": "ipv4",
+    "region": "finland",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://[2001:470:1f13:e56::64]:39565",
+    "protocol": "tcp",
+    "ipVersion": "ipv6",
+    "region": "france",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://[2001:470:1f13:e56::64]:39575",
+    "protocol": "tls",
+    "ipVersion": "ipv6",
+    "region": "france",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://62.210.85.80:39565",
+    "protocol": "tcp",
+    "ipVersion": "ipv4",
+    "region": "france",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://62.210.85.80:39575",
+    "protocol": "tls",
+    "ipVersion": "ipv4",
+    "region": "france",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://s2.i2pd.xyz:39565",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "france",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://s2.i2pd.xyz:39575",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "france",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://51.15.204.214:12345",
+    "protocol": "tcp",
+    "ipVersion": "ipv4",
+    "region": "france",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://51.15.204.214:54321",
+    "protocol": "tls",
+    "ipVersion": "ipv4",
+    "region": "france",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://yggpeer.tilde.green:53299",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "france",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://yggpeer.tilde.green:59454",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "france",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://yggpeer.tilde.green:62265",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "france",
+    "status": "online 2 days",
+    "reliability": "97%"
+  },
+  {
+    "address": "tcp://ygg6.mk16.de:1337?key=0000005e5ced06fd4d465bc651c5deb6d70cbe82d36efb68c0450268eaaa5384",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "france",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://ygg6.mk16.de:1338?key=0000005e5ced06fd4d465bc651c5deb6d70cbe82d36efb68c0450268eaaa5384",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "france",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://ygg6.mk16.de:1339?key=0000005e5ced06fd4d465bc651c5deb6d70cbe82d36efb68c0450268eaaa5384",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "france",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "ws://ygg6.mk16.de:1340?key=0000005e5ced06fd4d465bc651c5deb6d70cbe82d36efb68c0450268eaaa5384",
+    "protocol": "ws",
+    "ipVersion": "unknown",
+    "region": "france",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://ygg.jholden.org:1555",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "france",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://n.ygg.yt:443",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "germany",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://ip4.fvm.mywire.org:443?key=000000000143db657d1d6f80b5066dd109a4cb31f7dc6cb5d56050fffb014217",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "germany",
+    "status": "online 11 hours",
+    "reliability": "98%"
+  },
+  {
+    "address": "tcp://ip4.fvm.mywire.org:8080?key=000000000143db657d1d6f80b5066dd109a4cb31f7dc6cb5d56050fffb014217",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "germany",
+    "status": "online 4 days",
+    "reliability": "99%"
+  },
+  {
+    "address": "quic://ip6.fvm.mywire.org:443?key=000000000143db657d1d6f80b5066dd109a4cb31f7dc6cb5d56050fffb014217",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "germany",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://ip6.fvm.mywire.org:8080?key=000000000143db657d1d6f80b5066dd109a4cb31f7dc6cb5d56050fffb014217",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "germany",
+    "status": "online 4 days",
+    "reliability": "99%"
+  },
+  {
+    "address": "tls://b.ygg.yt:443",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "germany",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://g.ygg.yt:443",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "germany",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://ygg1.mk16.de:1337?key=0000000087ee9949eeab56bd430ee8f324cad55abf3993ed9b9be63ce693e18a",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "germany",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://ygg1.mk16.de:1338?key=0000000087ee9949eeab56bd430ee8f324cad55abf3993ed9b9be63ce693e18a",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "germany",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://ygg1.mk16.de:1339?key=0000000087ee9949eeab56bd430ee8f324cad55abf3993ed9b9be63ce693e18a",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "germany",
+    "status": "online 5 days",
+    "reliability": "99%"
+  },
+  {
+    "address": "ws://ygg1.mk16.de:1340?key=0000000087ee9949eeab56bd430ee8f324cad55abf3993ed9b9be63ce693e18a",
+    "protocol": "ws",
+    "ipVersion": "unknown",
+    "region": "germany",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://103.109.234.106:443?key=000000035621c71b5610434589df051aed2688510f904ae79860668dc0fbf182",
+    "protocol": "tls",
+    "ipVersion": "ipv4",
+    "region": "germany",
+    "status": "online 1 day",
+    "reliability": "99%"
+  },
+  {
+    "address": "tls://[2a0f:b240:e:162::1]:443?key=000000035621c71b5610434589df051aed2688510f904ae79860668dc0fbf182",
+    "protocol": "tls",
+    "ipVersion": "ipv6",
+    "region": "germany",
+    "status": "online 1 day",
+    "reliability": "99%"
+  },
+  {
+    "address": "quic://[2a0b:4142:e9e::2]:65535",
+    "protocol": "quic",
+    "ipVersion": "ipv6",
+    "region": "germany",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://[2a0b:4142:e9e::2]:65535",
+    "protocol": "tcp",
+    "ipVersion": "ipv6",
+    "region": "germany",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://94.159.111.184:65535",
+    "protocol": "quic",
+    "ipVersion": "ipv4",
+    "region": "germany",
+    "status": "online 5 days",
+    "reliability": "99%"
+  },
+  {
+    "address": "tcp://94.159.111.184:65535",
+    "protocol": "tcp",
+    "ipVersion": "ipv4",
+    "region": "germany",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://vpn.ltha.de:443?key=0000006149970f245e6cec43664bce203f2514b60a153e194f31e2b229a1339d",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "germany",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://[2a0b:4142:ce0::2]:65535",
+    "protocol": "quic",
+    "ipVersion": "ipv6",
+    "region": "germany",
+    "status": "online 4 days",
+    "reliability": "99%"
+  },
+  {
+    "address": "tcp://[2a0b:4142:ce0::2]:65535",
+    "protocol": "tcp",
+    "ipVersion": "ipv6",
+    "region": "germany",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://94.159.110.4:65535",
+    "protocol": "quic",
+    "ipVersion": "ipv4",
+    "region": "germany",
+    "status": "online 2 days",
+    "reliability": "99%"
+  },
+  {
+    "address": "tcp://94.159.110.4:65535",
+    "protocol": "tcp",
+    "ipVersion": "ipv4",
+    "region": "germany",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://yggdrasil.su:62486",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "germany",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://yggdrasil.su:62586",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "germany",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://87.251.77.39:65535",
+    "protocol": "quic",
+    "ipVersion": "ipv4",
+    "region": "germany",
+    "status": "online 1 day",
+    "reliability": "95%"
+  },
+  {
+    "address": "tcp://87.251.77.39:65535",
+    "protocol": "tcp",
+    "ipVersion": "ipv4",
+    "region": "germany",
+    "status": "online 2 days",
+    "reliability": "97%"
+  },
+  {
+    "address": "tcp://ygg2.mk16.de:1337?key=000000d80a2d7b3126ea65c8c08fc751088c491a5cdd47eff11c86fa1e4644ae",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "germany",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://ygg2.mk16.de:1338?key=000000d80a2d7b3126ea65c8c08fc751088c491a5cdd47eff11c86fa1e4644ae",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "germany",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://ygg2.mk16.de:1339?key=000000d80a2d7b3126ea65c8c08fc751088c491a5cdd47eff11c86fa1e4644ae",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "germany",
+    "status": "online 1 hour",
+    "reliability": "98%"
+  },
+  {
+    "address": "ws://ygg2.mk16.de:1340?key=000000d80a2d7b3126ea65c8c08fc751088c491a5cdd47eff11c86fa1e4644ae",
+    "protocol": "ws",
+    "ipVersion": "unknown",
+    "region": "germany",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://helium.avevad.com:1337",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "germany",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://ygg.mkg20001.io:80",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "germany",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://ygg.mkg20001.io:443",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "germany",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://91.98.126.143:32000",
+    "protocol": "tls",
+    "ipVersion": "ipv4",
+    "region": "germany",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://159.195.4.143:9001",
+    "protocol": "tls",
+    "ipVersion": "ipv4",
+    "region": "germany",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://yggdrasil.neilalexander.dev:64648?key=ecbbcb3298e7d3b4196103333c3e839cfe47a6ca47602b94a6d596683f6bb358",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "germany",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://bode.theender.net:42069",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "germany",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://bode.theender.net:42169?key=f91b909f43829f8b20732b3bcf80cbc4bb078dd47b41638379a078e35984c9a4",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "germany",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://ygg5.mk16.de:1337?key=0000009611ae5391dc0aceea9f3fa6a0dc1279f4306059339e84bfb8b74d2f9b",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "hong-kong",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://ygg5.mk16.de:1338?key=0000009611ae5391dc0aceea9f3fa6a0dc1279f4306059339e84bfb8b74d2f9b",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "hong-kong",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://ygg5.mk16.de:1339?key=0000009611ae5391dc0aceea9f3fa6a0dc1279f4306059339e84bfb8b74d2f9b",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "hong-kong",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "ws://ygg5.mk16.de:1340?key=0000009611ae5391dc0aceea9f3fa6a0dc1279f4306059339e84bfb8b74d2f9b",
+    "protocol": "ws",
+    "ipVersion": "unknown",
+    "region": "hong-kong",
+    "status": "online 1 day",
+    "reliability": "99%"
+  },
+  {
+    "address": "tls://yg-hkg.magicum.net:32333",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "hong-kong",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://yg-hkg.magicum.net:32334",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "hong-kong",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "ws://ygg1.grin.hu:42443",
+    "protocol": "ws",
+    "ipVersion": "unknown",
+    "region": "hungary",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://ygg1.grin.hu:42444",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "hungary",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://supanadit.com:15021",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "indonesia",
+    "status": "online 3 days",
+    "reliability": "98%"
+  },
+  {
+    "address": "quic://supanadit.com:15022",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "indonesia",
+    "status": "online 2 days",
+    "reliability": "98%"
+  },
+  {
+    "address": "tls://astrra.space:55535",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "japan",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://133.18.201.69:54232",
+    "protocol": "tls",
+    "ipVersion": "ipv4",
+    "region": "japan",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://153.120.42.137:54232",
+    "protocol": "tls",
+    "ipVersion": "ipv4",
+    "region": "japan",
+    "status": "online 21 hours",
+    "reliability": "99%"
+  },
+  {
+    "address": "tls://yg-tyo.magicum.net:32333",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "japan",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://yg-tyo.magicum.net:32334",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "japan",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://srl.newsdeef.eu:59999",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "luxembourg",
+    "status": "online 22 hours",
+    "reliability": "99%"
+  },
+  {
+    "address": "tcp://vpn.itrus.su:7991",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "netherlands",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://vpn.itrus.su:7992",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "netherlands",
+    "status": "online 1 day",
+    "reliability": "99%"
+  },
+  {
+    "address": "quic://vpn.itrus.su:7993",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "netherlands",
+    "status": "online 10 hours",
+    "reliability": "79%"
+  },
+  {
+    "address": "ws://vpn.itrus.su:7994",
+    "protocol": "ws",
+    "ipVersion": "unknown",
+    "region": "netherlands",
+    "status": "online 5 days",
+    "reliability": "99%"
+  },
+  {
+    "address": "quic://146.103.111.53:65535",
+    "protocol": "quic",
+    "ipVersion": "ipv4",
+    "region": "netherlands",
+    "status": "online 5 days",
+    "reliability": "99%"
+  },
+  {
+    "address": "tcp://146.103.111.53:65535",
+    "protocol": "tcp",
+    "ipVersion": "ipv4",
+    "region": "netherlands",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://[2a14:1e00:3:15c::]:65535",
+    "protocol": "tcp",
+    "ipVersion": "ipv6",
+    "region": "netherlands",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://[2a14:1e00:3:15c::]:65535",
+    "protocol": "quic",
+    "ipVersion": "ipv6",
+    "region": "netherlands",
+    "status": "online 5 days",
+    "reliability": "99%"
+  },
+  {
+    "address": "tcp://109.107.177.127:65535",
+    "protocol": "tcp",
+    "ipVersion": "ipv4",
+    "region": "netherlands",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://109.107.177.127:65535",
+    "protocol": "quic",
+    "ipVersion": "ipv4",
+    "region": "netherlands",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://[2a0d:8480:3:234c::]:65535",
+    "protocol": "quic",
+    "ipVersion": "ipv6",
+    "region": "netherlands",
+    "status": "online 5 days",
+    "reliability": "99%"
+  },
+  {
+    "address": "tcp://[2a0d:8480:3:234c::]:65535",
+    "protocol": "tcp",
+    "ipVersion": "ipv6",
+    "region": "netherlands",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://[2a14:1e00:1:ecd::]:65535",
+    "protocol": "quic",
+    "ipVersion": "ipv6",
+    "region": "netherlands",
+    "status": "online 3 days",
+    "reliability": "97%"
+  },
+  {
+    "address": "tcp://[2a14:1e00:1:ecd::]:65535",
+    "protocol": "tcp",
+    "ipVersion": "ipv6",
+    "region": "netherlands",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://5.35.70.181:65535",
+    "protocol": "quic",
+    "ipVersion": "ipv4",
+    "region": "netherlands",
+    "status": "online 2 days",
+    "reliability": "96%"
+  },
+  {
+    "address": "tcp://5.35.70.181:65535",
+    "protocol": "tcp",
+    "ipVersion": "ipv4",
+    "region": "netherlands",
+    "status": "online 2 days",
+    "reliability": "96%"
+  },
+  {
+    "address": "quic://[2a14:1e00:1:f3c::]:65535",
+    "protocol": "quic",
+    "ipVersion": "ipv6",
+    "region": "netherlands",
+    "status": "online 5 days",
+    "reliability": "99%"
+  },
+  {
+    "address": "tcp://[2a14:1e00:1:f3c::]:65535",
+    "protocol": "tcp",
+    "ipVersion": "ipv6",
+    "region": "netherlands",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://89.110.116.167:65535",
+    "protocol": "quic",
+    "ipVersion": "ipv4",
+    "region": "netherlands",
+    "status": "online 5 days",
+    "reliability": "98%"
+  },
+  {
+    "address": "tcp://89.110.116.167:65535",
+    "protocol": "tcp",
+    "ipVersion": "ipv4",
+    "region": "netherlands",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://212.34.131.160:65535",
+    "protocol": "quic",
+    "ipVersion": "ipv4",
+    "region": "netherlands",
+    "status": "online 5 days",
+    "reliability": "99%"
+  },
+  {
+    "address": "tcp://212.34.131.160:65535",
+    "protocol": "tcp",
+    "ipVersion": "ipv4",
+    "region": "netherlands",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://[2a14:1e00:1:bae::]:65535",
+    "protocol": "quic",
+    "ipVersion": "ipv6",
+    "region": "netherlands",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://[2a14:1e00:1:bae::]:65535",
+    "protocol": "tcp",
+    "ipVersion": "ipv6",
+    "region": "netherlands",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://146.103.107.222:65535",
+    "protocol": "tcp",
+    "ipVersion": "ipv4",
+    "region": "netherlands",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://146.103.107.222:65535",
+    "protocol": "quic",
+    "ipVersion": "ipv4",
+    "region": "netherlands",
+    "status": "online 5 days",
+    "reliability": "99%"
+  },
+  {
+    "address": "tcp://[2a14:1e00:3:2b2::]:65535",
+    "protocol": "tcp",
+    "ipVersion": "ipv6",
+    "region": "netherlands",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://[2a14:1e00:3:2b2::]:65535",
+    "protocol": "quic",
+    "ipVersion": "ipv6",
+    "region": "netherlands",
+    "status": "online 5 days",
+    "reliability": "99%"
+  },
+  {
+    "address": "tls://23.137.249.65:444",
+    "protocol": "tls",
+    "ipVersion": "ipv4",
+    "region": "netherlands",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://[2a0d:8480:1:209e::]:65535",
+    "protocol": "quic",
+    "ipVersion": "ipv6",
+    "region": "netherlands",
+    "status": "online 3 days",
+    "reliability": "99%"
+  },
+  {
+    "address": "tcp://[2a0d:8480:1:209e::]:65535",
+    "protocol": "tcp",
+    "ipVersion": "ipv6",
+    "region": "netherlands",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://88.210.10.78:65535",
+    "protocol": "tcp",
+    "ipVersion": "ipv4",
+    "region": "netherlands",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://88.210.10.78:65535",
+    "protocol": "quic",
+    "ipVersion": "ipv4",
+    "region": "netherlands",
+    "status": "online 3 days",
+    "reliability": "98%"
+  },
+  {
+    "address": "tls://62.212.82.55:443?key=00000002a957313975d1fe53b9ac641b05b1a9c37da22d4ebcef45e7a5bd4c67",
+    "protocol": "tls",
+    "ipVersion": "ipv4",
+    "region": "netherlands",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://thatmaidguy.fvds.ru:7991",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "netherlands",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://cirno.nadeko.net:44441",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "netherlands",
+    "status": "online 2 days",
+    "reliability": "98%"
+  },
+  {
+    "address": "tls://cirno.nadeko.net:44442",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "netherlands",
+    "status": "online 2 days",
+    "reliability": "98%"
+  },
+  {
+    "address": "quic://185.181.60.111:1513?key=00defa4b4b243547f2d5641ac5235ff1e35d393c576e4bb9cd45baefc81e48d9",
+    "protocol": "quic",
+    "ipVersion": "ipv4",
+    "region": "norway",
+    "status": "online 5 days",
+    "reliability": "99%"
+  },
+  {
+    "address": "tls://185.181.60.111:1513?key=00defa4b4b243547f2d5641ac5235ff1e35d393c576e4bb9cd45baefc81e48d9",
+    "protocol": "tls",
+    "ipVersion": "ipv4",
+    "region": "norway",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://[2a03:94e0:ffff:185:181:60:0:111]:1513?key=00defa4b4b243547f2d5641ac5235ff1e35d393c576e4bb9cd45baefc81e48d9",
+    "protocol": "quic",
+    "ipVersion": "ipv6",
+    "region": "norway",
+    "status": "online 5 days",
+    "reliability": "99%"
+  },
+  {
+    "address": "tls://[2a03:94e0:ffff:185:181:60:0:111]:1513?key=00defa4b4b243547f2d5641ac5235ff1e35d393c576e4bb9cd45baefc81e48d9",
+    "protocol": "tls",
+    "ipVersion": "ipv6",
+    "region": "norway",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://185.165.169.234:8443",
+    "protocol": "tls",
+    "ipVersion": "ipv4",
+    "region": "romania",
+    "status": "online 20 hours",
+    "reliability": "99%"
+  },
+  {
+    "address": "tcp://185.165.169.234:8880",
+    "protocol": "tcp",
+    "ipVersion": "ipv4",
+    "region": "romania",
+    "status": "online 20 hours",
+    "reliability": "98%"
+  },
+  {
+    "address": "tcp://srv.itrus.su:7991",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://srv.itrus.su:7992",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://srv.itrus.su:7993",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 2 days",
+    "reliability": "99%"
+  },
+  {
+    "address": "ws://srv.itrus.su:7994",
+    "protocol": "ws",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://ip4.01.msk.ru.dioni.su:9002",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 day",
+    "reliability": "97%"
+  },
+  {
+    "address": "tcp://ip4.01.msk.ru.dioni.su:9002",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://ip4.01.msk.ru.dioni.su:9003",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "ws://ip4.01.msk.ru.dioni.su:9004",
+    "protocol": "ws",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://ip6.01.msk.ru.dioni.su:9002",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 4 days",
+    "reliability": "98%"
+  },
+  {
+    "address": "tcp://ip6.01.msk.ru.dioni.su:9002",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://ip6.01.msk.ru.dioni.su:9003",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "ws://ip6.01.msk.ru.dioni.su:9004",
+    "protocol": "ws",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://ip4.01.ekb.ru.dioni.su:9002",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 day",
+    "reliability": "99%"
+  },
+  {
+    "address": "tcp://ip4.01.ekb.ru.dioni.su:9002",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://ip4.01.ekb.ru.dioni.su:9003",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "ws://ip4.01.ekb.ru.dioni.su:9004",
+    "protocol": "ws",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://ip6.01.ekb.ru.dioni.su:9002",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 5 days",
+    "reliability": "99%"
+  },
+  {
+    "address": "tcp://ip6.01.ekb.ru.dioni.su:9002",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://ip6.01.ekb.ru.dioni.su:9003",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "ws://ip6.01.ekb.ru.dioni.su:9004",
+    "protocol": "ws",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://ip4.01.tom.ru.dioni.su:9002",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://ip4.01.tom.ru.dioni.su:9002",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 4 days",
+    "reliability": "99%"
+  },
+  {
+    "address": "tls://ip4.01.tom.ru.dioni.su:9003",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "ws://ip4.01.tom.ru.dioni.su:9004",
+    "protocol": "ws",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://yggdrasil.1337.moe:7676",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 19 hours",
+    "reliability": "97%"
+  },
+  {
+    "address": "tcp://[2a09:5302:ffff::132a]:65535",
+    "protocol": "tcp",
+    "ipVersion": "ipv6",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://[2a09:5302:ffff::132a]:65535",
+    "protocol": "quic",
+    "ipVersion": "ipv6",
+    "region": "russia",
+    "status": "online 2 days",
+    "reliability": "92%"
+  },
+  {
+    "address": "quic://89.44.86.85:65535",
+    "protocol": "quic",
+    "ipVersion": "ipv4",
+    "region": "russia",
+    "status": "online 12 hours",
+    "reliability": "92%"
+  },
+  {
+    "address": "tcp://89.44.86.85:65535",
+    "protocol": "tcp",
+    "ipVersion": "ipv4",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://[2a09:5302:ffff::992]:443",
+    "protocol": "tls",
+    "ipVersion": "ipv6",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://[2a09:5302:ffff::992]:12403",
+    "protocol": "tcp",
+    "ipVersion": "ipv6",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://45.95.202.21:443",
+    "protocol": "tls",
+    "ipVersion": "ipv4",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://45.95.202.21:12403",
+    "protocol": "tcp",
+    "ipVersion": "ipv4",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://kursk.cleverfox.org:15015",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 5 days",
+    "reliability": "91%"
+  },
+  {
+    "address": "quic://kursk.cleverfox.org:15015",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 3 days",
+    "reliability": "85%"
+  },
+  {
+    "address": "ws://kursk.cleverfox.org:15016",
+    "protocol": "ws",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 5 days",
+    "reliability": "93%"
+  },
+  {
+    "address": "tcp://kem.txlyre.website:1337",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 5 days",
+    "reliability": "97%"
+  },
+  {
+    "address": "tcp://box.paulll.cc:13337",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://box.paulll.cc:13338",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 5 days",
+    "reliability": "99%"
+  },
+  {
+    "address": "tcp://188.225.9.167:18226",
+    "protocol": "tcp",
+    "ipVersion": "ipv4",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://188.225.9.167:18227",
+    "protocol": "tls",
+    "ipVersion": "ipv4",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://yggno.de:18226",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://yggno.de:18227",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://ygg-msk-1.averyan.ru:8362",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://ygg-msk-1.averyan.ru:8363",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://ygg-msk-1.averyan.ru:8364",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 17 hours",
+    "reliability": "98%"
+  },
+  {
+    "address": "wss://donotclickthis.link:443/api/v2/socket",
+    "protocol": "wss",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 5 days",
+    "reliability": "93%"
+  },
+  {
+    "address": "quic://vix.duckdns.org:36014",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 3 hours",
+    "reliability": "66%"
+  },
+  {
+    "address": "tls://vix.duckdns.org:36014",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 day",
+    "reliability": "89%"
+  },
+  {
+    "address": "tls://37.192.232.33:442",
+    "protocol": "tls",
+    "ipVersion": "ipv4",
+    "region": "russia",
+    "status": "online 4 days",
+    "reliability": "93%"
+  },
+  {
+    "address": "tcp://37.192.232.33:8080",
+    "protocol": "tcp",
+    "ipVersion": "ipv4",
+    "region": "russia",
+    "status": "online 5 days",
+    "reliability": "94%"
+  },
+  {
+    "address": "tcp://yg-vvo.magicum.net:29330",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://yg-vvo.magicum.net:29331",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://itcom.multed.com:7991",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://ekb.itrus.su:7991",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 5 days",
+    "reliability": "94%"
+  },
+  {
+    "address": "tls://ekb.itrus.su:7992",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 5 days",
+    "reliability": "90%"
+  },
+  {
+    "address": "quic://ekb.itrus.su:7993",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 5 days",
+    "reliability": "91%"
+  },
+  {
+    "address": "ws://ekb.itrus.su:7994",
+    "protocol": "ws",
+    "ipVersion": "unknown",
+    "region": "russia",
+    "status": "online 5 days",
+    "reliability": "92%"
+  },
+  {
+    "address": "tls://[2a00:b700::a:279]:443",
+    "protocol": "tls",
+    "ipVersion": "ipv6",
+    "region": "russia",
+    "status": "offline 1 hour",
+    "reliability": "83%"
+  },
+  {
+    "address": "tcp://[2a00:b700::a:279]:12402",
+    "protocol": "tcp",
+    "ipVersion": "ipv6",
+    "region": "russia",
+    "status": "offline 1 hour",
+    "reliability": "82%"
+  },
+  {
+    "address": "tls://45.147.200.202:443",
+    "protocol": "tls",
+    "ipVersion": "ipv4",
+    "region": "russia",
+    "status": "offline 1 hour",
+    "reliability": "85%"
+  },
+  {
+    "address": "tcp://45.147.200.202:12402",
+    "protocol": "tcp",
+    "ipVersion": "ipv4",
+    "region": "russia",
+    "status": "offline 1 hour",
+    "reliability": "83%"
+  },
+  {
+    "address": "tcp://ryd-peer.ygg.sy.sa:8441",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "saudi-arabia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://ryd-peer.ygg.sy.sa:8442",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "saudi-arabia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://ryd-peer.ygg.sy.sa:8443",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "saudi-arabia",
+    "status": "online 3 days",
+    "reliability": "94%"
+  },
+  {
+    "address": "tcp://jed-peer.ygg.sy.sa:8441",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "saudi-arabia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://jed-peer.ygg.sy.sa:8442",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "saudi-arabia",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://jed-peer.ygg.sy.sa:8443",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "saudi-arabia",
+    "status": "online 3 days",
+    "reliability": "97%"
+  },
+  {
+    "address": "quic://asia.deinfra.org:15015",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "singapore",
+    "status": "online 4 days",
+    "reliability": "98%"
+  },
+  {
+    "address": "tls://asia.deinfra.org:15015",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "singapore",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://y.zbin.eu:7743",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "slovakia",
+    "status": "online 3 days",
+    "reliability": "99%"
+  },
+  {
+    "address": "tcp://yggdrasil.deavmi.assigned.network:2000",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "south-africa",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://yggdrasil.deavmi.assigned.network:2001",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "south-africa",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://spain.magicum.net:36900",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "spain",
+    "status": "online 3 days",
+    "reliability": "95%"
+  },
+  {
+    "address": "tls://spain.magicum.net:36901",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "spain",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://rendezvous.anton.molyboha.me:50421",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "spain",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://[2a12:5940:b1a0::2]:65535",
+    "protocol": "quic",
+    "ipVersion": "ipv6",
+    "region": "sweden",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://[2a12:5940:b1a0::2]:65535",
+    "protocol": "tcp",
+    "ipVersion": "ipv6",
+    "region": "sweden",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://ygg.ace.ctrl-c.liu.se:9997?key=5636b3af4738c3998284c4805d91209cab38921159c66a6f359f3f692af1c908",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "sweden",
+    "status": "online 4 days",
+    "reliability": "63%"
+  },
+  {
+    "address": "tcp://ygg.ace.ctrl-c.liu.se:9998?key=5636b3af4738c3998284c4805d91209cab38921159c66a6f359f3f692af1c908",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "sweden",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://ygg.ace.ctrl-c.liu.se:9999?key=5636b3af4738c3998284c4805d91209cab38921159c66a6f359f3f692af1c908",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "sweden",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://sysop.link:555",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "sweden",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://sysop.link:555",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "sweden",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://sto01.yggdrasil.hosted-by.skhron.eu:8883",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "sweden",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://sto01.yggdrasil.hosted-by.skhron.eu:8884",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "sweden",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://sto01.yggdrasil.hosted-by.skhron.eu:8885",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "sweden",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "ws://sto01.yggdrasil.hosted-by.skhron.eu:8886",
+    "protocol": "ws",
+    "ipVersion": "unknown",
+    "region": "sweden",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://77.91.84.76:65535",
+    "protocol": "tcp",
+    "ipVersion": "ipv4",
+    "region": "sweden",
+    "status": "offline 5 days",
+    "reliability": "23%"
+  },
+  {
+    "address": "quic://77.91.84.76:65535",
+    "protocol": "quic",
+    "ipVersion": "ipv4",
+    "region": "sweden",
+    "status": "offline 5 days",
+    "reliability": "23%"
+  },
+  {
+    "address": "tls://193.93.119.42:443",
+    "protocol": "tls",
+    "ipVersion": "ipv4",
+    "region": "ukraine",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "ws://193.93.119.42:850",
+    "protocol": "ws",
+    "ipVersion": "ipv4",
+    "region": "ukraine",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://193.93.119.42:1443",
+    "protocol": "quic",
+    "ipVersion": "ipv4",
+    "region": "ukraine",
+    "status": "online 5 days",
+    "reliability": "99%"
+  },
+  {
+    "address": "tcp://193.93.119.42:14244",
+    "protocol": "tcp",
+    "ipVersion": "ipv4",
+    "region": "ukraine",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://yggdrasil.sunsung.fun:4441",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "ukraine",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://yggdrasil.sunsung.fun:4442",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "ukraine",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://yggdrasil.sunsung.fun:4443",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "ukraine",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://london.sabretruth.org:18472",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "united-kingdom",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://london.sabretruth.org:18473",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "united-kingdom",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://ygg.jjolly.dev:3443",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://ip4.nerdvm.mywire.org:8080?key=00000000c61d731961a290d127cd3fc03a4c5f3f35b9083559d4c81d48d65854",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://ip6.nerdvm.mywire.org:443?key=00000000c61d731961a290d127cd3fc03a4c5f3f35b9083559d4c81d48d65854",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 hour",
+    "reliability": "69%"
+  },
+  {
+    "address": "tcp://ip6.nerdvm.mywire.org:8080?key=00000000c61d731961a290d127cd3fc03a4c5f3f35b9083559d4c81d48d65854",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 4 days",
+    "reliability": "99%"
+  },
+  {
+    "address": "tcp://ygg8.mk16.de:1337?key=0000000b0683e38d8cb3085cfbf217edf0f0b2de76bb5ac7f02a94cd42a3fed9",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://ygg8.mk16.de:1338?key=0000000b0683e38d8cb3085cfbf217edf0f0b2de76bb5ac7f02a94cd42a3fed9",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://ygg8.mk16.de:1339?key=0000000b0683e38d8cb3085cfbf217edf0f0b2de76bb5ac7f02a94cd42a3fed9",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "ws://ygg8.mk16.de:1340?key=0000000b0683e38d8cb3085cfbf217edf0f0b2de76bb5ac7f02a94cd42a3fed9",
+    "protocol": "ws",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://ygg4.mk16.de:1337?key=000000573433e11f23768b078bcdc10b42712a7b131d6d04b82042ffc0c97df0",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://ygg4.mk16.de:1338?key=000000573433e11f23768b078bcdc10b42712a7b131d6d04b82042ffc0c97df0",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://ygg4.mk16.de:1339?key=000000573433e11f23768b078bcdc10b42712a7b131d6d04b82042ffc0c97df0",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "ws://ygg4.mk16.de:1340?key=000000573433e11f23768b078bcdc10b42712a7b131d6d04b82042ffc0c97df0",
+    "protocol": "ws",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://23.184.48.86:993",
+    "protocol": "tls",
+    "ipVersion": "ipv4",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://23.184.48.86:993",
+    "protocol": "quic",
+    "ipVersion": "ipv4",
+    "region": "united-states",
+    "status": "online 5 days",
+    "reliability": "99%"
+  },
+  {
+    "address": "quic://[2602:fc24:18:7a42::1]:993",
+    "protocol": "quic",
+    "ipVersion": "ipv6",
+    "region": "united-states",
+    "status": "online 5 days",
+    "reliability": "98%"
+  },
+  {
+    "address": "tls://[2602:fc24:18:7a42::1]:993",
+    "protocol": "tls",
+    "ipVersion": "ipv6",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://mo.us.ygg.triplebit.org:443",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 day",
+    "reliability": "99%"
+  },
+  {
+    "address": "tls://mo.us.ygg.triplebit.org:993",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://mo.us.ygg.triplebit.org:9000",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "ws://mo.us.ygg.triplebit.org:9010",
+    "protocol": "ws",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://leo.node.3dt.net:9002",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://leo.node.3dt.net:9003",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://leo.node.3dt.net:9004",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://ygg-kcmo.incognet.io:8883",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://ygg-kcmo.incognet.io:8884",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://ygg-kcmo.incognet.io:8885",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 day",
+    "reliability": "99%"
+  },
+  {
+    "address": "ws://ygg-kcmo.incognet.io:8886",
+    "protocol": "ws",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://mn.us.ygg.triplebit.org:443",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://mn.us.ygg.triplebit.org:993",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://mn.us.ygg.triplebit.org:9000",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "ws://mn.us.ygg.triplebit.org:9010",
+    "protocol": "ws",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://kisume.nadeko.net:44441",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://kisume.nadeko.net:44442",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://longseason.1200bps.xyz:13121",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://longseason.1200bps.xyz:13122",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://srv.newsdeef.eu:9999",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://srv.newsdeef.eu:59999",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://129.80.167.244:23165",
+    "protocol": "quic",
+    "ipVersion": "ipv4",
+    "region": "united-states",
+    "status": "online 10 hours",
+    "reliability": "95%"
+  },
+  {
+    "address": "quic://[2603:c020:4015:b937:a1c7:aff8:b558:d1fe]:23165",
+    "protocol": "quic",
+    "ipVersion": "ipv6",
+    "region": "united-states",
+    "status": "online 10 hours",
+    "reliability": "95%"
+  },
+  {
+    "address": "tcp://marisa.nadeko.net:44441",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://marisa.nadeko.net:44442",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tcp://ygg-wa.incognet.io:8883",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://ygg-wa.incognet.io:8884",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://ygg-wa.incognet.io:8885",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "ws://ygg-wa.incognet.io:8886",
+    "protocol": "ws",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "quic://redcatho.de:9494",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://redcatho.de:9494",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://ygg.mnpnk.com:443",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
+    "address": "tls://31.22.111.195:32000",
+    "protocol": "tls",
+    "ipVersion": "ipv4",
+    "region": "united-states",
+    "status": "online 5 days",
+    "reliability": "99%"
+  },
+  {
+    "address": "quic://ip4.nerdvm.mywire.org:443?key=00000000c61d731961a290d127cd3fc03a4c5f3f35b9083559d4c81d48d65854",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "united-states",
+    "status": "offline 2 days",
+    "reliability": "66%"
+  }
+]
