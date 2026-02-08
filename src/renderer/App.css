@@ -5,7 +5,7 @@
 body {
   position: relative;
   color: white;
-  height: 100vh;
+  height:89vh;
   background: linear-gradient(200.96deg,
       #fedc2a -29.09%,
       #dd5789 51.77%,
@@ -146,11 +146,11 @@ body {
 .ServiceActions {
   display: flex;
   gap: 8px;
+  align-items: flex-start;
 }
 
 .ServicePrimaryButton,
-.ServiceDangerButton,
-.ServiceGhostButton {
+.ServiceDangerButton {
   padding: 8px 12px;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.22);
@@ -159,6 +159,31 @@ body {
   cursor: pointer;
   box-shadow: none;
   transform: none;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  width: 80px;
+  height: 40px;
+}
+
+.ServiceGhostButton {
+  /* padding: 8px 12px; */
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: none;
+  transform: none;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  width: 80px;
+  height: 40px;
 }
 
 .ServiceGhostButton {
@@ -395,7 +420,7 @@ a {
   text-decoration: none;
   height: fit-content;
   width: fit-content;
-  margin: 10px;
+  margin: 0;
 }
 
 a:hover {

@@ -14,6 +14,7 @@ import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
 import { spawn, spawnSync } from 'child_process';
 import fs from 'fs';
+import * as http from 'http';
 import * as Hjson from 'hjson';
 import MenuBuilder from './menu';
 import { resolveHtmlPath } from './util';
@@ -47,6 +48,10 @@ type ServiceStatus = {
 };
 
 let yggdrasilPid: number | null = null;
+
+let webServer: http.Server | null = null;
+let webListenAddress: string | null = null;
+let webListenPort: number | null = null;
 
 const psSingleQuote = (value: string): string => {
   return `'${value.replace(/'/g, "''")}'`;
@@ -598,7 +603,11 @@ const getAllServiceStatuses = (): ServiceStatus[] => {
   return [
     ygg,
     { name: 'ipfs', state: 'stopped', details: lockedDetails ?? 'not implemented yet' },
-    { name: 'web', state: 'stopped', details: lockedDetails ?? 'not implemented yet' },
+    (() => {
+      const web = getWebStatus();
+      if (web.state === 'running') return web;
+      return { name: 'web', state: 'stopped', details: lockedDetails ?? undefined };
+    })(),
   ];
 };
 
@@ -700,6 +709,142 @@ const runYggdrasilCtl = async (
   });
 };
 
+const getWebPort = (): number => {
+  const raw = (process.env.WTB_WEB_PORT || '').trim();
+  if (!raw) return 8137;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 65535) {
+    throw new Error(`Invalid WTB_WEB_PORT: ${raw}`);
+  }
+  return parsed;
+};
+
+const parseYggdrasilIPv6FromGetself = (stdout: string): string | null => {
+  const text = (stdout || '').trim();
+  console.log("parseYggdrasilIPv6FromGetself raw output:", text);
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed === 'object') {
+      // Prefer explicit `address` field if present
+      const address = (parsed as any).address;
+      if (typeof address === 'string' && address.includes(':')) {
+        return address.trim();
+      }
+
+      // Some outputs place the address under `self.address`
+      const selfAddress = (parsed as any).self?.address;
+      if (typeof selfAddress === 'string' && selfAddress.includes(':')) {
+        return selfAddress.trim();
+      }
+
+      // Fall back to subnet (take the part before a slash if present)
+      const subnet = (parsed as any).subnet;
+      if (typeof subnet === 'string') {
+        const maybe = subnet.split('/')[0].trim();
+        if (maybe.includes(':')) return maybe;
+      }
+    }
+  } catch {
+    // ignore; fall through to regex
+  }
+
+  // Generic IPv6-like pattern: at least three colon-separated hex groups
+  const match = text.match(/\b([0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){2,})\b/);
+  return match?.[1] ?? null;
+};
+
+const getYggdrasilIPv6AddressOrThrow = async (): Promise<string> => {
+  const result = await runYggdrasilCtl('getself', 3000);
+  if (!result.ok) {
+    const msg = (result.stderr || result.stdout || '').trim();
+    throw new Error(`Failed to query Yggdrasil self address${msg ? `: ${msg}` : ''}`);
+  }
+  const addr = parseYggdrasilIPv6FromGetself(result.stdout);
+  if (!addr) {
+    throw new Error('Unable to parse Yggdrasil IPv6 address from yggdrasilctl getself output.');
+  }
+  return addr;
+};
+
+function getWebStatus(): ServiceStatus {
+  if (webServer && webServer.listening && webListenAddress && webListenPort) {
+    return {
+      name: 'web',
+      state: 'running',
+      details: `http://[${webListenAddress}]:${webListenPort}`,
+    };
+  }
+  return { name: 'web', state: 'stopped' };
+}
+
+const startWebService = async (): Promise<ServiceStatus> => {
+  ensureWindowsOrThrow();
+  const existing = getWebStatus();
+  if (existing.state === 'running') return existing;
+
+  const ygg = getYggdrasilStatus();
+  if (ygg.state !== 'running') {
+    throw new Error('需要先启动 Yggdrasil 服务才能启动 Web 服务。');
+  }
+
+  const host = await getYggdrasilIPv6AddressOrThrow();
+  const port = getWebPort();
+
+  const server = http.createServer((req, res) => {
+    try {
+      if (req.method === 'GET' && (req.url === '/' || req.url === '/health')) {
+        const body = JSON.stringify({ ok: true, service: 'web', time: new Date().toISOString() });
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.end(body);
+        return;
+      }
+
+      res.statusCode = 404;
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.end('Not Found');
+    } catch {
+      try {
+        res.statusCode = 500;
+        res.end('Internal Server Error');
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen({ host, port }, () => resolve());
+  });
+
+  webServer = server;
+  webListenAddress = host;
+  webListenPort = port;
+  log.info(`web service listening on http://[${host}]:${port}`);
+  return getWebStatus();
+};
+
+const stopWebService = async (): Promise<ServiceStatus> => {
+  const server = webServer;
+  if (!server) return { name: 'web', state: 'stopped' };
+
+  await new Promise<void>((resolve) => {
+    try {
+      server.close(() => resolve());
+    } catch {
+      resolve();
+    }
+  });
+
+  webServer = null;
+  webListenAddress = null;
+  webListenPort = null;
+  log.info('web service stopped');
+  return { name: 'web', state: 'stopped' };
+};
+
 ipcMain.handle('services:getAll', async () => {
   return getAllServiceStatuses();
 });
@@ -708,6 +853,10 @@ ipcMain.handle('services:start', async (_event, serviceName: ServiceName) => {
   try {
     if (serviceName === 'yggdrasil') {
       return await startYggdrasil();
+    }
+
+    if (serviceName === 'web') {
+      return await startWebService();
     }
 
     const ygg = getYggdrasilStatus();
@@ -727,6 +876,10 @@ ipcMain.handle('services:stop', async (_event, serviceName: ServiceName) => {
   try {
     if (serviceName === 'yggdrasil') {
       return await stopYggdrasil();
+    }
+
+    if (serviceName === 'web') {
+      return await stopWebService();
     }
 
     const ygg = getYggdrasilStatus();
@@ -848,6 +1001,16 @@ const createWindow = async () => {
 /**
  * Add event listeners...
  */
+
+app.on('before-quit', () => {
+  try {
+    if (webServer) {
+      webServer.close();
+    }
+  } catch {
+    // ignore
+  }
+});
 
 app.on('window-all-closed', () => {
   // Respect the OSX convention of having the application in memory even

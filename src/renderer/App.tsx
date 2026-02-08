@@ -1,22 +1,12 @@
 import * as React from 'react';
 import { MemoryRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import './App.css';
-
-type ServiceName = 'yggdrasil' | 'ipfs' | 'web';
-
-type ServiceStatus = {
-  name: ServiceName;
-  state: 'running' | 'stopped';
-  details?: string;
-};
+import { ServiceName, ServiceStatus } from './types/services';
+import LauncherTileLink from './components/Launcher/LauncherTileLink';
+import LauncherTileExternalLink from './components/Launcher/LauncherTileExternalLink';
+import ServiceCard from './components/ServiceCard/ServiceCard';
 
 const YGG_WEBSITE_INDEX_URL = 'http://[21e:a51c:885b:7db0:166e:927:98cd:d186]/';
-
-const serviceLabel: Record<ServiceName, string> = {
-  yggdrasil: 'Yggdrasil 服务',
-  ipfs: 'IPFS 服务',
-  web: 'Web 服务',
-};
 
 type YggdrasilCtlCommand =
   | 'getself'
@@ -38,96 +28,17 @@ type YggdrasilCtlResult = {
   durationMs: number;
 };
 
-function LauncherTileLink({
-  to,
-  label,
-  icon,
-  disabled,
-  disabledHint,
-}: {
-  to: string;
-  label: string;
-  icon: string;
-  disabled: boolean;
-  disabledHint?: string;
-}) {
-  if (disabled) {
-    return (
-      <div
-        className="LauncherTile isDisabled"
-        role="button"
-        aria-disabled="true"
-        title={disabledHint ?? '需要先启动 Yggdrasil 服务'}
-      >
-        <div className="LauncherIcon" aria-hidden>
-          {icon}
-        </div>
-        <div className="LauncherLabel">{label}</div>
-        <div className="LauncherHint">需要先启动 Yggdrasil</div>
-      </div>
-    );
-  }
-
-  return (
-    <Link className="LauncherTile" to={to} aria-label={label}>
-      <div className="LauncherIcon" aria-hidden>
-        {icon}
-      </div>
-      <div className="LauncherLabel">{label}</div>
-    </Link>
-  );
-}
-
-function LauncherTileExternalLink({
-  href,
-  label,
-  icon,
-  disabled,
-  disabledHint,
-}: {
-  href: string;
-  label: string;
-  icon: string;
-  disabled: boolean;
-  disabledHint?: string;
-}) {
-  if (disabled) {
-    return (
-      <div
-        className="LauncherTile isDisabled"
-        role="button"
-        aria-disabled="true"
-        title={disabledHint ?? 'Requires Yggdrasil to be running'}
-      >
-        <div className="LauncherIcon" aria-hidden>
-          {icon}
-        </div>
-        <div className="LauncherLabel">{label}</div>
-        <div className="LauncherHint">Start Yggdrasil first</div>
-      </div>
-    );
-  }
-
-  return (
-    <a
-      className="LauncherTile"
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      aria-label={label}
-    >
-      <div className="LauncherIcon" aria-hidden>
-        {icon}
-      </div>
-      <div className="LauncherLabel">{label}</div>
-    </a>
-  );
-}
+// LauncherTile and ServiceCard components extracted to separate files
 
 function Home() {
   const [services, setServices] = React.useState<ServiceStatus[]>([]);
   const [busy, setBusy] = React.useState<ServiceName | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+
+  const openExternal = React.useCallback((url: string) => {
+    // In Electron, this will be intercepted by setWindowOpenHandler and opened via shell.
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }, []);
 
   const refresh = React.useCallback(async () => {
     setError(null);
@@ -174,7 +85,7 @@ function Home() {
     <div className="LauncherRoot">
       <div className="LauncherHeader">
         <div className="LauncherTitle">WTB</div>
-        <div className="LauncherSubtitle">请选择一个功能</div>
+        {/* <div className="LauncherSubtitle">请选择一个功能</div> */}
       </div>
 
       <div className="LauncherGrid">
@@ -198,14 +109,6 @@ function Home() {
           icon="⚙️"
           disabled={!yggRunning}
         />
-
-        <LauncherTileLink
-          to="/status"
-          label="Ygg 状态"
-          icon="📡"
-          disabled={false}
-          disabledHint=""
-        />
       </div>
 
       <div className="ServiceSection">
@@ -219,73 +122,17 @@ function Home() {
         {error ? <div className="ServiceError">{error}</div> : null}
 
         <div className="ServiceGrid">
-          {services.map((svc) => {
-            const isBusy = busy === svc.name;
-            const running = svc.state === 'running';
-            const locked = svc.name !== 'yggdrasil' && !yggRunning;
-            const notImplemented = svc.name !== 'yggdrasil' && (svc.details ?? '').includes('not implemented');
-            const disableActions = locked || notImplemented;
-            return (
-              <div
-                key={svc.name}
-                className={
-                  disableActions && !running
-                    ? 'ServiceCard isDisabled'
-                    : 'ServiceCard'
-                }
-              >
-                <div className="ServiceCardTop">
-                  <div>
-                    <div className="ServiceName">{serviceLabel[svc.name]}</div>
-                    <div className="ServiceMeta">
-                      <span
-                        className={running ? 'ServiceDot DotGreen' : 'ServiceDot DotGray'}
-                        aria-hidden
-                      />
-                      <span className="ServiceState">{running ? '运行中' : '未运行'}</span>
-                      {svc.details ? (
-                        <span className="ServiceDetails">{svc.details}</span>
-                      ) : null}
-                    </div>
-                  </div>
-
-                  <div className="ServiceActions">
-                    {running ? (
-                      <button
-                        type="button"
-                        className="ServiceDangerButton"
-                        disabled={isBusy || disableActions}
-                        onClick={() => stop(svc.name)}
-                      >
-                        {isBusy ? '处理中…' : '停止'}
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        className="ServicePrimaryButton"
-                        disabled={isBusy || disableActions}
-                        onClick={() => start(svc.name)}
-                      >
-                        {isBusy ? '处理中…' : '启动'}
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {svc.name === 'yggdrasil' ? (
-                  <div className="ServiceHint">
-                    点击“启动”时才会弹出 UAC。管理员权限用于创建 TUN 网卡并启动 Yggdrasil。
-                  </div>
-                ) : locked ? (
-                  <div className="ServiceHint">需要先启动 Yggdrasil 服务后才能操作。</div>
-                ) : notImplemented ? (
-                  <div className="ServiceHint">该服务暂未接入（后续实现）。</div>
-                ) : (
-                  <div className="ServiceHint">该服务逻辑后续接入。</div>
-                )}
-              </div>
-            );
-          })}
+          {services.map((svc) => (
+            <ServiceCard
+              key={svc.name}
+              svc={svc}
+              yggRunning={yggRunning}
+              busyName={busy}
+              start={start}
+              stop={stop}
+              openExternal={openExternal}
+            />
+          ))}
         </div>
       </div>
     </div>
