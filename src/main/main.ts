@@ -78,6 +78,21 @@ const getAppDataDir = (): string => {
   // Optional override to help debugging / special packaging layouts.
   const override = process.env.WTB_DATA_DIR;
   if (override && override.trim()) return override;
+  // When the app is packaged (installed), prefer storing runtime state in
+  // the user's roaming AppData so that re-opening the app can see previous
+  // state (e.g. existing yggdrasil.pid). Keep the repo-root / executable
+  // directory behavior for portable/dev runs.
+  if (app.isPackaged) {
+    try {
+      const roaming = app.getPath('appData'); // typically %APPDATA% on Windows
+      if (roaming && roaming.trim()) {
+        return path.join(roaming, 'wtb');
+      }
+    } catch {
+      // fallback to bundled location if app.getPath fails for some reason
+    }
+  }
+
   return path.join(getAppBaseDir(), 'wtb-data');
 };
 
@@ -580,6 +595,51 @@ const stopYggdrasil = async (): Promise<ServiceStatus> => {
   return { name: 'yggdrasil', state: 'stopped' };
 };
 
+// Attempt to stop yggdrasil without prompting the user (used on app quit).
+// This will try a non-elevated Stop-Process and remove the pid file; if
+// the process remains (likely because it was started elevated), we leave
+// it running to avoid triggering a UAC prompt during quit.
+const stopYggdrasilSilent = async (): Promise<void> => {
+  try {
+    const pid = yggdrasilPid ?? readYggdrasilPidFromFile();
+    if (!pid) return;
+
+    const pidPath = getYggdrasilPidPath();
+
+    try {
+      const command = `if (Get-Process -Id ${pid} -ErrorAction SilentlyContinue) { Stop-Process -Id ${pid} -Force -ErrorAction SilentlyContinue }`;
+      runPowerShell(command);
+    } catch (err) {
+      // ignore; best-effort
+    }
+
+    try {
+      if (fs.existsSync(pidPath)) {
+        fs.unlinkSync(pidPath);
+      }
+    } catch {
+      // ignore
+    }
+
+    // Wait briefly for the process to exit
+    for (let i = 0; i < 6; i++) {
+      if (!isProcessAlive(pid)) break;
+      // 250ms * 6 = 1.5s total wait
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => setTimeout(r, 250));
+    }
+
+    if (!isProcessAlive(pid)) {
+      yggdrasilPid = null;
+      log.info(`yggdrasil stopped silently. pid=${pid}`);
+    } else {
+      log.info(`yggdrasil still running after silent stop attempt. pid=${pid}`);
+    }
+  } catch (err) {
+    log.warn('Failed to silently stop yggdrasil on quit', err);
+  }
+};
+
 const getYggdrasilStatus = (): ServiceStatus => {
   if (!isWindows) return { name: 'yggdrasil', state: 'stopped', details: 'unsupported platform' };
   if (!yggdrasilPid) {
@@ -917,6 +977,37 @@ ipcMain.handle('yggdrasilctl:run', async (_event, command: YggdrasilCtlCommand) 
   }
 });
 
+// Open a URL inside a new Electron BrowserWindow (in-app webview)
+ipcMain.handle('open-in-app', async (_event, url: string) => {
+  try {
+    if (!url || typeof url !== 'string') return;
+    if (!/^https?:\/\//i.test(url)) {
+      return;
+    }
+
+    const child = new BrowserWindow({
+      width: 1000,
+      height: 700,
+      show: false,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+      },
+    });
+
+    child.once('ready-to-show', () => child.show());
+
+    child.webContents.setWindowOpenHandler((details) => {
+      shell.openExternal(details.url);
+      return { action: 'deny' };
+    });
+
+    await child.loadURL(url);
+  } catch (err) {
+    log.warn('open-in-app failed', err);
+  }
+});
+
 if (process.env.NODE_ENV === 'production') {
   const sourceMapSupport = require('source-map-support');
   sourceMapSupport.install();
@@ -1010,6 +1101,12 @@ app.on('before-quit', () => {
   } catch {
     // ignore
   }
+
+  // Try to stop yggdrasil silently on quit (best-effort; avoids UAC prompt).
+  // Do not await here to avoid delaying app shutdown, but initiate the attempt.
+  stopYggdrasilSilent().catch(() => {
+    // best-effort; ignore errors during quit
+  });
 });
 
 app.on('window-all-closed', () => {

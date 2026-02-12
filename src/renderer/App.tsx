@@ -8,6 +8,8 @@ import ServiceCard from './components/ServiceCard/ServiceCard';
 
 const YGG_WEBSITE_INDEX_URL = 'http://[21e:a51c:885b:7db0:166e:927:98cd:d186]/';
 
+const YGG_MINI_WIKI_URL = 'http://[201:f536:8bb3:f51d:3377:70d4:fb3b:a829]/';
+
 type YggdrasilCtlCommand =
   | 'getself'
   | 'getpeers'
@@ -36,8 +38,13 @@ function Home() {
   const [error, setError] = React.useState<string | null>(null);
 
   const openExternal = React.useCallback((url: string) => {
-    // In Electron, this will be intercepted by setWindowOpenHandler and opened via shell.
-    window.open(url, '_blank', 'noopener,noreferrer');
+    try {
+      // Prefer in-app opening via main process
+      window.electron.ipcRenderer.invoke('open-in-app', url);
+    } catch {
+      // Fallback to external browser
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
   }, []);
 
   const refresh = React.useCallback(async () => {
@@ -96,6 +103,12 @@ function Home() {
           disabled={!yggRunning}
         />
 
+        <LauncherTileExternalLink
+          href={YGG_MINI_WIKI_URL}
+          label="Mini 维基"
+          icon="📚"
+          disabled={!yggRunning}
+        />
         <LauncherTileLink
           to="/irc"
           label="IRC 聊天索引"

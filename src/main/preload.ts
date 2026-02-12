@@ -7,7 +7,8 @@ export type InvokeChannels =
   | 'services:getAll'
   | 'services:start'
   | 'services:stop'
-  | 'yggdrasilctl:run';
+  | 'yggdrasilctl:run'
+  | 'open-in-app';
 export type Channels = SendChannels;
 
 const electronHandler = {

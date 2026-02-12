@@ -190,7 +190,8 @@
     }
   },
   "build": {
-    "productName": "ElectronReact",
+    "productName": "WorldTreeBrowser",
+    "artifactName": "WorldTreeBrowser-${version}-${os}-${arch}.${ext}",
     "appId": "org.erb.ElectronReact",
     "asar": true,
     "afterSign": ".erb/scripts/notarize.js",
@@ -216,6 +217,7 @@
       "gatekeeperAssess": false
     },
     "dmg": {
+      "artifactName": "WorldTreeBrowser-dmg-${version}-${os}-${arch}.${ext}",
       "contents": [
         {
           "x": 130,
@@ -231,10 +233,19 @@
     },
     "win": {
       "target": [
-        "nsis"
+        "nsis",
+        "portable"
       ]
     },
+
+    "portable": {
+      "artifactName": "WorldTreeBrowser-portable-${version}-${os}-${arch}.${ext}"
+    },
+    "nsis": {
+      "artifactName": "WorldTreeBrowser-setup-${version}-${os}-${arch}.${ext}"
+    },
     "linux": {
+      "artifactName": "WorldTreeBrowser-AppImage-${version}-${os}-${arch}.${ext}",
       "target": [
         "AppImage"
       ],

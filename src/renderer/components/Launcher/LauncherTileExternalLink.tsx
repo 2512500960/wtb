@@ -30,18 +30,26 @@ export default function LauncherTileExternalLink({
     );
   }
 
+  const onClick = React.useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      try {
+        // Use IPC to ask main process to open the URL in-app
+        window.electron.ipcRenderer.invoke('open-in-app', href);
+      } catch {
+        // Fallback to window.open if IPC not available
+        window.open(href, '_blank', 'noopener,noreferrer');
+      }
+    },
+    [href],
+  );
+
   return (
-    <a
-      className="LauncherTile"
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      aria-label={label}
-    >
+    <button className="LauncherTile" type="button" onClick={onClick} aria-label={label}>
       <div className="LauncherIcon" aria-hidden>
         {icon}
       </div>
       <div className="LauncherLabel">{label}</div>
-    </a>
+    </button>
   );
 }
