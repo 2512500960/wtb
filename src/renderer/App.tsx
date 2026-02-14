@@ -5,6 +5,7 @@ import { ServiceName, ServiceStatus } from './types/services';
 import LauncherTileLink from './components/Launcher/LauncherTileLink';
 import LauncherTileExternalLink from './components/Launcher/LauncherTileExternalLink';
 import ServiceCard from './components/ServiceCard/ServiceCard';
+import ChatPage from './pages/ChatPage';
 
 const YGG_WEBSITE_INDEX_URL = 'http://[21e:a51c:885b:7db0:166e:927:98cd:d186]/';
 
@@ -29,6 +30,7 @@ type YggdrasilCtlResult = {
   stderr: string;
   durationMs: number;
 };
+
 
 // LauncherTile and ServiceCard components extracted to separate files
 
@@ -111,7 +113,7 @@ function Home() {
         />
         <LauncherTileLink
           to="/irc"
-          label="IRC 聊天索引"
+          label="聊天（libp2p）"
           icon="💬"
           disabled={!yggRunning}
         />
@@ -335,7 +337,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/ygg" element={<PlaceholderPage title="Ygg 网站索引" />} />
-        <Route path="/irc" element={<PlaceholderPage title="IRC 聊天索引" />} />
+        <Route path="/irc" element={<ChatPage />} />
         <Route path="/settings" element={<PlaceholderPage title="软件设置" />} />
         <Route path="/status" element={<StatusPage />} />
       </Routes>

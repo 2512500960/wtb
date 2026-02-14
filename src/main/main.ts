@@ -19,6 +19,12 @@ import * as Hjson from 'hjson';
 import MenuBuilder from './menu';
 import { resolveHtmlPath } from './util';
 import { loadBundledPublicPeers, pickRandomPublicPeerAddresses } from './public_ygg_peers';
+import {
+  Libp2pGroupChatService,
+  type ChatConversation,
+  type ChatMessage,
+  type ChatStatus,
+} from './libp2p_group_chat';
 
 class AppUpdater {
   constructor() {
@@ -53,6 +59,22 @@ let webServer: http.Server | null = null;
 let webListenAddress: string | null = null;
 let webListenPort: number | null = null;
 
+const groupChat = new Libp2pGroupChatService((msg: ChatMessage) => {
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('chat:message', msg);
+    }
+  } catch {
+    // ignore
+  }
+});
+
+const requireChatRunning = (): void => {
+  if (!groupChat.isRunning()) {
+    throw new Error('聊天未启动（请先启动群聊服务）');
+  }
+};
+
 const psSingleQuote = (value: string): string => {
   return `'${value.replace(/'/g, "''")}'`;
 };
@@ -74,25 +96,76 @@ const getAppBaseDir = (): string => {
   return path.join(__dirname, '../../');
 };
 
+const canWriteDir = (dirPath: string): boolean => {
+  try {
+    fs.accessSync(dirPath, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const isUnderDir = (childPath: string, parentPath: string): boolean => {
+  const child = path.resolve(childPath).toLowerCase();
+  const parent = path.resolve(parentPath).toLowerCase();
+  return child === parent || child.startsWith(parent + path.sep);
+};
+
 const getAppDataDir = (): string => {
   // Optional override to help debugging / special packaging layouts.
   const override = process.env.WTB_DATA_DIR;
   if (override && override.trim()) return override;
-  // When the app is packaged (installed), prefer storing runtime state in
-  // the user's roaming AppData so that re-opening the app can see previous
-  // state (e.g. existing yggdrasil.pid). Keep the repo-root / executable
-  // directory behavior for portable/dev runs.
+
+  // Packaged builds can be either "installed" (Program Files) or "portable"
+  // (unzipped to a user-writable folder). We want:
+  // - portable: keep runtime state next to the executable (self-contained)
+  // - installed: store runtime state in roaming AppData (no admin rights needed)
   if (app.isPackaged) {
+    const exeDir = getAppBaseDir();
+    const portableBase = (process.env.PORTABLE_EXECUTABLE_DIR || '').trim() || exeDir;
+    const portableDataDir = path.join(portableBase, 'wtb-data');
+
+    // electron-builder portable target sets PORTABLE_EXECUTABLE_DIR.
+    if ((process.env.PORTABLE_EXECUTABLE_DIR || '').trim()) {
+      return portableDataDir;
+    }
+
+    // If a wtb-data folder already exists next to the .exe, treat it as portable.
+    try {
+      if (fs.existsSync(portableDataDir)) {
+        return portableDataDir;
+      }
+    } catch {
+      // ignore
+    }
+
+    // Heuristic: if not running under Program Files and exe dir is writable,
+    // prefer portable behavior.
+    const programFiles = (process.env.ProgramFiles || '').trim();
+    const programFilesX86 = (process.env['ProgramFiles(x86)'] || '').trim();
+    const looksInstalled =
+      (programFiles && isUnderDir(exeDir, programFiles)) ||
+      (programFilesX86 && isUnderDir(exeDir, programFilesX86));
+
+    if (!looksInstalled && canWriteDir(exeDir)) {
+      return portableDataDir;
+    }
+
+    // Installed fallback: roaming AppData
     try {
       const roaming = app.getPath('appData'); // typically %APPDATA% on Windows
       if (roaming && roaming.trim()) {
         return path.join(roaming, 'wtb');
       }
     } catch {
-      // fallback to bundled location if app.getPath fails for some reason
+      // fallback to portableDataDir below
     }
+
+    // Last resort: exe directory
+    return portableDataDir;
   }
 
+  // Dev/unpackaged
   return path.join(getAppBaseDir(), 'wtb-data');
 };
 
@@ -109,6 +182,7 @@ const getYggdrasilBaseDir = (): string => {
   }
 
   // In dev, main bundle lives under .erb/dll, so ../../ points to repo root
+  console.log('Yggdrasil base dir:', path.join(__dirname, '../../yggdrasil/windows10/amd64'));
   return path.join(__dirname, '../../yggdrasil/windows10/amd64');
 };
 
@@ -434,6 +508,7 @@ const isProcessAlive = (pid: number): boolean => {
 const readYggdrasilPidFromFile = (): number | null => {
   try {
     const pidPath = getYggdrasilPidPath();
+    console.log('Checking for yggdrasil PID file at:', pidPath);
     if (!fs.existsSync(pidPath)) return null;
     const pidText = fs.readFileSync(pidPath, { encoding: 'utf8' }).trim();
     const pid = Number(pidText);
@@ -612,15 +687,6 @@ const stopYggdrasilSilent = async (): Promise<void> => {
     } catch (err) {
       // ignore; best-effort
     }
-
-    try {
-      if (fs.existsSync(pidPath)) {
-        fs.unlinkSync(pidPath);
-      }
-    } catch {
-      // ignore
-    }
-
     // Wait briefly for the process to exit
     for (let i = 0; i < 6; i++) {
       if (!isProcessAlive(pid)) break;
@@ -630,6 +696,17 @@ const stopYggdrasilSilent = async (): Promise<void> => {
     }
 
     if (!isProcessAlive(pid)) {
+      // Only remove the pid file if the process has actually exited. If the
+      // process is still running (likely elevated), leave the pid file in place
+      // so subsequent app launches can detect the running service.
+      try {
+        if (fs.existsSync(pidPath)) {
+          fs.unlinkSync(pidPath);
+        }
+      } catch {
+        // ignore best-effort cleanup errors
+      }
+
       yggdrasilPid = null;
       log.info(`yggdrasil stopped silently. pid=${pid}`);
     } else {
@@ -954,6 +1031,125 @@ ipcMain.handle('services:stop', async (_event, serviceName: ServiceName) => {
   }
 });
 
+ipcMain.handle('chat:status', async () => {
+  return groupChat.status() satisfies ChatStatus;
+});
+
+ipcMain.handle('chat:identity:get', async () => {
+  return groupChat.status() satisfies ChatStatus;
+});
+
+ipcMain.handle('chat:identity:setDisplayName', async (_event, displayName: string) => {
+  groupChat.setDisplayName(displayName);
+  return groupChat.status() satisfies ChatStatus;
+});
+
+ipcMain.handle('chat:start', async () => {
+  const ygg = getYggdrasilStatus();
+  if (ygg.state !== 'running') {
+    throw new Error('Yggdrasil 未运行，无法启动群聊。请先在首页启动 Yggdrasil。');
+  }
+
+  return await groupChat.start();
+});
+
+ipcMain.handle('chat:stop', async () => {
+  return await groupChat.stop();
+});
+
+ipcMain.handle('chat:dial', async (_event, ma: string) => {
+  const ygg = getYggdrasilStatus();
+  if (ygg.state !== 'running') {
+    throw new Error('Yggdrasil 未运行，无法连接 peer。请先在首页启动 Yggdrasil。');
+  }
+
+  return await groupChat.dial(ma);
+});
+
+ipcMain.handle('chat:subscribe', async (_event, topic: string) => {
+  const ygg = getYggdrasilStatus();
+  if (ygg.state !== 'running') {
+    throw new Error('Yggdrasil 未运行，无法订阅 topic。请先在首页启动 Yggdrasil。');
+  }
+
+  return await groupChat.subscribe(topic);
+});
+
+ipcMain.handle('chat:publish', async (_event, payload: { topic: string; message: string }) => {
+  const ygg = getYggdrasilStatus();
+  if (ygg.state !== 'running') {
+    throw new Error('Yggdrasil 未运行，无法发送消息。请先在首页启动 Yggdrasil。');
+  }
+
+  await groupChat.publish(payload?.topic, payload?.message);
+  return { ok: true };
+});
+
+ipcMain.handle('chat:conversations:list', async () => {
+  return groupChat.listConversations() satisfies ChatConversation[];
+});
+
+ipcMain.handle('chat:conversation:load', async (_event, convId: string, limit?: number) => {
+  return groupChat.loadMessages(convId, typeof limit === 'number' ? limit : 200) satisfies ChatMessage[];
+});
+
+ipcMain.handle('chat:conversation:markRead', async (_event, convId: string) => {
+  groupChat.markRead(convId);
+  return { ok: true };
+});
+
+ipcMain.handle('chat:conversation:createGroup', async (_event, title: string) => {
+  const ygg = getYggdrasilStatus();
+  if (ygg.state !== 'running') {
+    throw new Error('Yggdrasil 未运行，无法创建群组。请先在首页启动 Yggdrasil 并启动群聊。');
+  }
+
+  requireChatRunning();
+  return groupChat.createGroup(title) satisfies ChatConversation;
+});
+
+ipcMain.handle('chat:conversation:joinGroup', async (_event, input: { groupId: string; title: string }) => {
+  const ygg = getYggdrasilStatus();
+  if (ygg.state !== 'running') {
+    throw new Error('Yggdrasil 未运行，无法加入群组。请先在首页启动 Yggdrasil 并启动群聊。');
+  }
+
+  requireChatRunning();
+  return groupChat.joinGroup(input) satisfies ChatConversation;
+});
+
+ipcMain.handle(
+  'chat:conversation:startDm',
+  async (
+    _event,
+    input: {
+      peerId: string;
+      title?: string;
+      peerEncPublicKeyDerB64: string;
+      peerSignPublicKeyDerB64: string;
+    },
+  ) => {
+    const ygg = getYggdrasilStatus();
+    if (ygg.state !== 'running') {
+      throw new Error('Yggdrasil 未运行，无法创建私聊。请先在首页启动 Yggdrasil 并启动群聊。');
+    }
+
+    requireChatRunning();
+    return groupChat.startDm(input) satisfies ChatConversation;
+  },
+);
+
+ipcMain.handle('chat:message:send', async (_event, convId: string, text: string) => {
+  const ygg = getYggdrasilStatus();
+  if (ygg.state !== 'running') {
+    throw new Error('Yggdrasil 未运行，无法发送消息。请先在首页启动 Yggdrasil。');
+  }
+
+  requireChatRunning();
+  await groupChat.sendMessage(convId, text);
+  return { ok: true };
+});
+
 ipcMain.handle('yggdrasilctl:run', async (_event, command: YggdrasilCtlCommand) => {
   try {
     // Most commands require Yggdrasil to be running; surfacing a friendly error helps UX.
@@ -1101,6 +1297,11 @@ app.on('before-quit', () => {
   } catch {
     // ignore
   }
+
+  // Stop libp2p group chat best-effort on quit
+  groupChat.stop().catch(() => {
+    // ignore
+  });
 
   // Try to stop yggdrasil silently on quit (best-effort; avoids UAC prompt).
   // Do not await here to avoid delaying app shutdown, but initiate the attempt.

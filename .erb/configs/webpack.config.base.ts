@@ -44,6 +44,9 @@ const configuration: webpack.Configuration = {
   resolve: {
     extensions: ['.js', '.jsx', '.json', '.ts', '.tsx'],
     modules: [webpackPaths.srcPath, 'node_modules'],
+    // libp2p and related modules are ESM-first and rely on package.json `exports`.
+    // Ensure webpack resolves the `import` condition when bundling for electron-main.
+    conditionNames: ['node', 'import', 'default', 'require'],
     // There is no need to add aliases here, the paths in tsconfig get mirrored
     plugins: [new TsconfigPathsPlugins()],
   },
