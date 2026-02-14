@@ -26,8 +26,12 @@ export default function ServiceCardYggdrasil({
               className={running ? 'ServiceDot DotGreen' : 'ServiceDot DotGray'}
               aria-hidden
             />
-            <span className="ServiceState">{running ? '运行中' : '未运行'}</span>
-            {svc.details ? <span className="ServiceDetails">{svc.details}</span> : null}
+            <span className="ServiceState">
+              {running ? '运行中' : '未运行'}
+            </span>
+            {svc.details ? (
+              <span className="ServiceDetails">{svc.details}</span>
+            ) : null}
           </div>
         </div>
 
@@ -60,6 +64,7 @@ export default function ServiceCardYggdrasil({
 
       <div className="ServiceHint">
         点击“启动”时会弹出 UAC。管理员权限用于创建 TUN 网卡并启动 Yggdrasil。
+        请注意防火墙的配置，这需要你有一些基础的网络知识，如果不懂，上网摇人。
       </div>
     </div>
   );

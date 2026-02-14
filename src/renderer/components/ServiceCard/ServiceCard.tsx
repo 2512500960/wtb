@@ -10,17 +10,44 @@ export default function ServiceCard(props: {
   busyName: ServiceName | null;
   start: (n: ServiceName) => Promise<void>;
   stop: (n: ServiceName) => Promise<void>;
+  openDir: (n: ServiceName) => Promise<void>;
   openExternal: (u: string) => void;
 }) {
-  const { svc } = props;
+  const { svc, yggRunning, busyName, start, stop, openDir, openExternal } =
+    props;
 
   if (svc.name === 'yggdrasil') {
-    return <ServiceCardYggdrasil {...props} />;
+    return (
+      <ServiceCardYggdrasil
+        svc={svc}
+        busyName={busyName}
+        start={start}
+        stop={stop}
+      />
+    );
   }
 
   if (svc.name === 'web') {
-    return <ServiceCardWeb {...props} />;
+    return (
+      <ServiceCardWeb
+        svc={svc}
+        yggRunning={yggRunning}
+        busyName={busyName}
+        start={start}
+        stop={stop}
+        openDir={openDir}
+        openExternal={openExternal}
+      />
+    );
   }
 
-  return <ServiceCardGeneric {...props} />;
+  return (
+    <ServiceCardGeneric
+      svc={svc}
+      yggRunning={yggRunning}
+      busyName={busyName}
+      start={start}
+      stop={stop}
+    />
+  );
 }

@@ -72,7 +72,11 @@ function ModalShell({
       <div className="ChatModal" role="dialog" aria-modal="true">
         <div className="ChatModalHeader">
           <div className="ChatModalTitle">{title}</div>
-          <button type="button" className="ServiceGhostButton" onClick={onClose}>
+          <button
+            type="button"
+            className="ServiceGhostButton"
+            onClick={onClose}
+          >
             关闭
           </button>
         </div>
@@ -84,7 +88,9 @@ function ModalShell({
 
 export default function ChatPage() {
   const [status, setStatus] = React.useState<ChatStatus | null>(null);
-  const [conversations, setConversations] = React.useState<ChatConversation[]>([]);
+  const [conversations, setConversations] = React.useState<ChatConversation[]>(
+    [],
+  );
   const [activeConvId, setActiveConvId] = React.useState<string | null>(null);
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
 
@@ -111,7 +117,9 @@ export default function ChatPage() {
   const running = !!status?.running;
 
   const refreshStatus = React.useCallback(async () => {
-    const res = (await window.electron.ipcRenderer.invoke('chat:status')) as ChatStatus;
+    const res = (await window.electron.ipcRenderer.invoke(
+      'chat:status',
+    )) as ChatStatus;
     setStatus(res);
     setDisplayName(res.displayName ?? '');
   }, []);
@@ -135,7 +143,10 @@ export default function ChatPage() {
         300,
       )) as ChatMessage[];
       setMessages(res);
-      await window.electron.ipcRenderer.invoke('chat:conversation:markRead', convId);
+      await window.electron.ipcRenderer.invoke(
+        'chat:conversation:markRead',
+        convId,
+      );
       refreshConversations();
     },
     [refreshConversations],
@@ -148,15 +159,19 @@ export default function ChatPage() {
 
       // If Yggdrasil is running, ensure chat starts automatically.
       try {
-        const services = (await window.electron.ipcRenderer.invoke('services:getAll')) as
-          | { name: string; state: 'running' | 'stopped' }[]
-          | undefined;
+        const services = (await window.electron.ipcRenderer.invoke(
+          'services:getAll',
+        )) as { name: string; state: 'running' | 'stopped' }[] | undefined;
         const ygg = services?.find((s) => s.name === 'yggdrasil');
         if (ygg?.state === 'running') {
-          const chatSt = (await window.electron.ipcRenderer.invoke('chat:status')) as ChatStatus;
+          const chatSt = (await window.electron.ipcRenderer.invoke(
+            'chat:status',
+          )) as ChatStatus;
           if (!chatSt.running) {
             try {
-              const res = (await window.electron.ipcRenderer.invoke('chat:start')) as ChatStatus;
+              const res = (await window.electron.ipcRenderer.invoke(
+                'chat:start',
+              )) as ChatStatus;
               setStatus(res);
               setDisplayName(res.displayName ?? '');
               await refreshConversations();
@@ -178,13 +193,16 @@ export default function ChatPage() {
   }, [activeConvId, loadActiveMessages]);
 
   React.useEffect(() => {
-    const unsubscribe = window.electron.ipcRenderer.on('chat:message', (msg) => {
-      const m = msg as ChatMessage;
-      refreshConversations();
-      if (m.convId === activeConvId) {
-        setMessages((prev) => [...prev, m].slice(-800));
-      }
-    });
+    const unsubscribe = window.electron.ipcRenderer.on(
+      'chat:message',
+      (msg) => {
+        const m = msg as ChatMessage;
+        refreshConversations();
+        if (m.convId === activeConvId) {
+          setMessages((prev) => [...prev, m].slice(-800));
+        }
+      },
+    );
     return () => {
       unsubscribe();
     };
@@ -194,7 +212,9 @@ export default function ChatPage() {
     setBusy(true);
     setError(null);
     try {
-      const res = (await window.electron.ipcRenderer.invoke('chat:start')) as ChatStatus;
+      const res = (await window.electron.ipcRenderer.invoke(
+        'chat:start',
+      )) as ChatStatus;
       setStatus(res);
       setDisplayName(res.displayName ?? '');
       await refreshConversations();
@@ -209,7 +229,9 @@ export default function ChatPage() {
     setBusy(true);
     setError(null);
     try {
-      const res = (await window.electron.ipcRenderer.invoke('chat:stop')) as ChatStatus;
+      const res = (await window.electron.ipcRenderer.invoke(
+        'chat:stop',
+      )) as ChatStatus;
       setStatus(res);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -222,7 +244,10 @@ export default function ChatPage() {
     setBusy(true);
     setError(null);
     try {
-      const res = (await window.electron.ipcRenderer.invoke('chat:dial', dialAddr)) as ChatStatus;
+      const res = (await window.electron.ipcRenderer.invoke(
+        'chat:dial',
+        dialAddr,
+      )) as ChatStatus;
       setStatus(res);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -297,7 +322,11 @@ export default function ChatPage() {
     setBusy(true);
     setError(null);
     try {
-      await window.electron.ipcRenderer.invoke('chat:message:send', activeConvId, text);
+      await window.electron.ipcRenderer.invoke(
+        'chat:message:send',
+        activeConvId,
+        text,
+      );
       setComposer('');
       setShowEmoji(false);
     } catch (e) {
@@ -330,7 +359,8 @@ export default function ChatPage() {
     });
   }, []);
 
-  const activeConv = conversations.find((c) => c.convId === activeConvId) ?? null;
+  const activeConv =
+    conversations.find((c) => c.convId === activeConvId) ?? null;
   const myPeerId = status?.peerId ?? '';
   const mySignPub = status?.identity?.signPublicKeyDerB64 ?? '';
   const myEncPub = status?.identity?.encPublicKeyDerB64 ?? '';
@@ -384,20 +414,31 @@ export default function ChatPage() {
                     await refreshStatus();
                     await refreshConversations();
                     try {
-                      const services = (await window.electron.ipcRenderer.invoke('services:getAll')) as
-                        | { name: string; state: 'running' | 'stopped' }[]
-                        | undefined;
+                      const services =
+                        (await window.electron.ipcRenderer.invoke(
+                          'services:getAll',
+                        )) as
+                          | { name: string; state: 'running' | 'stopped' }[]
+                          | undefined;
                       const ygg = services?.find((s) => s.name === 'yggdrasil');
                       if (ygg?.state === 'running') {
-                        const chatSt = (await window.electron.ipcRenderer.invoke('chat:status')) as ChatStatus;
+                        const chatSt =
+                          (await window.electron.ipcRenderer.invoke(
+                            'chat:status',
+                          )) as ChatStatus;
                         if (!chatSt.running) {
                           try {
-                            const res = (await window.electron.ipcRenderer.invoke('chat:start')) as ChatStatus;
+                            const res =
+                              (await window.electron.ipcRenderer.invoke(
+                                'chat:start',
+                              )) as ChatStatus;
                             setStatus(res);
                             setDisplayName(res.displayName ?? '');
                             await refreshConversations();
                           } catch (e) {
-                            setError(e instanceof Error ? e.message : String(e));
+                            setError(
+                              e instanceof Error ? e.message : String(e),
+                            );
                           }
                         }
                       }
@@ -417,7 +458,9 @@ export default function ChatPage() {
             <div className="ChatTopGrid">
               <div className="ChatTopItem">
                 <div className="ChatTopLabel">运行状态</div>
-                <div className="ChatTopValue">{running ? '已启动' : '未启动'}</div>
+                <div className="ChatTopValue">
+                  {running ? '已启动' : '未启动'}
+                </div>
               </div>
 
               <div className="ChatTopItem">
@@ -477,7 +520,9 @@ export default function ChatPage() {
               <div className="ChatTopItem ChatTopItemWide">
                 <div className="ChatTopLabel">我的公钥</div>
                 <pre className="ChatKeyPre">{`sign=${mySignPub}\nenc=${myEncPub}`}</pre>
-                <div className="ChatTinyHint">私聊需要交换对端的加密/签名公钥（base64 DER）。</div>
+                <div className="ChatTinyHint">
+                  私聊需要交换对端的加密/签名公钥（base64 DER）。
+                </div>
               </div>
             </div>
           </div>
@@ -517,7 +562,8 @@ export default function ChatPage() {
                   const selected = c.convId === activeConvId;
                   const unread = c.unreadCount ?? 0;
                   const meta =
-                    c.lastMessagePreview || (c.type === 'group' ? '群组' : '私聊');
+                    c.lastMessagePreview ||
+                    (c.type === 'group' ? '群组' : '私聊');
                   return (
                     <button
                       key={c.convId}
@@ -531,7 +577,9 @@ export default function ChatPage() {
                     >
                       <div className="ChatConvTop">
                         <div className="ChatConvTitle">{c.title}</div>
-                        {unread ? <div className="ChatConvBadge">{unread}</div> : null}
+                        {unread ? (
+                          <div className="ChatConvBadge">{unread}</div>
+                        ) : null}
                       </div>
                       <div className="ChatConvMeta">{meta}</div>
                     </button>
@@ -545,7 +593,9 @@ export default function ChatPage() {
 
           <div className="ChatMain">
             <div className="ChatMainHeader">
-              <div className="ChatMainTitle">{activeConv ? activeConv.title : '未选择会话'}</div>
+              <div className="ChatMainTitle">
+                {activeConv ? activeConv.title : '未选择会话'}
+              </div>
               {activeConv ? (
                 <div className="ChatMainSub">
                   <span className="ChatMono">{activeConv.type}</span>

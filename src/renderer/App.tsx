@@ -9,7 +9,8 @@ import ChatPage from './pages/ChatPage';
 
 const YGG_WEBSITE_INDEX_URL = 'http://[21e:a51c:885b:7db0:166e:927:98cd:d186]/';
 
-const YGG_MINI_WIKI_URL = 'http://[201:f536:8bb3:f51d:3377:70d4:fb3b:a829]/';
+const YGG_MINI_WIKI_URL =
+  'http://[200:85b:60c4:e7b5:c33b:959f:9b52:6783]/?lang=zh';
 
 type YggdrasilCtlCommand =
   | 'getself'
@@ -31,18 +32,21 @@ type YggdrasilCtlResult = {
   durationMs: number;
 };
 
-
 // LauncherTile and ServiceCard components extracted to separate files
 
 function Home() {
   const [services, setServices] = React.useState<ServiceStatus[]>([]);
   const [busy, setBusy] = React.useState<ServiceName | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [connectedPeerCount, setConnectedPeerCount] = React.useState<
+    number | null
+  >(null);
+  const [p2pPeerCount, setP2pPeerCount] = React.useState<number | null>(null);
 
   const openExternal = React.useCallback((url: string) => {
     try {
-      // Prefer in-app opening via main process
-      window.electron.ipcRenderer.invoke('open-in-app', url);
+      // Open via system default browser (fast UX for slow/unreliable links)
+      window.electron.ipcRenderer.invoke('open-external', url);
     } catch {
       // Fallback to external browser
       window.open(url, '_blank', 'noopener,noreferrer');
@@ -63,6 +67,74 @@ function Home() {
 
   const ygg = services.find((s) => s.name === 'yggdrasil');
   const yggRunning = ygg?.state === 'running';
+
+  const tryParseJson = React.useCallback((input: string) => {
+    const trimmed = (input ?? '').trim();
+    if (!trimmed) return null;
+    try {
+      return JSON.parse(trimmed) as unknown;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const countFromYggCtlStdout = React.useCallback(
+    (stdout: string): number | null => {
+      const data = tryParseJson(stdout);
+      if (data == null) return null;
+
+      if (Array.isArray(data)) return data.length;
+
+      if (typeof data === 'object') {
+        const obj = data as Record<string, unknown>;
+
+        const peers = obj.peers ?? obj.Peers;
+        if (Array.isArray(peers)) return peers.length;
+        if (peers && typeof peers === 'object') {
+          return Object.keys(peers as Record<string, unknown>).length;
+        }
+
+        return Object.keys(obj).length;
+      }
+
+      return null;
+    },
+    [tryParseJson],
+  );
+
+  const refreshPeerCounts = React.useCallback(async () => {
+    try {
+      const [peersResRaw, p2pResRaw] = await Promise.all([
+        window.electron.ipcRenderer.invoke('yggdrasilctl:run', 'getpeers'),
+        window.electron.ipcRenderer.invoke('yggdrasilctl:run', 'getp2ppeers'),
+      ]);
+      const peersRes = peersResRaw as Partial<YggdrasilCtlResult> | null;
+      const p2pRes = p2pResRaw as Partial<YggdrasilCtlResult> | null;
+
+      const connected =
+        peersRes && peersRes.ok
+          ? countFromYggCtlStdout(String(peersRes.stdout ?? ''))
+          : null;
+      const p2p =
+        p2pRes && p2pRes.ok
+          ? countFromYggCtlStdout(String(p2pRes.stdout ?? ''))
+          : null;
+
+      setConnectedPeerCount(connected);
+      setP2pPeerCount(p2p);
+    } catch {
+      setConnectedPeerCount(null);
+      setP2pPeerCount(null);
+    }
+  }, [countFromYggCtlStdout]);
+
+  React.useEffect(() => {
+    refreshPeerCounts();
+    const id = window.setInterval(() => {
+      refreshPeerCounts();
+    }, 5000);
+    return () => window.clearInterval(id);
+  }, [refreshPeerCounts]);
 
   const start = async (name: ServiceName) => {
     setBusy(name);
@@ -90,11 +162,35 @@ function Home() {
     }
   };
 
+  const openDir = async (name: ServiceName) => {
+    setError(null);
+    try {
+      const res = (await window.electron.ipcRenderer.invoke(
+        'services:openDir',
+        name,
+      )) as { ok: boolean; error?: string };
+      if (res && typeof res === 'object' && res.ok === false) {
+        throw new Error(res.error || '打开目录失败');
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   return (
     <div className="LauncherRoot">
       <div className="LauncherHeader">
         <div className="LauncherTitle">WTB</div>
-        {/* <div className="LauncherSubtitle">请选择一个功能</div> */}
+        <div className="LauncherSubtitle">
+          YGGDRASIL网络连接能需要时间，网页打不开需要耐心
+        </div>
+        <div>
+          {/* 显示连接成功的Peer数量和P2PPeers数量，（自动刷新功能） */}
+          <div className="LauncherSubtitle">
+            已连接 Peer：{connectedPeerCount ?? '—'}，P2P Peers：
+            {p2pPeerCount ?? '—'}
+          </div>
+        </div>
       </div>
 
       <div className="LauncherGrid">
@@ -129,7 +225,11 @@ function Home() {
       <div className="ServiceSection">
         <div className="ServiceHeader">
           <div className="ServiceTitle">服务状态</div>
-          <button className="ServiceGhostButton" type="button" onClick={refresh}>
+          <button
+            className="ServiceGhostButton"
+            type="button"
+            onClick={refresh}
+          >
             刷新
           </button>
         </div>
@@ -145,6 +245,7 @@ function Home() {
               busyName={busy}
               start={start}
               stop={stop}
+              openDir={openDir}
               openExternal={openExternal}
             />
           ))}
@@ -183,53 +284,69 @@ function StatusPage() {
 
   const buildInitial = React.useCallback(() => {
     return Object.fromEntries(
-      commandDefs.map((d) => [d.cmd, { busy: false, result: null, error: null }]),
+      commandDefs.map((d) => [
+        d.cmd,
+        { busy: false, result: null, error: null },
+      ]),
     ) as Record<YggdrasilCtlCommand, CommandCardState>;
   }, [commandDefs]);
 
-  const [items, setItems] = React.useState<Record<YggdrasilCtlCommand, CommandCardState>>(
-    () => buildInitial(),
-  );
+  const [items, setItems] = React.useState<
+    Record<YggdrasilCtlCommand, CommandCardState>
+  >(() => buildInitial());
 
   const runIdRef = React.useRef(0);
 
   const runAll = React.useCallback(async () => {
-    const runId = ++runIdRef.current;
+    const runId = runIdRef.current + 1;
+    runIdRef.current = runId;
 
     setItems((prev) => {
       const next: Record<YggdrasilCtlCommand, CommandCardState> = { ...prev };
-      for (const d of commandDefs) {
+      commandDefs.forEach((d) => {
         next[d.cmd] = { busy: true, result: null, error: null };
-      }
+      });
       return next;
     });
 
-    for (const d of commandDefs) {
+    const promises = commandDefs.map((d) =>
       window.electron.ipcRenderer
         .invoke('yggdrasilctl:run', d.cmd)
         .then((res) => {
-          if (runIdRef.current !== runId) return;
+          if (runIdRef.current !== runId) return res;
           setItems((prev) => ({
             ...prev,
-            [d.cmd]: { busy: false, result: res as YggdrasilCtlResult, error: null },
+            [d.cmd]: {
+              busy: false,
+              result: res as YggdrasilCtlResult,
+              error: null,
+            },
           }));
+          return res;
         })
         .catch((e) => {
-          if (runIdRef.current !== runId) return;
+          if (runIdRef.current !== runId) throw e;
           const message = e instanceof Error ? e.message : String(e);
           setItems((prev) => ({
             ...prev,
             [d.cmd]: { busy: false, result: null, error: message },
           }));
-        });
-    }
+          throw e;
+        }),
+    );
+
+    // observe all promises to avoid unhandled rejections; we don't need their results here
+    await Promise.allSettled(promises);
   }, [commandDefs]);
 
   React.useEffect(() => {
     runAll();
   }, [runAll]);
 
-  const busyCount = commandDefs.reduce((acc, d) => acc + (items[d.cmd]?.busy ? 1 : 0), 0);
+  const busyCount = commandDefs.reduce(
+    (acc, d) => acc + (items[d.cmd]?.busy ? 1 : 0),
+    0,
+  );
 
   return (
     <div className="PageRoot">
@@ -266,23 +383,30 @@ function StatusPage() {
               <div key={d.cmd} className="StatusBlock">
                 <div className="StatusBlockHeader">
                   <div className="StatusBlockTitle">
-                    {d.label} <span className="StatusBlockDesc">- {d.desc}</span>
+                    {d.label}{' '}
+                    <span className="StatusBlockDesc">- {d.desc}</span>
                   </div>
 
-                  {item?.busy ? (
-                    <span className="StatusOk">加载中…</span>
-                  ) : item?.error ? (
-                    <span className="StatusBad">ERROR</span>
-                  ) : result ? (
-                    <span className={result.ok ? 'StatusOk' : 'StatusBad'}>
-                      {result.ok ? 'OK' : 'ERROR'}
-                    </span>
-                  ) : (
-                    <span className="StatusOk">等待</span>
-                  )}
+                  {(() => {
+                    if (item?.busy) {
+                      return <span className="StatusOk">加载中…</span>;
+                    }
+                    if (item?.error) {
+                      return <span className="StatusBad">ERROR</span>;
+                    }
+                    if (result) {
+                      if (result.ok) {
+                        return <span className="StatusOk">OK</span>;
+                      }
+                      return <span className="StatusBad">ERROR</span>;
+                    }
+                    return <span className="StatusOk">等待</span>;
+                  })()}
                 </div>
 
-                {item?.error ? <div className="ServiceError">{item.error}</div> : null}
+                {item?.error ? (
+                  <div className="ServiceError">{item.error}</div>
+                ) : null}
 
                 {result ? (
                   <div className="StatusMeta">
@@ -305,7 +429,11 @@ function StatusPage() {
                   </div>
                 ) : null}
 
-                {!item?.busy && !item?.error && result && !showStdout && !showStderr ? (
+                {!item?.busy &&
+                !item?.error &&
+                result &&
+                !showStdout &&
+                !showStderr ? (
                   <div className="StatusEmpty">无输出</div>
                 ) : null}
               </div>
@@ -338,7 +466,10 @@ export default function App() {
         <Route path="/" element={<Home />} />
         <Route path="/ygg" element={<PlaceholderPage title="Ygg 网站索引" />} />
         <Route path="/irc" element={<ChatPage />} />
-        <Route path="/settings" element={<PlaceholderPage title="软件设置" />} />
+        <Route
+          path="/settings"
+          element={<PlaceholderPage title="软件设置" />}
+        />
         <Route path="/status" element={<StatusPage />} />
       </Routes>
     </Router>

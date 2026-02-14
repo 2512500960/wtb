@@ -9,16 +9,29 @@
  * `./src/main.js` using webpack. This gives us some performance wins.
  */
 import path from 'path';
-import { app, BrowserWindow, shell, ipcMain, dialog, type MessageBoxOptions } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  Menu,
+  shell,
+  ipcMain,
+  dialog,
+  type MessageBoxOptions,
+} from 'electron';
 import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
 import { spawn, spawnSync } from 'child_process';
 import fs from 'fs';
 import * as http from 'http';
+import type { Socket } from 'net';
+import { URL } from 'url';
 import * as Hjson from 'hjson';
 import MenuBuilder from './menu';
 import { resolveHtmlPath } from './util';
-import { loadBundledPublicPeers, pickRandomPublicPeerAddresses } from './public_ygg_peers';
+import {
+  loadBundledPublicPeers,
+  pickRandomPublicPeerAddresses,
+} from './public_ygg_peers';
 import {
   Libp2pGroupChatService,
   type ChatConversation,
@@ -45,7 +58,7 @@ let mainWindow: BrowserWindow | null = null;
 
 const isWindows = process.platform === 'win32';
 
-type ServiceName = 'yggdrasil' | 'ipfs' | 'web';
+type ServiceName = 'yggdrasil' | 'web' | 'ipfs';
 
 type ServiceStatus = {
   name: ServiceName;
@@ -58,6 +71,7 @@ let yggdrasilPid: number | null = null;
 let webServer: http.Server | null = null;
 let webListenAddress: string | null = null;
 let webListenPort: number | null = null;
+const webOpenSockets = new Set<Socket>();
 
 const groupChat = new Libp2pGroupChatService((msg: ChatMessage) => {
   try {
@@ -122,7 +136,8 @@ const getAppDataDir = (): string => {
   // - installed: store runtime state in roaming AppData (no admin rights needed)
   if (app.isPackaged) {
     const exeDir = getAppBaseDir();
-    const portableBase = (process.env.PORTABLE_EXECUTABLE_DIR || '').trim() || exeDir;
+    const portableBase =
+      (process.env.PORTABLE_EXECUTABLE_DIR || '').trim() || exeDir;
     const portableDataDir = path.join(portableBase, 'wtb-data');
 
     // electron-builder portable target sets PORTABLE_EXECUTABLE_DIR.
@@ -182,7 +197,10 @@ const getYggdrasilBaseDir = (): string => {
   }
 
   // In dev, main bundle lives under .erb/dll, so ../../ points to repo root
-  console.log('Yggdrasil base dir:', path.join(__dirname, '../../yggdrasil/windows10/amd64'));
+  // console.log(
+  //   'Yggdrasil base dir:',
+  //   path.join(__dirname, '../../yggdrasil/windows10/amd64'),
+  // );
   return path.join(__dirname, '../../yggdrasil/windows10/amd64');
 };
 
@@ -224,7 +242,12 @@ const getPeArch = (filePath: string): PeArch | null => {
     // DOS header
     if (buf[0] !== 0x4d || buf[1] !== 0x5a) return 'unknown'; // 'MZ'
     const peOffset = buf.readUInt32LE(0x3c);
-    if (!Number.isFinite(peOffset) || peOffset <= 0 || peOffset + 6 >= buf.length) return 'unknown';
+    if (
+      !Number.isFinite(peOffset) ||
+      peOffset <= 0 ||
+      peOffset + 6 >= buf.length
+    )
+      return 'unknown';
     // PE signature
     if (
       buf[peOffset] !== 0x50 ||
@@ -250,7 +273,10 @@ const getPeArch = (filePath: string): PeArch | null => {
   }
 };
 
-const readTextFileTail = (filePath: string, maxChars: number = 2000): string | null => {
+const readTextFileTail = (
+  filePath: string,
+  maxChars: number = 2000,
+): string | null => {
   try {
     if (!fs.existsSync(filePath)) return null;
     const text = fs.readFileSync(filePath, { encoding: 'utf8' });
@@ -271,16 +297,23 @@ const stripUtf8Bom = (text: string): string => {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 };
 
-const updateYggdrasilConfPeers = (confPath: string, peersToAdd: string[]): void => {
+const updateYggdrasilConfPeers = (
+  confPath: string,
+  peersToAdd: string[],
+): void => {
   if (!peersToAdd.length) return;
   const raw = stripUtf8Bom(fs.readFileSync(confPath, { encoding: 'utf8' }));
-  const doc: any = (Hjson as any).rt?.parse ? (Hjson as any).rt.parse(raw) : Hjson.parse(raw);
+  const doc: any = (Hjson as any).rt?.parse
+    ? (Hjson as any).rt.parse(raw)
+    : Hjson.parse(raw);
 
   if (!Array.isArray(doc.Peers)) {
     doc.Peers = [];
   }
 
-  const existing = new Set<string>(doc.Peers.filter((x: any) => typeof x === 'string'));
+  const existing = new Set<string>(
+    doc.Peers.filter((x: any) => typeof x === 'string'),
+  );
   for (const addr of peersToAdd) {
     if (typeof addr !== 'string') continue;
     const trimmed = addr.trim();
@@ -291,13 +324,20 @@ const updateYggdrasilConfPeers = (confPath: string, peersToAdd: string[]): void 
   }
 
   const out: string = (Hjson as any).rt?.stringify
-    ? (Hjson as any).rt.stringify(doc, { quotes: 'all', separator: true, space: 2 })
+    ? (Hjson as any).rt.stringify(doc, {
+        quotes: 'all',
+        separator: true,
+        space: 2,
+      })
     : Hjson.stringify(doc, { quotes: 'all', separator: true, space: 2 });
 
   fs.writeFileSync(confPath, stripUtf8Bom(out) + '\n', { encoding: 'utf8' });
 };
 
-const generateYggdrasilConfIfMissing = (yggExe: string, confPath: string): void => {
+const generateYggdrasilConfIfMissing = (
+  yggExe: string,
+  confPath: string,
+): void => {
   if (fs.existsSync(confPath)) return;
 
   const result = spawnSync(yggExe, ['-genconf'], {
@@ -311,7 +351,9 @@ const generateYggdrasilConfIfMissing = (yggExe: string, confPath: string): void 
 
   if (result.status !== 0) {
     const stderr = (result.stderr || '').toString().trim();
-    throw new Error(`yggdrasil -genconf 失败（exit=${result.status}）${stderr ? `: ${stderr}` : ''}`);
+    throw new Error(
+      `yggdrasil -genconf 失败（exit=${result.status}）${stderr ? `: ${stderr}` : ''}`,
+    );
   }
 
   const confText = (result.stdout || '').toString();
@@ -332,10 +374,15 @@ const generateYggdrasilConfIfMissing = (yggExe: string, confPath: string): void 
   }
 };
 
-const updateYggdrasilConfP2PDataDir = (confPath: string, desiredDataDir: string): void => {
+const updateYggdrasilConfP2PDataDir = (
+  confPath: string,
+  desiredDataDir: string,
+): void => {
   const raw = stripUtf8Bom(fs.readFileSync(confPath, { encoding: 'utf8' }));
   // Use Hjson round-trip mode to preserve comments/formatting as much as possible.
-  const doc: any = (Hjson as any).rt?.parse ? (Hjson as any).rt.parse(raw) : Hjson.parse(raw);
+  const doc: any = (Hjson as any).rt?.parse
+    ? (Hjson as any).rt.parse(raw)
+    : Hjson.parse(raw);
 
   if (!doc.P2P || typeof doc.P2P !== 'object') {
     doc.P2P = {};
@@ -343,7 +390,11 @@ const updateYggdrasilConfP2PDataDir = (confPath: string, desiredDataDir: string)
   doc.P2P.data_dir = desiredDataDir;
 
   const out: string = (Hjson as any).rt?.stringify
-    ? (Hjson as any).rt.stringify(doc, { quotes: 'all', separator: true, space: 2 })
+    ? (Hjson as any).rt.stringify(doc, {
+        quotes: 'all',
+        separator: true,
+        space: 2,
+      })
     : Hjson.stringify(doc, { quotes: 'all', separator: true, space: 2 });
 
   fs.writeFileSync(confPath, stripUtf8Bom(out) + '\n', { encoding: 'utf8' });
@@ -357,7 +408,13 @@ const buildYggdrasilStartupHint = (baseDir: string): string | null => {
 
   // The exact Windows loader error in your log corresponds to ERROR_BAD_EXE_FORMAT (193).
   // Most commonly: DLL arch mismatch (e.g. 32-bit or arm64 wintun.dll with 64-bit yggdrasil.exe).
-  if (exeArch && dllArch && exeArch !== 'unknown' && dllArch !== 'unknown' && exeArch !== dllArch) {
+  if (
+    exeArch &&
+    dllArch &&
+    exeArch !== 'unknown' &&
+    dllArch !== 'unknown' &&
+    exeArch !== dllArch
+  ) {
     return `检测到架构不匹配：yggdrasil.exe=${exeArch}, wintun.dll=${dllArch}。这会导致“%1 is not a valid Win32 application”。请替换为与 yggdrasil.exe 相同架构的 wintun.dll（当前仅支持 Windows x64）。`;
   }
 
@@ -451,7 +508,9 @@ const runPowerShellAsync = (
   });
 };
 
-const runElevatedPowerShellAndWaitAsync = async (script: string): Promise<void> => {
+const runElevatedPowerShellAndWaitAsync = async (
+  script: string,
+): Promise<void> => {
   ensureWindowsOrThrow();
   // Don't use -Wait on the outer Start-Process to avoid hanging on redirected output streams.
   // Instead, the script writes state to disk (pid file) which we can poll.
@@ -489,7 +548,9 @@ const runElevatedStartProcessAndGetPid = (
   const pidText = stdout.trim().split(/\s+/).pop() ?? '';
   const pid = Number(pidText);
   if (!Number.isFinite(pid) || pid <= 0) {
-    throw new Error(`Failed to get elevated process pid. stdout: ${stdout} stderr: ${stderr}`);
+    throw new Error(
+      `Failed to get elevated process pid. stdout: ${stdout} stderr: ${stderr}`,
+    );
   }
   return pid;
 };
@@ -523,13 +584,21 @@ const startYggdrasil = async (): Promise<ServiceStatus> => {
   ensureWindowsOrThrow();
 
   if (yggdrasilPid && isProcessAlive(yggdrasilPid)) {
-    return { name: 'yggdrasil', state: 'running', details: `pid=${yggdrasilPid}` };
+    return {
+      name: 'yggdrasil',
+      state: 'running',
+      details: `pid=${yggdrasilPid}`,
+    };
   }
 
   const pidFromFile = readYggdrasilPidFromFile();
   if (pidFromFile && isProcessAlive(pidFromFile)) {
     yggdrasilPid = pidFromFile;
-    return { name: 'yggdrasil', state: 'running', details: `pid=${pidFromFile}` };
+    return {
+      name: 'yggdrasil',
+      state: 'running',
+      details: `pid=${pidFromFile}`,
+    };
   }
 
   const yggExe = getYggdrasilExePath();
@@ -553,13 +622,18 @@ const startYggdrasil = async (): Promise<ServiceStatus> => {
     cancelId: 0,
     title: '需要管理员权限',
     message: '启动 Yggdrasil 需要管理员权限。',
-    detail: '需要管理员权限来创建 TUN 网卡，并启动 Yggdrasil 服务。\n\n点击“继续”后将弹出 Windows UAC 提示。',
+    detail:
+      '需要管理员权限来创建 TUN 网卡，并启动 Yggdrasil 服务。\n\n点击“继续”后将弹出 Windows UAC 提示。',
   };
   const { response } = mainWindow
     ? await dialog.showMessageBox(mainWindow, msgBoxOptions)
     : await dialog.showMessageBox(msgBoxOptions);
   if (response !== 1) {
-    return { name: 'yggdrasil', state: 'stopped', details: '已取消管理员权限请求' };
+    return {
+      name: 'yggdrasil',
+      state: 'stopped',
+      details: '已取消管理员权限请求',
+    };
   }
 
   // Generate config + start yggdrasil from an elevated PowerShell, writing state into the app directory.
@@ -641,7 +715,8 @@ const stopYggdrasil = async (): Promise<ServiceStatus> => {
     cancelId: 0,
     title: '需要管理员权限',
     message: '停止 Yggdrasil 需要管理员权限。',
-    detail: '需要管理员权限来停止已启动的 Yggdrasil 进程。\n\n点击“继续”后将弹出 Windows UAC 提示。',
+    detail:
+      '需要管理员权限来停止已启动的 Yggdrasil 进程。\n\n点击“继续”后将弹出 Windows UAC 提示。',
   };
   const { response } = mainWindow
     ? await dialog.showMessageBox(mainWindow, msgBoxOptions)
@@ -718,17 +793,30 @@ const stopYggdrasilSilent = async (): Promise<void> => {
 };
 
 const getYggdrasilStatus = (): ServiceStatus => {
-  if (!isWindows) return { name: 'yggdrasil', state: 'stopped', details: 'unsupported platform' };
+  if (!isWindows)
+    return {
+      name: 'yggdrasil',
+      state: 'stopped',
+      details: 'unsupported platform',
+    };
   if (!yggdrasilPid) {
     const pidFromFile = readYggdrasilPidFromFile();
     if (pidFromFile && isProcessAlive(pidFromFile)) {
       yggdrasilPid = pidFromFile;
-      return { name: 'yggdrasil', state: 'running', details: `pid=${pidFromFile}` };
+      return {
+        name: 'yggdrasil',
+        state: 'running',
+        details: `pid=${pidFromFile}`,
+      };
     }
     return { name: 'yggdrasil', state: 'stopped' };
   }
   if (isProcessAlive(yggdrasilPid)) {
-    return { name: 'yggdrasil', state: 'running', details: `pid=${yggdrasilPid}` };
+    return {
+      name: 'yggdrasil',
+      state: 'running',
+      details: `pid=${yggdrasilPid}`,
+    };
   }
   yggdrasilPid = null;
   return { name: 'yggdrasil', state: 'stopped' };
@@ -736,14 +824,23 @@ const getYggdrasilStatus = (): ServiceStatus => {
 
 const getAllServiceStatuses = (): ServiceStatus[] => {
   const ygg = getYggdrasilStatus();
-  const lockedDetails = ygg.state === 'running' ? undefined : '需要先启动 Yggdrasil 服务';
+  const lockedDetails =
+    ygg.state === 'running' ? undefined : '需要先启动 Yggdrasil 服务';
   return [
     ygg,
-    { name: 'ipfs', state: 'stopped', details: lockedDetails ?? 'not implemented yet' },
+    {
+      name: 'ipfs',
+      state: 'stopped',
+      details: lockedDetails ?? 'not implemented yet',
+    },
     (() => {
       const web = getWebStatus();
       if (web.state === 'running') return web;
-      return { name: 'web', state: 'stopped', details: lockedDetails ?? undefined };
+      return {
+        name: 'web',
+        state: 'stopped',
+        details: lockedDetails ?? undefined,
+      };
     })(),
   ];
 };
@@ -796,7 +893,8 @@ const runYggdrasilCtl = async (
   }
 
   const start = Date.now();
-  const args = [command];
+  // yggdrasilctl supports JSON output via `-json`, and options MUST come before the command.
+  const args = ['-json', command];
 
   return await new Promise<YggdrasilCtlResult>((resolve, reject) => {
     const child = spawn(exePath, args, {
@@ -858,7 +956,7 @@ const getWebPort = (): number => {
 
 const parseYggdrasilIPv6FromGetself = (stdout: string): string | null => {
   const text = (stdout || '').trim();
-  console.log("parseYggdrasilIPv6FromGetself raw output:", text);
+  // console.log('parseYggdrasilIPv6FromGetself raw output:', text);
   if (!text) return null;
   try {
     const parsed = JSON.parse(text);
@@ -895,11 +993,15 @@ const getYggdrasilIPv6AddressOrThrow = async (): Promise<string> => {
   const result = await runYggdrasilCtl('getself', 3000);
   if (!result.ok) {
     const msg = (result.stderr || result.stdout || '').trim();
-    throw new Error(`Failed to query Yggdrasil self address${msg ? `: ${msg}` : ''}`);
+    throw new Error(
+      `Failed to query Yggdrasil self address${msg ? `: ${msg}` : ''}`,
+    );
   }
   const addr = parseYggdrasilIPv6FromGetself(result.stdout);
   if (!addr) {
-    throw new Error('Unable to parse Yggdrasil IPv6 address from yggdrasilctl getself output.');
+    throw new Error(
+      'Unable to parse Yggdrasil IPv6 address from yggdrasilctl getself output.',
+    );
   }
   return addr;
 };
@@ -915,6 +1017,213 @@ function getWebStatus(): ServiceStatus {
   return { name: 'web', state: 'stopped' };
 }
 
+const getWebRootDir = (): string => {
+  return path.join(getAppDataDir(), 'web');
+};
+
+const escapeHtml = (input: string): string => {
+  return (input || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+};
+
+const formatBytes = (bytes: number): string => {
+  if (!Number.isFinite(bytes) || bytes < 0) return '-';
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KiB', 'MiB', 'GiB', 'TiB'];
+  let value = bytes;
+  let idx = -1;
+  while (value >= 1024 && idx < units.length - 1) {
+    value /= 1024;
+    idx += 1;
+  }
+  return `${value.toFixed(value >= 10 || idx === 0 ? 1 : 2)} ${units[idx]}`;
+};
+
+const guessContentType = (filePath: string): string => {
+  const ext = path.extname(filePath).toLowerCase();
+  switch (ext) {
+    case '.html':
+    case '.htm':
+      return 'text/html; charset=utf-8';
+    case '.css':
+      return 'text/css; charset=utf-8';
+    case '.js':
+      return 'text/javascript; charset=utf-8';
+    case '.mjs':
+      return 'text/javascript; charset=utf-8';
+    case '.json':
+      return 'application/json; charset=utf-8';
+    case '.txt':
+    case '.log':
+    case '.md':
+    case '.ini':
+    case '.conf':
+    case '.yaml':
+    case '.yml':
+      return 'text/plain; charset=utf-8';
+    case '.xml':
+      return 'application/xml; charset=utf-8';
+    case '.svg':
+      return 'image/svg+xml';
+    case '.png':
+      return 'image/png';
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg';
+    case '.gif':
+      return 'image/gif';
+    case '.webp':
+      return 'image/webp';
+    case '.ico':
+      return 'image/x-icon';
+    case '.mp4':
+      return 'video/mp4';
+    case '.webm':
+      return 'video/webm';
+    case '.mp3':
+      return 'audio/mpeg';
+    case '.wav':
+      return 'audio/wav';
+    case '.ogg':
+      return 'audio/ogg';
+    case '.pdf':
+      return 'application/pdf';
+    case '.zip':
+      return 'application/zip';
+    case '.7z':
+      return 'application/x-7z-compressed';
+    case '.gz':
+      return 'application/gzip';
+    case '.tar':
+      return 'application/x-tar';
+    case '.wasm':
+      return 'application/wasm';
+    default:
+      return 'application/octet-stream';
+  }
+};
+
+const parseAndNormalizeUrlPath = (rawUrl: string | undefined): string => {
+  const url = new URL(rawUrl || '/', 'http://localhost');
+  // Decode percent-encoded path; reject invalid encoding.
+  let decodedPath = url.pathname;
+  try {
+    decodedPath = decodeURIComponent(decodedPath);
+  } catch {
+    throw new Error('Bad Request');
+  }
+
+  // Normalize using posix semantics (URLs always use '/').
+  const normalized = path.posix.normalize(decodedPath);
+  // Ensure leading slash.
+  const withSlash = normalized.startsWith('/') ? normalized : `/${normalized}`;
+  // Block traversal.
+  if (withSlash === '/..' || withSlash.startsWith('/../')) {
+    throw new Error('Forbidden');
+  }
+  return withSlash;
+};
+
+const urlPathToFsPath = (rootDir: string, urlPath: string): string => {
+  const rel = urlPath.replace(/^\/+/, '');
+  // Convert URL path segments to platform path safely.
+  const segments = rel.split('/').filter(Boolean);
+  return path.join(rootDir, ...segments);
+};
+
+const ensureDirExists = (dirPath: string): void => {
+  try {
+    fs.mkdirSync(dirPath, { recursive: true });
+  } catch (e) {
+    // If it exists already, ignore; otherwise surface.
+    if (!fs.existsSync(dirPath)) throw e;
+  }
+};
+
+const renderDirectoryIndexHtml = (opts: {
+  urlPath: string;
+  entries: Array<{
+    name: string;
+    isDir: boolean;
+    size: number;
+    mtimeMs: number;
+  }>;
+}): string => {
+  const { urlPath, entries } = opts;
+  const title = `Index of ${urlPath}`;
+  const safeTitle = escapeHtml(title);
+
+  const parts = urlPath.split('/').filter(Boolean);
+  const crumbs: string[] = ['<a href="/">/</a>'];
+  let acc = '';
+  for (const part of parts) {
+    acc += `/${part}`;
+    const href = `${acc}/`;
+    crumbs.push(`<a href="${href}">${escapeHtml(part)}/</a>`);
+  }
+
+  const rows: string[] = [];
+  if (urlPath !== '/') {
+    const up =
+      urlPath.replace(/\/+$/, '').split('/').slice(0, -1).join('/') || '';
+    const parentHref = `${up}/` || '/';
+    rows.push(
+      `<tr><td><a href="${parentHref}">..</a></td><td class="meta">-</td><td class="meta">-</td></tr>`,
+    );
+  }
+
+  for (const e of entries) {
+    const suffix = e.isDir ? '/' : '';
+    const href = `${urlPath}${encodeURIComponent(e.name)}${suffix}`;
+    const displayName = escapeHtml(e.name + suffix);
+    const mtime = e.mtimeMs ? new Date(e.mtimeMs).toLocaleString() : '-';
+    const size = e.isDir ? '-' : formatBytes(e.size);
+    rows.push(
+      `<tr><td><a href="${href}">${displayName}</a></td><td class="meta">${escapeHtml(
+        String(mtime),
+      )}</td><td class="meta">${escapeHtml(String(size))}</td></tr>`,
+    );
+  }
+
+  return `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${safeTitle}</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; margin: 16px; }
+      h1 { font-size: 18px; margin: 0 0 12px; }
+      .crumbs { margin: 0 0 12px; color: #444; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #eee; }
+      th { font-weight: 600; color: #333; }
+      a { color: #0b57d0; text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .meta { white-space: nowrap; color: #555; font-variant-numeric: tabular-nums; }
+      .footer { margin-top: 16px; color: #777; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <h1>${safeTitle}</h1>
+    <div class="crumbs">${crumbs.join(' ')}</div>
+    <table>
+      <thead>
+        <tr><th>名称</th><th class="meta">修改时间</th><th class="meta">大小</th></tr>
+      </thead>
+      <tbody>
+        ${rows.join('\n')}
+      </tbody>
+    </table>
+    <div class="footer">WTB Web 索引（目录：wtb-data/web）</div>
+  </body>
+</html>`;
+};
+
 const startWebService = async (): Promise<ServiceStatus> => {
   ensureWindowsOrThrow();
   const existing = getWebStatus();
@@ -928,13 +1237,114 @@ const startWebService = async (): Promise<ServiceStatus> => {
   const host = await getYggdrasilIPv6AddressOrThrow();
   const port = getWebPort();
 
+  const webRoot = getWebRootDir();
+  ensureDirExists(webRoot);
+
   const server = http.createServer((req, res) => {
     try {
-      if (req.method === 'GET' && (req.url === '/' || req.url === '/health')) {
-        const body = JSON.stringify({ ok: true, service: 'web', time: new Date().toISOString() });
+      const method = (req.method || 'GET').toUpperCase();
+      if (method !== 'GET' && method !== 'HEAD') {
+        res.statusCode = 405;
+        res.setHeader('Allow', 'GET, HEAD');
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.end('Method Not Allowed');
+        return;
+      }
+
+      const urlPath = parseAndNormalizeUrlPath(req.url);
+
+      if (urlPath === '/health') {
+        const body = JSON.stringify({
+          ok: true,
+          service: 'web',
+          time: new Date().toISOString(),
+          root: webRoot,
+        });
         res.statusCode = 200;
         res.setHeader('Content-Type', 'application/json; charset=utf-8');
-        res.end(body);
+        res.end(method === 'HEAD' ? undefined : body);
+        return;
+      }
+
+      // Ensure directory paths end with a slash to keep relative links consistent.
+      const fsPath = urlPathToFsPath(webRoot, urlPath);
+      if (!isUnderDir(fsPath, webRoot)) {
+        res.statusCode = 403;
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.end('Forbidden');
+        return;
+      }
+
+      let st: fs.Stats;
+      try {
+        st = fs.statSync(fsPath);
+      } catch {
+        res.statusCode = 404;
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.end('Not Found');
+        return;
+      }
+
+      if (st.isDirectory()) {
+        if (!urlPath.endsWith('/')) {
+          res.statusCode = 301;
+          res.setHeader('Location', `${urlPath}/`);
+          res.end();
+          return;
+        }
+
+        const dirents = fs.readdirSync(fsPath, { withFileTypes: true });
+        const entries = dirents
+          .map((d) => {
+            const childPath = path.join(fsPath, d.name);
+            let childSt: fs.Stats | null = null;
+            try {
+              childSt = fs.statSync(childPath);
+            } catch {
+              childSt = null;
+            }
+            return {
+              name: d.name,
+              isDir: d.isDirectory(),
+              size: childSt?.isFile() ? childSt.size : 0,
+              mtimeMs: childSt?.mtimeMs ?? 0,
+            };
+          })
+          .sort((a, b) => {
+            if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+            return a.name.localeCompare(b.name, 'zh-CN', {
+              numeric: true,
+              sensitivity: 'base',
+            });
+          });
+
+        const html = renderDirectoryIndexHtml({ urlPath, entries });
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.end(method === 'HEAD' ? undefined : html);
+        return;
+      }
+
+      if (st.isFile()) {
+        res.statusCode = 200;
+        res.setHeader('Content-Type', guessContentType(fsPath));
+        res.setHeader('Content-Length', String(st.size));
+        res.setHeader('Last-Modified', st.mtime.toUTCString());
+        if (method === 'HEAD') {
+          res.end();
+          return;
+        }
+        const stream = fs.createReadStream(fsPath);
+        stream.on('error', () => {
+          try {
+            res.statusCode = 500;
+            res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+            res.end('Internal Server Error');
+          } catch {
+            // ignore
+          }
+        });
+        stream.pipe(res);
         return;
       }
 
@@ -949,6 +1359,12 @@ const startWebService = async (): Promise<ServiceStatus> => {
         // ignore
       }
     }
+  });
+
+  // Track open sockets so we can force-stop even if clients keep connections alive.
+  server.on('connection', (socket: Socket) => {
+    webOpenSockets.add(socket);
+    socket.on('close', () => webOpenSockets.delete(socket));
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -967,12 +1383,33 @@ const stopWebService = async (): Promise<ServiceStatus> => {
   const server = webServer;
   if (!server) return { name: 'web', state: 'stopped' };
 
-  await new Promise<void>((resolve) => {
+  // Force-close existing keep-alive connections (e.g. browsers) to let server.close() finish.
+  for (const socket of Array.from(webOpenSockets)) {
     try {
-      server.close(() => resolve());
+      socket.destroy();
     } catch {
-      resolve();
+      // ignore
     }
+  }
+  webOpenSockets.clear();
+
+  await new Promise<void>((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      resolve();
+    };
+
+    try {
+      server.close(() => finish());
+    } catch {
+      finish();
+      return;
+    }
+
+    // Safety timeout: should be quick after destroying sockets, but don't hang forever.
+    setTimeout(() => finish(), 1500);
   });
 
   webServer = null;
@@ -1005,7 +1442,11 @@ ipcMain.handle('services:start', async (_event, serviceName: ServiceName) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log.error(`Failed to start service ${serviceName}:`, error);
-    return { name: serviceName, state: 'stopped', details: message } satisfies ServiceStatus;
+    return {
+      name: serviceName,
+      state: 'stopped',
+      details: message,
+    } satisfies ServiceStatus;
   }
 });
 
@@ -1027,7 +1468,28 @@ ipcMain.handle('services:stop', async (_event, serviceName: ServiceName) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log.error(`Failed to stop service ${serviceName}:`, error);
-    return { name: serviceName, state: 'stopped', details: message } satisfies ServiceStatus;
+    return {
+      name: serviceName,
+      state: 'stopped',
+      details: message,
+    } satisfies ServiceStatus;
+  }
+});
+
+ipcMain.handle('services:openDir', async (_event, serviceName: ServiceName) => {
+  try {
+    if (serviceName === 'web') {
+      const dirPath = getWebRootDir();
+      ensureDirExists(dirPath);
+      await shell.openPath(dirPath);
+      return { ok: true, path: dirPath };
+    }
+
+    return { ok: false, error: `openDir not supported for ${serviceName}` };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log.warn(`services:openDir failed: ${serviceName}`, error);
+    return { ok: false, error: message };
   }
 });
 
@@ -1039,15 +1501,20 @@ ipcMain.handle('chat:identity:get', async () => {
   return groupChat.status() satisfies ChatStatus;
 });
 
-ipcMain.handle('chat:identity:setDisplayName', async (_event, displayName: string) => {
-  groupChat.setDisplayName(displayName);
-  return groupChat.status() satisfies ChatStatus;
-});
+ipcMain.handle(
+  'chat:identity:setDisplayName',
+  async (_event, displayName: string) => {
+    groupChat.setDisplayName(displayName);
+    return groupChat.status() satisfies ChatStatus;
+  },
+);
 
 ipcMain.handle('chat:start', async () => {
   const ygg = getYggdrasilStatus();
   if (ygg.state !== 'running') {
-    throw new Error('Yggdrasil 未运行，无法启动群聊。请先在首页启动 Yggdrasil。');
+    throw new Error(
+      'Yggdrasil 未运行，无法启动群聊。请先在首页启动 Yggdrasil。',
+    );
   }
 
   return await groupChat.start();
@@ -1060,7 +1527,9 @@ ipcMain.handle('chat:stop', async () => {
 ipcMain.handle('chat:dial', async (_event, ma: string) => {
   const ygg = getYggdrasilStatus();
   if (ygg.state !== 'running') {
-    throw new Error('Yggdrasil 未运行，无法连接 peer。请先在首页启动 Yggdrasil。');
+    throw new Error(
+      'Yggdrasil 未运行，无法连接 peer。请先在首页启动 Yggdrasil。',
+    );
   }
 
   return await groupChat.dial(ma);
@@ -1069,54 +1538,77 @@ ipcMain.handle('chat:dial', async (_event, ma: string) => {
 ipcMain.handle('chat:subscribe', async (_event, topic: string) => {
   const ygg = getYggdrasilStatus();
   if (ygg.state !== 'running') {
-    throw new Error('Yggdrasil 未运行，无法订阅 topic。请先在首页启动 Yggdrasil。');
+    throw new Error(
+      'Yggdrasil 未运行，无法订阅 topic。请先在首页启动 Yggdrasil。',
+    );
   }
 
   return await groupChat.subscribe(topic);
 });
 
-ipcMain.handle('chat:publish', async (_event, payload: { topic: string; message: string }) => {
-  const ygg = getYggdrasilStatus();
-  if (ygg.state !== 'running') {
-    throw new Error('Yggdrasil 未运行，无法发送消息。请先在首页启动 Yggdrasil。');
-  }
+ipcMain.handle(
+  'chat:publish',
+  async (_event, payload: { topic: string; message: string }) => {
+    const ygg = getYggdrasilStatus();
+    if (ygg.state !== 'running') {
+      throw new Error(
+        'Yggdrasil 未运行，无法发送消息。请先在首页启动 Yggdrasil。',
+      );
+    }
 
-  await groupChat.publish(payload?.topic, payload?.message);
-  return { ok: true };
-});
+    await groupChat.publish(payload?.topic, payload?.message);
+    return { ok: true };
+  },
+);
 
 ipcMain.handle('chat:conversations:list', async () => {
   return groupChat.listConversations() satisfies ChatConversation[];
 });
 
-ipcMain.handle('chat:conversation:load', async (_event, convId: string, limit?: number) => {
-  return groupChat.loadMessages(convId, typeof limit === 'number' ? limit : 200) satisfies ChatMessage[];
-});
+ipcMain.handle(
+  'chat:conversation:load',
+  async (_event, convId: string, limit?: number) => {
+    return groupChat.loadMessages(
+      convId,
+      typeof limit === 'number' ? limit : 200,
+    ) satisfies ChatMessage[];
+  },
+);
 
 ipcMain.handle('chat:conversation:markRead', async (_event, convId: string) => {
   groupChat.markRead(convId);
   return { ok: true };
 });
 
-ipcMain.handle('chat:conversation:createGroup', async (_event, title: string) => {
-  const ygg = getYggdrasilStatus();
-  if (ygg.state !== 'running') {
-    throw new Error('Yggdrasil 未运行，无法创建群组。请先在首页启动 Yggdrasil 并启动群聊。');
-  }
+ipcMain.handle(
+  'chat:conversation:createGroup',
+  async (_event, title: string) => {
+    const ygg = getYggdrasilStatus();
+    if (ygg.state !== 'running') {
+      throw new Error(
+        'Yggdrasil 未运行，无法创建群组。请先在首页启动 Yggdrasil 并启动群聊。',
+      );
+    }
 
-  requireChatRunning();
-  return groupChat.createGroup(title) satisfies ChatConversation;
-});
+    requireChatRunning();
+    return groupChat.createGroup(title) satisfies ChatConversation;
+  },
+);
 
-ipcMain.handle('chat:conversation:joinGroup', async (_event, input: { groupId: string; title: string }) => {
-  const ygg = getYggdrasilStatus();
-  if (ygg.state !== 'running') {
-    throw new Error('Yggdrasil 未运行，无法加入群组。请先在首页启动 Yggdrasil 并启动群聊。');
-  }
+ipcMain.handle(
+  'chat:conversation:joinGroup',
+  async (_event, input: { groupId: string; title: string }) => {
+    const ygg = getYggdrasilStatus();
+    if (ygg.state !== 'running') {
+      throw new Error(
+        'Yggdrasil 未运行，无法加入群组。请先在首页启动 Yggdrasil 并启动群聊。',
+      );
+    }
 
-  requireChatRunning();
-  return groupChat.joinGroup(input) satisfies ChatConversation;
-});
+    requireChatRunning();
+    return groupChat.joinGroup(input) satisfies ChatConversation;
+  },
+);
 
 ipcMain.handle(
   'chat:conversation:startDm',
@@ -1131,7 +1623,9 @@ ipcMain.handle(
   ) => {
     const ygg = getYggdrasilStatus();
     if (ygg.state !== 'running') {
-      throw new Error('Yggdrasil 未运行，无法创建私聊。请先在首页启动 Yggdrasil 并启动群聊。');
+      throw new Error(
+        'Yggdrasil 未运行，无法创建私聊。请先在首页启动 Yggdrasil 并启动群聊。',
+      );
     }
 
     requireChatRunning();
@@ -1139,37 +1633,70 @@ ipcMain.handle(
   },
 );
 
-ipcMain.handle('chat:message:send', async (_event, convId: string, text: string) => {
-  const ygg = getYggdrasilStatus();
-  if (ygg.state !== 'running') {
-    throw new Error('Yggdrasil 未运行，无法发送消息。请先在首页启动 Yggdrasil。');
-  }
-
-  requireChatRunning();
-  await groupChat.sendMessage(convId, text);
-  return { ok: true };
-});
-
-ipcMain.handle('yggdrasilctl:run', async (_event, command: YggdrasilCtlCommand) => {
-  try {
-    // Most commands require Yggdrasil to be running; surfacing a friendly error helps UX.
+ipcMain.handle(
+  'chat:message:send',
+  async (_event, convId: string, text: string) => {
     const ygg = getYggdrasilStatus();
-    if (command !== 'list' && ygg.state !== 'running') {
-      throw new Error('Yggdrasil 未运行，无法获取状态。请先在首页启动 Yggdrasil。');
+    if (ygg.state !== 'running') {
+      throw new Error(
+        'Yggdrasil 未运行，无法发送消息。请先在首页启动 Yggdrasil。',
+      );
     }
 
-    return await runYggdrasilCtl(command);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    log.error(`yggdrasilctl failed: command=${command}`, error);
-    return {
-      ok: false,
-      command,
-      exitCode: null,
-      stdout: '',
-      stderr: message,
-      durationMs: 0,
-    } satisfies YggdrasilCtlResult;
+    requireChatRunning();
+    await groupChat.sendMessage(convId, text);
+    return { ok: true };
+  },
+);
+
+ipcMain.handle(
+  'yggdrasilctl:run',
+  async (_event, command: YggdrasilCtlCommand) => {
+    try {
+      // Most commands require Yggdrasil to be running; surfacing a friendly error helps UX.
+      const ygg = getYggdrasilStatus();
+      if (command !== 'list' && ygg.state !== 'running') {
+        throw new Error(
+          'Yggdrasil 未运行，无法获取状态。请先在首页启动 Yggdrasil。',
+        );
+      }
+
+      return await runYggdrasilCtl(command);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log.error(`yggdrasilctl failed: command=${command}`, error);
+      return {
+        ok: false,
+        command,
+        exitCode: null,
+        stdout: '',
+        stderr: message,
+        durationMs: 0,
+      } satisfies YggdrasilCtlResult;
+    }
+  },
+);
+
+// Open a URL via the system default browser (preferred for slow/unreliable links)
+ipcMain.handle('open-external', async (_event, url: string) => {
+  try {
+    if (!url || typeof url !== 'string') return;
+
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return;
+    }
+
+    // Only allow http(s) to avoid accidentally opening unsafe schemes.
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return;
+    }
+
+    await shell.openExternal(parsed.toString());
+  } catch (err) {
+    log.warn('open-external failed', err);
   }
 });
 
@@ -1189,6 +1716,30 @@ ipcMain.handle('open-in-app', async (_event, url: string) => {
         nodeIntegration: false,
         contextIsolation: true,
       },
+    });
+
+    child.webContents.on('context-menu', (_event, params) => {
+      try {
+        const hasSelection = (params.selectionText || '').trim().length > 0;
+        const isEditable = !!params.isEditable;
+
+        const template = isEditable
+          ? [
+              { role: 'cut' as const, enabled: hasSelection },
+              { role: 'copy' as const, enabled: hasSelection },
+              { role: 'paste' as const },
+              { type: 'separator' as const },
+              { role: 'selectAll' as const },
+            ]
+          : [
+              { role: 'copy' as const, enabled: hasSelection },
+              { role: 'selectAll' as const },
+            ];
+
+        Menu.buildFromTemplate(template).popup({ window: child });
+      } catch {
+        // ignore
+      }
     });
 
     child.once('ready-to-show', () => child.show());
@@ -1254,6 +1805,31 @@ const createWindow = async () => {
     },
   });
 
+  // Enable right-click context menu (e.g. Copy for selected text).
+  mainWindow.webContents.on('context-menu', (_event, params) => {
+    try {
+      const hasSelection = (params.selectionText || '').trim().length > 0;
+      const isEditable = !!params.isEditable;
+
+      const template = isEditable
+        ? [
+            { role: 'cut' as const, enabled: hasSelection },
+            { role: 'copy' as const, enabled: hasSelection },
+            { role: 'paste' as const },
+            { type: 'separator' as const },
+            { role: 'selectAll' as const },
+          ]
+        : [
+            { role: 'copy' as const, enabled: hasSelection },
+            { role: 'selectAll' as const },
+          ];
+
+      Menu.buildFromTemplate(template).popup({ window: mainWindow! });
+    } catch {
+      // ignore
+    }
+  });
+
   mainWindow.loadURL(resolveHtmlPath('index.html'));
 
   mainWindow.on('ready-to-show', () => {
@@ -1292,6 +1868,14 @@ const createWindow = async () => {
 app.on('before-quit', () => {
   try {
     if (webServer) {
+      for (const socket of Array.from(webOpenSockets)) {
+        try {
+          socket.destroy();
+        } catch {
+          // ignore
+        }
+      }
+      webOpenSockets.clear();
       webServer.close();
     }
   } catch {

@@ -34,8 +34,8 @@ export default function LauncherTileExternalLink({
     (e: React.MouseEvent) => {
       e.preventDefault();
       try {
-        // Use IPC to ask main process to open the URL in-app
-        window.electron.ipcRenderer.invoke('open-in-app', href);
+        // Use IPC to ask main process to open the URL via system browser
+        window.electron.ipcRenderer.invoke('open-external', href);
       } catch {
         // Fallback to window.open if IPC not available
         window.open(href, '_blank', 'noopener,noreferrer');
@@ -45,7 +45,12 @@ export default function LauncherTileExternalLink({
   );
 
   return (
-    <button className="LauncherTile" type="button" onClick={onClick} aria-label={label}>
+    <button
+      className="LauncherTile"
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+    >
       <div className="LauncherIcon" aria-hidden>
         {icon}
       </div>

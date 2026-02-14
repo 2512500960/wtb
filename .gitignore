@@ -35,3 +35,5 @@ wtb-data/yggdrasil/datasource/datastore/LOCK
 wtb-data/yggdrasil/datasource/datastore/LOG
 wtb-data/yggdrasil/datasource/datastore/MANIFEST-000023
 wtb-data/
+build_tools/public_peers.json
+yggdrasil/windows10/amd64/public_peers.json
