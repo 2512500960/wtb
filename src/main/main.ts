@@ -23,11 +23,14 @@ import log from 'electron-log';
 import { spawn, spawnSync } from 'child_process';
 import fs from 'fs';
 import * as http from 'http';
+import * as https from 'https';
 import type { Socket } from 'net';
 import { URL } from 'url';
+import * as crypto from 'crypto';
 import * as Hjson from 'hjson';
 import MenuBuilder from './menu';
 import { resolveHtmlPath } from './util';
+import { WEBSITE_INDEX_ED25519_PUBLIC_KEY_PEM } from './website_index_pubkey';
 import {
   loadBundledPublicPeers,
   pickRandomPublicPeerAddresses,
@@ -72,6 +75,149 @@ let webServer: http.Server | null = null;
 let webListenAddress: string | null = null;
 let webListenPort: number | null = null;
 const webOpenSockets = new Set<Socket>();
+
+const YGG_WEBSITE_INDEX_DATA_URL =
+  'http://[202:8467:9fa8:c35a:ef47:861d:fdbd:4f1b]:8137/index.json';
+
+type SignedWebsiteIndexEnvelope = {
+  payload?: unknown;
+  payloadJson?: unknown;
+  data?: unknown;
+  sigB64?: unknown;
+  signatureB64?: unknown;
+  signature?: unknown;
+  alg?: unknown;
+};
+
+const httpGetText = async (
+  url: string,
+  timeoutMs: number,
+): Promise<{ statusCode: number; headers: http.IncomingHttpHeaders; body: string }> => {
+  const parsed = new URL(url);
+  const transport = parsed.protocol === 'https:' ? https : http;
+
+  return await new Promise((resolve, reject) => {
+    const req = transport.request(
+      {
+        method: 'GET',
+        protocol: parsed.protocol,
+        hostname: parsed.hostname,
+        port: parsed.port,
+        path: parsed.pathname + parsed.search,
+        headers: {
+          Accept: 'application/json, text/plain;q=0.9, */*;q=0.1',
+        },
+      },
+      (res) => {
+        const statusCode = res.statusCode ?? 0;
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => {
+          resolve({
+            statusCode,
+            headers: res.headers,
+            body: Buffer.concat(chunks).toString('utf8'),
+          });
+        });
+      },
+    );
+
+    req.on('error', reject);
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error('请求超时'));
+    });
+    req.end();
+  });
+};
+
+const parseSignedWebsiteIndex = (raw: string): {
+  payloadText: string;
+  sigB64: string;
+  alg: 'ed25519';
+  data: unknown;
+} => {
+  let env: SignedWebsiteIndexEnvelope;
+  try {
+    env = JSON.parse(raw) as SignedWebsiteIndexEnvelope;
+  } catch {
+    throw new Error('索引数据不是合法 JSON');
+  }
+
+  const sig =
+    (typeof env.sigB64 === 'string' && env.sigB64) ||
+    (typeof env.signatureB64 === 'string' && env.signatureB64) ||
+    (typeof env.signature === 'string' && env.signature) ||
+    '';
+  if (!sig) throw new Error('索引数据缺少签名字段（sigB64/signatureB64/signature）');
+
+  const algRaw = typeof env.alg === 'string' ? env.alg.toLowerCase() : '';
+  const alg: 'ed25519' =
+    algRaw.includes('ed25519') || algRaw.includes('ed-25519')
+      ? 'ed25519'
+      : 'ed25519';
+
+  const rawPayload =
+    (typeof env.payloadJson === 'string' && env.payloadJson) ||
+    (typeof env.payload === 'string' && env.payload) ||
+    '';
+  if (!rawPayload) {
+    throw new Error('索引数据缺少 payload（必须是 JSON 字符串或其 base64 编码）');
+  }
+
+  let payloadText: string | null = null;
+
+  // 兼容两种格式：
+  // 1. 旧格式：payloadJson 直接是 JSON 字符串
+  // 2. 新格式：payloadJson 是 JSON 字符串的 base64 编码
+  try {
+    JSON.parse(rawPayload);
+    payloadText = rawPayload;
+  } catch {
+    try {
+      const decoded = Buffer.from(rawPayload, 'base64').toString('utf8');
+      JSON.parse(decoded);
+      payloadText = decoded;
+    } catch {
+      payloadText = null;
+    }
+  }
+
+  if (!payloadText) {
+    throw new Error('payload 不是合法 JSON 字符串或其 base64 编码');
+  }
+
+  let data: unknown;
+  try {
+    data = JSON.parse(payloadText) as unknown;
+  } catch {
+    throw new Error('payload 不是合法 JSON 字符串');
+  }
+
+  return { payloadText, sigB64: sig, alg, data };
+};
+
+const verifyWebsiteIndexSignatureOrThrow = (
+  payloadText: string,
+  sigB64: string,
+  alg: 'ed25519',
+): void => {
+  if (alg !== 'ed25519') {
+    throw new Error(`不支持的签名算法：${alg}`);
+  }
+
+  if (!WEBSITE_INDEX_ED25519_PUBLIC_KEY_PEM) {
+    throw new Error(
+      '未配置索引验签公钥（请在 src/main/website_index_pubkey.ts 中硬编码 Ed25519 公钥 PEM）',
+    );
+  }
+
+  const sig = Buffer.from(sigB64, 'base64');
+  const payload = Buffer.from(payloadText, 'utf8');
+
+  const pub = crypto.createPublicKey(WEBSITE_INDEX_ED25519_PUBLIC_KEY_PEM);
+  const ok = crypto.verify(null, payload, pub, sig);
+  if (!ok) throw new Error('索引数据 Ed25519 签名校验失败');
+};
 
 const groupChat = new Libp2pGroupChatService((msg: ChatMessage) => {
   try {
@@ -989,7 +1135,7 @@ const parseYggdrasilIPv6FromGetself = (stdout: string): string | null => {
   return match?.[1] ?? null;
 };
 
-const getYggdrasilIPv6AddressOrThrow = async (): Promise<string> => {
+export async function getYggdrasilIPv6AddressOrThrow(): Promise<string> {
   const result = await runYggdrasilCtl('getself', 3000);
   if (!result.ok) {
     const msg = (result.stderr || result.stdout || '').trim();
@@ -1676,6 +1822,38 @@ ipcMain.handle(
     }
   },
 );
+
+ipcMain.handle('ygg:index:load', async () => {
+  const ygg = getYggdrasilStatus();
+  if (ygg.state !== 'running') {
+    throw new Error('Yggdrasil 未运行，无法加载网站索引。请先在首页启动 Yggdrasil。');
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(YGG_WEBSITE_INDEX_DATA_URL);
+  } catch {
+    throw new Error('索引 URL 配置无效');
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('索引 URL 仅支持 http/https');
+  }
+
+  const res = await httpGetText(parsed.toString(), 15000);
+  if (res.statusCode < 200 || res.statusCode >= 300) {
+    throw new Error(`索引请求失败：HTTP ${res.statusCode}`);
+  }
+
+  const { payloadText, sigB64, alg, data } = parseSignedWebsiteIndex(res.body);
+  verifyWebsiteIndexSignatureOrThrow(payloadText, sigB64, alg);
+
+  return {
+    ok: true,
+    verified: true,
+    sourceUrl: parsed.toString(),
+    data,
+  };
+});
 
 // Open a URL via the system default browser (preferred for slow/unreliable links)
 ipcMain.handle('open-external', async (_event, url: string) => {

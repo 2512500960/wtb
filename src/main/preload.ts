@@ -9,6 +9,7 @@ export type InvokeChannels =
   | 'services:stop'
   | 'services:openDir'
   | 'yggdrasilctl:run'
+  | 'ygg:index:load'
   | 'open-in-app'
   | 'open-external'
   | 'chat:status'

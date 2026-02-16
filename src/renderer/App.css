@@ -410,6 +410,90 @@ body {
   line-height: 1.35;
 }
 
+.WebsiteIndexTableWrapper {
+  margin-top: 12px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  overflow: hidden;
+}
+
+.WebsiteIndexTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.WebsiteIndexHeadCell {
+  padding: 8px 10px;
+  font-weight: 800;
+  opacity: 0.95;
+  text-align: left;
+  background: rgba(0, 0, 0, 0.28);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.18);
+  white-space: nowrap;
+}
+
+.WebsiteIndexCell {
+  padding: 8px 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  vertical-align: top;
+}
+
+.WebsiteIndexId {
+  width: 52px;
+  white-space: nowrap;
+}
+
+.WebsiteIndexUrlText {
+  word-break: break-all;
+}
+
+.WebsiteIndexDesc,
+.WebsiteIndexNotice {
+  max-width: 260px;
+}
+
+.WebsiteIndexActions {
+  width: 90px;
+  text-align: center;
+}
+
+.WebsiteIndexSearchRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.WebsiteIndexSearchLabel {
+  font-size: 12px;
+  font-weight: 800;
+  opacity: 0.9;
+}
+
+.WebsiteIndexSearchInput {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(0, 0, 0, 0.18);
+  color: rgba(255, 255, 255, 0.92);
+  outline: none;
+  font-size: 12px;
+}
+
+.WebsiteIndexSearchInput::placeholder {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.WebsiteIndexClearButton {
+  width: auto;
+  padding: 0 12px;
+  height: 32px;
+}
+
 .ChatPageRoot {
   width: min(1180px, calc(100vw - 48px));
 }
@@ -456,6 +540,7 @@ body {
 }
 
 .ChatTopItem {
+  user-select: text;
   border-radius: 12px;
   background: rgba(0, 0, 0, 0.16);
   border: 1px solid rgba(255, 255, 255, 0.14);

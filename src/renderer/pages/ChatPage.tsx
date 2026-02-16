@@ -2,42 +2,7 @@ import * as React from 'react';
 import { Link } from 'react-router-dom';
 import EmojiPicker, { EmojiClickData } from 'emoji-picker-react';
 
-type ChatStatus = {
-  running: boolean;
-  peerId?: string;
-  listenAddrs: string[];
-  peers: string[];
-  topics: string[];
-  displayName?: string;
-  identity?: {
-    signPublicKeyDerB64: string;
-    encPublicKeyDerB64: string;
-  };
-};
-
-type ChatConversation = {
-  convId: string;
-  type: 'group' | 'dm';
-  title: string;
-  topic: string;
-  createdAt: number;
-  lastMessageAt?: number;
-  lastMessagePreview?: string;
-  unreadCount?: number;
-  peerId?: string;
-};
-
-type ChatMessage = {
-  convId: string;
-  type: 'group' | 'dm';
-  topic: string;
-  fromPeerId: string;
-  fromDisplayName?: string;
-  direction: 'in' | 'out';
-  text: string;
-  ts: number;
-  receivedAt: number;
-};
+import type { ChatConversation, ChatMessage, ChatStatus } from '../types/chat';
 
 function ModalShell({
   title,
@@ -97,9 +62,6 @@ export default function ChatPage() {
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
-  const [dialAddr, setDialAddr] = React.useState('');
-  const [displayName, setDisplayName] = React.useState('');
-
   const [composer, setComposer] = React.useState('');
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
 
@@ -121,7 +83,6 @@ export default function ChatPage() {
       'chat:status',
     )) as ChatStatus;
     setStatus(res);
-    setDisplayName(res.displayName ?? '');
   }, []);
 
   const refreshConversations = React.useCallback(async () => {
@@ -173,7 +134,6 @@ export default function ChatPage() {
                 'chat:start',
               )) as ChatStatus;
               setStatus(res);
-              setDisplayName(res.displayName ?? '');
               await refreshConversations();
             } catch (e) {
               // Non-fatal: surface error for visibility but continue
@@ -216,7 +176,6 @@ export default function ChatPage() {
         'chat:start',
       )) as ChatStatus;
       setStatus(res);
-      setDisplayName(res.displayName ?? '');
       await refreshConversations();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -231,38 +190,6 @@ export default function ChatPage() {
     try {
       const res = (await window.electron.ipcRenderer.invoke(
         'chat:stop',
-      )) as ChatStatus;
-      setStatus(res);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const dial = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const res = (await window.electron.ipcRenderer.invoke(
-        'chat:dial',
-        dialAddr,
-      )) as ChatStatus;
-      setStatus(res);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const saveDisplayName = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const res = (await window.electron.ipcRenderer.invoke(
-        'chat:identity:setDisplayName',
-        displayName,
       )) as ChatStatus;
       setStatus(res);
     } catch (e) {
@@ -361,9 +288,7 @@ export default function ChatPage() {
 
   const activeConv =
     conversations.find((c) => c.convId === activeConvId) ?? null;
-  const myPeerId = status?.peerId ?? '';
-  const mySignPub = status?.identity?.signPublicKeyDerB64 ?? '';
-  const myEncPub = status?.identity?.encPublicKeyDerB64 ?? '';
+  // status/identity UI moved to SettingsPage
 
   let timelineContent: React.ReactNode = null;
   if (!activeConv) {
@@ -402,131 +327,7 @@ export default function ChatPage() {
       </div>
 
       <div className="ChatPageBody">
-        <div className="ChatTopPanel">
-          <div className="ChatTopLeft">
-            <div className="ChatTopTitleRow">
-              <div className="ChatTopTitle">状态与身份</div>
-              <div className="ChatTopActions">
-                <button
-                  type="button"
-                  className="ServiceGhostButton"
-                  onClick={async () => {
-                    await refreshStatus();
-                    await refreshConversations();
-                    try {
-                      const services =
-                        (await window.electron.ipcRenderer.invoke(
-                          'services:getAll',
-                        )) as
-                          | { name: string; state: 'running' | 'stopped' }[]
-                          | undefined;
-                      const ygg = services?.find((s) => s.name === 'yggdrasil');
-                      if (ygg?.state === 'running') {
-                        const chatSt =
-                          (await window.electron.ipcRenderer.invoke(
-                            'chat:status',
-                          )) as ChatStatus;
-                        if (!chatSt.running) {
-                          try {
-                            const res =
-                              (await window.electron.ipcRenderer.invoke(
-                                'chat:start',
-                              )) as ChatStatus;
-                            setStatus(res);
-                            setDisplayName(res.displayName ?? '');
-                            await refreshConversations();
-                          } catch (e) {
-                            setError(
-                              e instanceof Error ? e.message : String(e),
-                            );
-                          }
-                        }
-                      }
-                    } catch {
-                      // ignore
-                    }
-                  }}
-                  disabled={busy}
-                >
-                  刷新
-                </button>
-              </div>
-            </div>
-
-            {error ? <div className="ServiceError">{error}</div> : null}
-
-            <div className="ChatTopGrid">
-              <div className="ChatTopItem">
-                <div className="ChatTopLabel">运行状态</div>
-                <div className="ChatTopValue">
-                  {running ? '已启动' : '未启动'}
-                </div>
-              </div>
-
-              <div className="ChatTopItem">
-                <div className="ChatTopLabel">PeerId</div>
-                <div className="ChatTopValue ChatMono">{myPeerId || '—'}</div>
-              </div>
-
-              <div className="ChatTopItem ChatTopItemWide">
-                <div className="ChatTopLabel">监听地址</div>
-                <pre className="ChatListenPre">
-                  {(status?.listenAddrs ?? []).join('\n') || '—'}
-                </pre>
-              </div>
-
-              <div className="ChatTopItem ChatTopItemWide">
-                <div className="ChatTopLabel">昵称</div>
-                <div className="ChatRow">
-                  <input
-                    className="ChatInput"
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    placeholder="我的昵称"
-                    disabled={busy}
-                  />
-                  <button
-                    type="button"
-                    className="ServicePrimaryButton"
-                    onClick={saveDisplayName}
-                    disabled={busy || !displayName.trim()}
-                  >
-                    保存
-                  </button>
-                </div>
-              </div>
-
-              <div className="ChatTopItem ChatTopItemWide">
-                <div className="ChatTopLabel">连接 peer（可选）</div>
-                <div className="ChatRow">
-                  <input
-                    className="ChatInput"
-                    value={dialAddr}
-                    onChange={(e) => setDialAddr(e.target.value)}
-                    placeholder="/ip6/<ygg-ip>/tcp/<port>/p2p/<peerId>"
-                    disabled={!running || busy}
-                  />
-                  <button
-                    type="button"
-                    className="ServicePrimaryButton"
-                    onClick={dial}
-                    disabled={!running || busy || !dialAddr.trim()}
-                  >
-                    连接
-                  </button>
-                </div>
-              </div>
-
-              <div className="ChatTopItem ChatTopItemWide">
-                <div className="ChatTopLabel">我的公钥</div>
-                <pre className="ChatKeyPre">{`sign=${mySignPub}\nenc=${myEncPub}`}</pre>
-                <div className="ChatTinyHint">
-                  私聊需要交换对端的加密/签名公钥（base64 DER）。
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        {error ? <div className="ServiceError">{error}</div> : null}
 
         <div className="ChatSecondPanel">
           <div className="ChatSecondTitle">新建会话</div>

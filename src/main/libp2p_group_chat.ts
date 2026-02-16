@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import net from 'net';
 import log from 'electron-log';
 import { app } from 'electron';
 import { createLibp2p, type Libp2p } from 'libp2p';
@@ -10,7 +11,12 @@ import { yamux } from '@chainsafe/libp2p-yamux';
 import { identify } from '@libp2p/identify';
 import { gossipsub } from '@chainsafe/libp2p-gossipsub';
 import { multiaddr } from '@multiformats/multiaddr';
-import { fromString as u8FromString, toString as u8ToString } from 'uint8arrays';
+import { webSockets } from '@libp2p/websockets'
+import {
+  fromString as u8FromString,
+  toString as u8ToString,
+} from 'uint8arrays';
+import { getYggdrasilIPv6AddressOrThrow } from './main';
 
 type MsgStoreMaster = {
   schemaVersion: 1;
@@ -116,7 +122,8 @@ const sha256Hex = (input: string): string => {
   return crypto.createHash('sha256').update(input).digest('hex');
 };
 
-const randomB64 = (bytes: number): string => crypto.randomBytes(bytes).toString('base64');
+const randomB64 = (bytes: number): string =>
+  crypto.randomBytes(bytes).toString('base64');
 
 const safePreview = (text: string, maxLen: number = 60): string => {
   const cleaned = (text ?? '').replace(/[\r\n\t]+/g, ' ').trim();
@@ -145,7 +152,8 @@ const getWtbDataDir = (): string => {
 
   if (app.isPackaged) {
     const exeDir = path.dirname(app.getPath('exe'));
-    const portableBase = (process.env.PORTABLE_EXECUTABLE_DIR || '').trim() || exeDir;
+    const portableBase =
+      (process.env.PORTABLE_EXECUTABLE_DIR || '').trim() || exeDir;
     const portableDataDir = path.join(portableBase, 'wtb-data');
 
     if ((process.env.PORTABLE_EXECUTABLE_DIR || '').trim()) {
@@ -187,6 +195,65 @@ const getWtbDataDir = (): string => {
 
 const getMsgStoreDir = (): string => path.join(getWtbDataDir(), 'msgstore');
 
+const getP2pPort = (): number => {
+  const raw = (process.env.WTB_P2P_PORT || '').trim();
+  if (!raw) return 10848;
+  const parsed = Number.parseInt(raw, 10);
+  // Allow 0 = "auto" (pick an ephemeral free port at startup)
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 65535) {
+    throw new Error(`Invalid WTB_P2P_PORT: ${raw}`);
+  }
+  return parsed;
+};
+
+const isAddrInUseError = (err: unknown): boolean => {
+  const anyErr = err as any;
+  const code = typeof anyErr?.code === 'string' ? anyErr.code : '';
+  if (code === 'EADDRINUSE') return true;
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.toLowerCase().includes('eaddrinuse') ||
+    msg.toLowerCase().includes('address already in use');
+};
+
+const pickFreeTcpPortOnHost = (host: string): Promise<number> => {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.unref();
+    server.once('error', (e) => {
+      try {
+        server.close();
+      } catch {
+        // ignore
+      }
+      reject(e);
+    });
+
+    // Port 0 asks OS to allocate a free ephemeral port.
+    server.listen({ host, port: 0 }, () => {
+      const addr = server.address();
+      const port =
+        typeof addr === 'object' && addr != null ? (addr as net.AddressInfo).port : 0;
+      server.close(() => resolve(port));
+    });
+  });
+};
+
+const getBootstrapMultiaddrs = (): string[] => {
+  const raw =
+    (process.env.WTB_P2P_BOOTSTRAP_MULTIADDRS || '').trim() ||
+    (process.env.WTB_P2P_BOOTSTRAP || '').trim();
+  if (!raw) return [];
+
+  // Allow comma / whitespace / newline separated list
+  const parts = raw
+    .split(/[\s,]+/g)
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+  // De-dup
+  return Array.from(new Set(parts));
+};
+
 const ensureDir = (dirPath: string): void => {
   fs.mkdirSync(dirPath, { recursive: true });
 };
@@ -205,7 +272,9 @@ const writeJsonFile = (filePath: string, value: unknown): void => {
   const dir = path.dirname(filePath);
   ensureDir(dir);
   const tmp = `${filePath}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', { encoding: 'utf8' });
+  fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', {
+    encoding: 'utf8',
+  });
   fs.renameSync(tmp, filePath);
 };
 
@@ -237,10 +306,16 @@ const encodeWireSignPayload = (env: Omit<WireEnvelopeV1, 'sigB64'>): Buffer => {
   return Buffer.from(JSON.stringify(fields), 'utf8');
 };
 
-const aesGcmEncrypt = (key: Buffer, plaintext: string): { ivB64: string; ctB64: string; tagB64: string } => {
+const aesGcmEncrypt = (
+  key: Buffer,
+  plaintext: string,
+): { ivB64: string; ctB64: string; tagB64: string } => {
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-  const ct = Buffer.concat([cipher.update(Buffer.from(plaintext, 'utf8')), cipher.final()]);
+  const ct = Buffer.concat([
+    cipher.update(Buffer.from(plaintext, 'utf8')),
+    cipher.final(),
+  ]);
   const tag = cipher.getAuthTag();
   return {
     ivB64: iv.toString('base64'),
@@ -249,7 +324,12 @@ const aesGcmEncrypt = (key: Buffer, plaintext: string): { ivB64: string; ctB64: 
   };
 };
 
-const aesGcmDecrypt = (key: Buffer, ivB64: string, ctB64: string, tagB64: string): string => {
+const aesGcmDecrypt = (
+  key: Buffer,
+  ivB64: string,
+  ctB64: string,
+  tagB64: string,
+): string => {
   const iv = Buffer.from(ivB64, 'base64');
   const ct = Buffer.from(ctB64, 'base64');
   const tag = Buffer.from(tagB64, 'base64');
@@ -259,10 +339,30 @@ const aesGcmDecrypt = (key: Buffer, ivB64: string, ctB64: string, tagB64: string
   return pt.toString('utf8');
 };
 
-const importEd25519Private = (derB64: string) => crypto.createPrivateKey({ key: Buffer.from(derB64, 'base64'), format: 'der', type: 'pkcs8' });
-const importEd25519Public = (derB64: string) => crypto.createPublicKey({ key: Buffer.from(derB64, 'base64'), format: 'der', type: 'spki' });
-const importX25519Private = (derB64: string) => crypto.createPrivateKey({ key: Buffer.from(derB64, 'base64'), format: 'der', type: 'pkcs8' });
-const importX25519Public = (derB64: string) => crypto.createPublicKey({ key: Buffer.from(derB64, 'base64'), format: 'der', type: 'spki' });
+const importEd25519Private = (derB64: string) =>
+  crypto.createPrivateKey({
+    key: Buffer.from(derB64, 'base64'),
+    format: 'der',
+    type: 'pkcs8',
+  });
+const importEd25519Public = (derB64: string) =>
+  crypto.createPublicKey({
+    key: Buffer.from(derB64, 'base64'),
+    format: 'der',
+    type: 'spki',
+  });
+const importX25519Private = (derB64: string) =>
+  crypto.createPrivateKey({
+    key: Buffer.from(derB64, 'base64'),
+    format: 'der',
+    type: 'pkcs8',
+  });
+const importX25519Public = (derB64: string) =>
+  crypto.createPublicKey({
+    key: Buffer.from(derB64, 'base64'),
+    format: 'der',
+    type: 'spki',
+  });
 
 const ensureMaster = (): MsgStoreMaster => {
   ensureDir(getMsgStoreDir());
@@ -278,10 +378,18 @@ const ensureMaster = (): MsgStoreMaster => {
     schemaVersion: 1,
     client: {
       displayName: '我',
-      signPrivateKeyDerB64: signKp.privateKey.export({ format: 'der', type: 'pkcs8' }).toString('base64'),
-      signPublicKeyDerB64: signKp.publicKey.export({ format: 'der', type: 'spki' }).toString('base64'),
-      encPrivateKeyDerB64: encKp.privateKey.export({ format: 'der', type: 'pkcs8' }).toString('base64'),
-      encPublicKeyDerB64: encKp.publicKey.export({ format: 'der', type: 'spki' }).toString('base64'),
+      signPrivateKeyDerB64: signKp.privateKey
+        .export({ format: 'der', type: 'pkcs8' })
+        .toString('base64'),
+      signPublicKeyDerB64: signKp.publicKey
+        .export({ format: 'der', type: 'spki' })
+        .toString('base64'),
+      encPrivateKeyDerB64: encKp.privateKey
+        .export({ format: 'der', type: 'pkcs8' })
+        .toString('base64'),
+      encPublicKeyDerB64: encKp.publicKey
+        .export({ format: 'der', type: 'spki' })
+        .toString('base64'),
     },
     contacts: {},
     conversations: {},
@@ -295,13 +403,19 @@ const saveMaster = (master: MsgStoreMaster): void => {
   writeJsonFile(getMasterPath(), master);
 };
 
-const appendConversationMessage = (storageId: string, msg: ChatMessage): void => {
+const appendConversationMessage = (
+  storageId: string,
+  msg: ChatMessage,
+): void => {
   ensureDir(getMsgStoreDir());
   const fp = getConversationFilePath(storageId);
   fs.appendFileSync(fp, JSON.stringify(msg) + '\n', { encoding: 'utf8' });
 };
 
-const loadConversationMessages = (storageId: string, limit: number): ChatMessage[] => {
+const loadConversationMessages = (
+  storageId: string,
+  limit: number,
+): ChatMessage[] => {
   try {
     const fp = getConversationFilePath(storageId);
     if (!fs.existsSync(fp)) return [];
@@ -367,7 +481,10 @@ export class Libp2pGroupChatService {
       peerId: c.peerId,
     }));
 
-    items.sort((a, b) => (b.lastMessageAt ?? b.createdAt) - (a.lastMessageAt ?? a.createdAt));
+    items.sort(
+      (a, b) =>
+        (b.lastMessageAt ?? b.createdAt) - (a.lastMessageAt ?? a.createdAt),
+    );
     return items;
   }
 
@@ -398,8 +515,10 @@ export class Libp2pGroupChatService {
     this.master.contacts[peerId] = {
       peerId,
       displayName: input.displayName ?? existing?.displayName,
-      signPublicKeyDerB64: input.signPublicKeyDerB64 ?? existing?.signPublicKeyDerB64,
-      encPublicKeyDerB64: input.encPublicKeyDerB64 ?? existing?.encPublicKeyDerB64,
+      signPublicKeyDerB64:
+        input.signPublicKeyDerB64 ?? existing?.signPublicKeyDerB64,
+      encPublicKeyDerB64:
+        input.encPublicKeyDerB64 ?? existing?.encPublicKeyDerB64,
       addedAt: existing?.addedAt ?? now,
       lastSeenAt: existing?.lastSeenAt,
     };
@@ -430,7 +549,7 @@ export class Libp2pGroupChatService {
     // if running, subscribe immediately
     if (this.node) {
       try {
-        this.node.services.pubsub.subscribe(topic);
+        (this.node as Libp2p).services.pubsub.subscribe(topic);
         this.topics.add(topic);
       } catch (err) {
         log.warn('subscribe group topic failed', err);
@@ -466,7 +585,7 @@ export class Libp2pGroupChatService {
 
     if (this.node) {
       try {
-        this.node.services.pubsub.subscribe(topic);
+        (this.node as Libp2p).services.pubsub.subscribe(topic);
         this.topics.add(topic);
       } catch (err) {
         log.warn('subscribe join group topic failed', err);
@@ -510,7 +629,10 @@ export class Libp2pGroupChatService {
       this.master.conversations[convId] = {
         convId,
         type: 'dm',
-        title: input.title?.trim() || this.master.contacts[peerId]?.displayName || peerId,
+        title:
+          input.title?.trim() ||
+          this.master.contacts[peerId]?.displayName ||
+          peerId,
         topic,
         storageId,
         createdAt: now,
@@ -524,7 +646,7 @@ export class Libp2pGroupChatService {
 
     if (this.node) {
       try {
-        this.node.services.pubsub.subscribe(topic);
+        (this.node as Libp2p).services.pubsub.subscribe(topic);
         this.topics.add(topic);
       } catch (err) {
         log.warn('subscribe dm topic failed', err);
@@ -552,12 +674,27 @@ export class Libp2pGroupChatService {
     }
   }
 
-  private deriveDmKey(selfEncPrivDerB64: string, peerEncPubDerB64: string, salt: string): Buffer {
+  private deriveDmKey(
+    selfEncPrivDerB64: string,
+    peerEncPubDerB64: string,
+    salt: string,
+  ): Buffer {
     const priv = importX25519Private(selfEncPrivDerB64);
     const pub = importX25519Public(peerEncPubDerB64);
     const secret = crypto.diffieHellman({ privateKey: priv, publicKey: pub });
-    const key = crypto.hkdfSync('sha256', secret, Buffer.from(salt, 'utf8'), Buffer.from('wtb-dm', 'utf8'), 32);
+    const key = crypto.hkdfSync(
+      'sha256',
+      secret,
+      Buffer.from(salt, 'utf8'),
+      Buffer.from('wtb-dm', 'utf8'),
+      32,
+    );
     return Buffer.from(key);
+  }
+
+  private isNoPeersSubscribedToTopicError(err: unknown): boolean {
+    const msg = err instanceof Error ? err.message : String(err);
+    return msg.includes('PublishError.NoPeersSubscribedToTopic');
   }
 
   async sendMessage(convId: string, text: string): Promise<void> {
@@ -601,7 +738,11 @@ export class Libp2pGroupChatService {
       const peerSignPub = conv.peerSignPublicKeyDerB64;
       if (!peerEncPub || !peerSignPub) throw new Error('私聊缺少对端公钥');
 
-      const key = this.deriveDmKey(this.master.client.encPrivateKeyDerB64, peerEncPub, convId);
+      const key = this.deriveDmKey(
+        this.master.client.encPrivateKeyDerB64,
+        peerEncPub,
+        convId,
+      );
       const enc = aesGcmEncrypt(key, text ?? '');
 
       const withDm: Omit<WireEnvelopeV1, 'sigB64'> = {
@@ -619,9 +760,7 @@ export class Libp2pGroupChatService {
       };
     }
 
-    await node.services.pubsub.publish(topic, u8FromString(JSON.stringify(env)));
-
-    // persist locally as outgoing message
+    // Persist locally first so the UI doesn't fail hard on transient publish errors.
     const stored: ChatMessage = {
       convId,
       type: conv.type,
@@ -640,29 +779,129 @@ export class Libp2pGroupChatService {
     conv.unreadCount = conv.unreadCount ?? 0;
     saveMaster(this.master);
     this.onMessage?.(stored);
+
+    try {
+      await node.services.pubsub.publish(
+        topic,
+        u8FromString(JSON.stringify(env)),
+      );
+    } catch (err) {
+      if (this.isNoPeersSubscribedToTopicError(err)) {
+        // Common in small networks / first start: allow "offline send" without surfacing an error.
+        log.info('publish skipped: no peers subscribed to topic', {
+          topic,
+          convId,
+        });
+        return;
+      }
+
+      log.warn('pubsub publish failed', err);
+      throw err;
+    }
   }
 
   async start(): Promise<ChatStatus> {
     if (this.node) return this.status();
-
+    console.log('Starting libp2p group chat service...');
     this.master = ensureMaster();
-
-    const node = await createLibp2p({
+    const yggdrasilIPv6Address = await getYggdrasilIPv6AddressOrThrow();
+    const desiredPort = getP2pPort();
+    let p2pPort = desiredPort;
+    if (desiredPort === 0) {
+      p2pPort = await pickFreeTcpPortOnHost(yggdrasilIPv6Address);
+      log.info('WTB_P2P_PORT=0, picked free port %d for p2p', p2pPort);
+    }
+    // Listen only on the Yggdrasil interface to avoid exposing the chat service on unintended networks.
+    // Use all possible protocols to maximize connectivity, but only on Yggdrasil interface
+    const makeNode = async (listenPort: number) => {
+      const yggdrasilIPv6AddressMA = multiaddr(
+        `/ip6/${yggdrasilIPv6Address}/tcp/${listenPort}`,
+      );
+      console.log('Libp2p will listen on', yggdrasilIPv6AddressMA.toString());
+      const node = await createLibp2p({
+      // addresses: {
+      //   listen: ['/ip6/::/tcp/0'],
+      // },
+      // addresses: {
+      //   listen: [yggdrasilIPv6AddressMA.toString(),'/ip4/0.0.0.0/tcp/0'],
+      // },
       addresses: {
-        listen: ['/ip6/::/tcp/0'],
+        // Bind to a specific interface address (Yggdrasil) so we don't advertise loopback
+        // or other host-local/private addresses from unrelated interfaces.
+        listen: [yggdrasilIPv6AddressMA.toString()],
+        // Yggdrasil uses ULA (fd00::/8). Some libp2p address managers may treat these as
+        // "private" and omit them from advertised multiaddrs unless explicitly announced.
+        announce: [yggdrasilIPv6AddressMA.toString()],
       },
       transports: [tcp()],
+      
       connectionEncrypters: [noise()],
       streamMuxers: [yamux()],
       services: {
         identify: identify(),
         pubsub: gossipsub({
           emitSelf: false,
-          signMessages: true,
-          strictSigning: true,
+          globalSignaturePolicy: 'StrictSign',
         }),
       },
-    });
+      });
+      return node;
+    };
+
+    let node = await makeNode(p2pPort);
+
+    // libp2p does not start listening until `start()` is called.
+    try {
+      await node.start();
+    } catch (err) {
+      // If the preferred port is occupied, retry once with a free ephemeral port.
+      if (desiredPort !== 0 && isAddrInUseError(err)) {
+        log.warn('p2p port %d in use, retrying with a free port', p2pPort);
+        try {
+          await node.stop();
+        } catch {
+          // ignore
+        }
+        p2pPort = await pickFreeTcpPortOnHost(yggdrasilIPv6Address);
+        node = await makeNode(p2pPort);
+        await node.start();
+      } else {
+        log.error('libp2p node start failed', err);
+        try {
+          await node.stop();
+        } catch {
+          // ignore
+        }
+        throw err;
+      }
+    }
+
+    const startedListenAddrs = node.getMultiaddrs().map((ma) => ma.toString());
+    log.info(
+      'Libp2p node started with peerId %s, listening on %o',
+      node.peerId.toString(),
+      startedListenAddrs,
+    );
+    if (startedListenAddrs.length === 0) {
+      log.warn(
+        'Libp2p node started but has no listen multiaddrs (check transports/addresses.listen)',
+      );
+    }
+
+    // Best-effort: dial bootstrap peers so nodes can actually discover each other.
+    // Without at least one connection, gossipsub will have no mesh peers and publishes
+    // will commonly report "NoPeersSubscribedToTopic".
+    const bootstrap = getBootstrapMultiaddrs();
+    if (bootstrap.length > 0) {
+      log.info('Dialing %d bootstrap peer(s)...', bootstrap.length);
+      for (const addr of bootstrap) {
+        try {
+          await node.dial(multiaddr(addr));
+        } catch (err) {
+          log.warn('bootstrap dial failed: %s', addr, err);
+        }
+      }
+    }
 
     node.services.pubsub.addEventListener('message', (event: any) => {
       try {
@@ -715,7 +954,11 @@ export class Libp2pGroupChatService {
 
           const usePeerEncPub = conv.peerEncPublicKeyDerB64;
           if (!usePeerEncPub || !env.ivB64 || !env.ctB64 || !env.tagB64) return;
-          const key = this.deriveDmKey(this.master.client.encPrivateKeyDerB64, usePeerEncPub, env.convId);
+          const key = this.deriveDmKey(
+            this.master.client.encPrivateKeyDerB64,
+            usePeerEncPub,
+            env.convId,
+          );
           try {
             text = aesGcmDecrypt(key, env.ivB64, env.ctB64, env.tagB64);
           } catch {
@@ -730,8 +973,10 @@ export class Libp2pGroupChatService {
           this.master.contacts[env.fromPeerId] = {
             peerId: env.fromPeerId,
             displayName: env.fromDisplayName ?? c?.displayName,
-            signPublicKeyDerB64: env.fromSignPublicKeyDerB64 ?? c?.signPublicKeyDerB64,
-            encPublicKeyDerB64: env.fromEncPublicKeyDerB64 ?? c?.encPublicKeyDerB64,
+            signPublicKeyDerB64:
+              env.fromSignPublicKeyDerB64 ?? c?.signPublicKeyDerB64,
+            encPublicKeyDerB64:
+              env.fromEncPublicKeyDerB64 ?? c?.encPublicKeyDerB64,
             addedAt: c?.addedAt ?? now,
             lastSeenAt: now,
           };
@@ -764,6 +1009,7 @@ export class Libp2pGroupChatService {
     // Subscribe to known topics on startup
     for (const conv of Object.values(this.master.conversations)) {
       try {
+        console.log('Subscribing to topic on startup', conv.topic);
         node.services.pubsub.subscribe(conv.topic);
         this.topics.add(conv.topic);
       } catch {
@@ -772,12 +1018,7 @@ export class Libp2pGroupChatService {
     }
 
     this.node = node;
-    log.info('libp2p chat started', {
-      peerId: node.peerId.toString(),
-      listenAddrs: node.getMultiaddrs().map((ma) => ma.toString()),
-      msgStoreDir: getMsgStoreDir(),
-    });
-
+    log.info('MessageStore directory: %s', getMsgStoreDir());
     return this.status();
   }
 
@@ -813,7 +1054,12 @@ export class Libp2pGroupChatService {
         },
       };
     }
-
+    // console.log('Libp2p status requested', {
+    //   peerId: node.peerId.toString(),
+    //   listenAddrs: node.getMultiaddrs().map((ma) => ma.toString()),
+    //   peers: node.getPeers().map((p) => p.toString()),
+    //   topics: Array.from(this.topics),
+    // });
     return {
       running: true,
       peerId: node.peerId.toString(),
@@ -831,7 +1077,8 @@ export class Libp2pGroupChatService {
   async dial(multiaddrStr: string): Promise<ChatStatus> {
     const node = this.node;
     if (!node) throw new Error('libp2p 未启动');
-    if (!multiaddrStr || typeof multiaddrStr !== 'string') throw new Error('multiaddr 为空');
+    if (!multiaddrStr || typeof multiaddrStr !== 'string')
+      throw new Error('multiaddr 为空');
 
     const ma = multiaddr(multiaddrStr.trim());
     await node.dial(ma);
@@ -844,7 +1091,7 @@ export class Libp2pGroupChatService {
     const t = (topic ?? '').trim();
     if (!t) throw new Error('topic 为空');
 
-    node.services.pubsub.subscribe(t);
+    (node as Libp2p).services.pubsub.subscribe(t);
     this.topics.add(t);
     return this.status();
   }
@@ -856,6 +1103,14 @@ export class Libp2pGroupChatService {
     if (!t) throw new Error('topic 为空');
 
     const payload = u8FromString(message ?? '');
-    await node.services.pubsub.publish(t, payload);
+    try {
+      await node.services.pubsub.publish(t, payload);
+    } catch (err) {
+      if (this.isNoPeersSubscribedToTopicError(err)) {
+        log.info('publish skipped: no peers subscribed to topic', { topic: t });
+        return;
+      }
+      throw err;
+    }
   }
 }

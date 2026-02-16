@@ -6,6 +6,8 @@ import LauncherTileLink from './components/Launcher/LauncherTileLink';
 import LauncherTileExternalLink from './components/Launcher/LauncherTileExternalLink';
 import ServiceCard from './components/ServiceCard/ServiceCard';
 import ChatPage from './pages/ChatPage';
+import SettingsPage from './pages/SettingsPage';
+import YggWebsiteIndexPage from './pages/YggWebsiteIndexPage';
 
 const YGG_WEBSITE_INDEX_URL = 'http://[21e:a51c:885b:7db0:166e:927:98cd:d186]/';
 
@@ -203,14 +205,14 @@ function Home() {
 
         <LauncherTileExternalLink
           href={YGG_MINI_WIKI_URL}
-          label="Mini 维基"
+          label="Mini 维基百科"
           icon="📚"
           disabled={!yggRunning}
         />
         <LauncherTileLink
-          to="/irc"
-          label="聊天（libp2p）"
-          icon="💬"
+          to="/ygg"
+          label="其他网站索引"
+          icon="🧭"
           disabled={!yggRunning}
         />
 
@@ -464,12 +466,9 @@ export default function App() {
     <Router>
       <Routes>
         <Route path="/" element={<Home />} />
-        <Route path="/ygg" element={<PlaceholderPage title="Ygg 网站索引" />} />
+        <Route path="/ygg" element={<YggWebsiteIndexPage />} />
         <Route path="/irc" element={<ChatPage />} />
-        <Route
-          path="/settings"
-          element={<PlaceholderPage title="软件设置" />}
-        />
+        <Route path="/settings" element={<SettingsPage />} />
         <Route path="/status" element={<StatusPage />} />
       </Routes>
     </Router>

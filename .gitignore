@@ -37,3 +37,6 @@ wtb-data/yggdrasil/datasource/datastore/MANIFEST-000023
 wtb-data/
 build_tools/public_peers.json
 yggdrasil/windows10/amd64/public_peers.json
+build_tools/peers.json
+build_tools/index_sign_public.pem
+build_tools/index_sign_private.enc.pem

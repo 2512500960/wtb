@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "generatedAt": "2026-02-16T00:00:00.000Z",
+  "rows": [
+    {
+      "id": 1,
+      "url": "http://[xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx]/",
+      "desc": "服务说明（例如：论坛/搜索/文件/镜像站）",
+      "notice": "公告（可空）"
+    }
+  ]
+}
