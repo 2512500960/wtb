@@ -11,7 +11,7 @@ import { yamux } from '@chainsafe/libp2p-yamux';
 import { identify } from '@libp2p/identify';
 import { gossipsub } from '@chainsafe/libp2p-gossipsub';
 import { multiaddr } from '@multiformats/multiaddr';
-import { webSockets } from '@libp2p/websockets'
+import { webSockets } from '@libp2p/websockets';
 import {
   fromString as u8FromString,
   toString as u8ToString,
@@ -64,6 +64,7 @@ export type ChatStatus = {
   peerId?: string;
   listenAddrs: string[];
   peers: string[];
+  peerConnections?: { peerId: string; addrs: string[] }[];
   topics: string[];
   displayName?: string;
   identity?: {
@@ -211,8 +212,10 @@ const isAddrInUseError = (err: unknown): boolean => {
   const code = typeof anyErr?.code === 'string' ? anyErr.code : '';
   if (code === 'EADDRINUSE') return true;
   const msg = err instanceof Error ? err.message : String(err);
-  return msg.toLowerCase().includes('eaddrinuse') ||
-    msg.toLowerCase().includes('address already in use');
+  return (
+    msg.toLowerCase().includes('eaddrinuse') ||
+    msg.toLowerCase().includes('address already in use')
+  );
 };
 
 const pickFreeTcpPortOnHost = (host: string): Promise<number> => {
@@ -232,26 +235,21 @@ const pickFreeTcpPortOnHost = (host: string): Promise<number> => {
     server.listen({ host, port: 0 }, () => {
       const addr = server.address();
       const port =
-        typeof addr === 'object' && addr != null ? (addr as net.AddressInfo).port : 0;
+        typeof addr === 'object' && addr != null
+          ? (addr as net.AddressInfo).port
+          : 0;
       server.close(() => resolve(port));
     });
   });
 };
 
+// NOTE: 保留一个用于手动配置的 bootstrap 多地址列表，不再读取环境变量。
+// 你可以在这里硬编码若干 multiaddr，例如：
+// ['/ip6/<ygg-ip>/tcp/<port>/p2p/<peerId>', ...]
+const HARDCODED_BOOTSTRAP_MULTIADDRS: string[] = [];
+
 const getBootstrapMultiaddrs = (): string[] => {
-  const raw =
-    (process.env.WTB_P2P_BOOTSTRAP_MULTIADDRS || '').trim() ||
-    (process.env.WTB_P2P_BOOTSTRAP || '').trim();
-  if (!raw) return [];
-
-  // Allow comma / whitespace / newline separated list
-  const parts = raw
-    .split(/[\s,]+/g)
-    .map((x) => x.trim())
-    .filter(Boolean);
-
-  // De-dup
-  return Array.from(new Set(parts));
+  return [...HARDCODED_BOOTSTRAP_MULTIADDRS];
 };
 
 const ensureDir = (dirPath: string): void => {
@@ -817,33 +815,37 @@ export class Libp2pGroupChatService {
       const yggdrasilIPv6AddressMA = multiaddr(
         `/ip6/${yggdrasilIPv6Address}/tcp/${listenPort}`,
       );
-      console.log('Libp2p will listen on', yggdrasilIPv6AddressMA.toString());
+      // console.log('Libp2p will listen on', yggdrasilIPv6AddressMA.toString());
       const node = await createLibp2p({
-      // addresses: {
-      //   listen: ['/ip6/::/tcp/0'],
-      // },
-      // addresses: {
-      //   listen: [yggdrasilIPv6AddressMA.toString(),'/ip4/0.0.0.0/tcp/0'],
-      // },
-      addresses: {
-        // Bind to a specific interface address (Yggdrasil) so we don't advertise loopback
-        // or other host-local/private addresses from unrelated interfaces.
-        listen: [yggdrasilIPv6AddressMA.toString()],
-        // Yggdrasil uses ULA (fd00::/8). Some libp2p address managers may treat these as
-        // "private" and omit them from advertised multiaddrs unless explicitly announced.
-        announce: [yggdrasilIPv6AddressMA.toString()],
-      },
-      transports: [tcp()],
-      
-      connectionEncrypters: [noise()],
-      streamMuxers: [yamux()],
-      services: {
-        identify: identify(),
-        pubsub: gossipsub({
-          emitSelf: false,
-          globalSignaturePolicy: 'StrictSign',
-        }),
-      },
+        // addresses: {
+        //   listen: ['/ip6/::/tcp/0'],
+        // },
+        // addresses: {
+        //   listen: [yggdrasilIPv6AddressMA.toString(),'/ip4/0.0.0.0/tcp/0'],
+        // },
+        addresses: {
+          // Bind to a specific interface address (Yggdrasil) so we don't advertise loopback
+          // or other host-local/private addresses from unrelated interfaces.
+          listen: [
+            '/ip4/0.0.0.0/tcp/0',
+            // yggdrasilIPv6AddressMA.toString(),
+            '/ip6/::/tcp/0',
+          ],
+          // // Yggdrasil uses ULA (fd00::/8). Some libp2p address managers may treat these as
+          // // "private" and omit them from advertised multiaddrs unless explicitly announced.
+          // announce: [yggdrasilIPv6AddressMA.toString()],
+        },
+        transports: [tcp()],
+
+        connectionEncrypters: [noise()],
+        streamMuxers: [yamux()],
+        services: {
+          identify: identify(),
+          pubsub: gossipsub({
+            emitSelf: false,
+            globalSignaturePolicy: 'StrictSign',
+          }),
+        },
       });
       return node;
     };
@@ -1046,6 +1048,7 @@ export class Libp2pGroupChatService {
         running: false,
         listenAddrs: [],
         peers: [],
+        peerConnections: [],
         topics: Array.from(this.topics),
         displayName: id.displayName,
         identity: {
@@ -1060,11 +1063,45 @@ export class Libp2pGroupChatService {
     //   peers: node.getPeers().map((p) => p.toString()),
     //   topics: Array.from(this.topics),
     // });
+    const listenAddrs = node.getMultiaddrs().map((ma) => ma.toString());
+    const peers = node.getPeers().map((p) => p.toString());
+
+    // Build a map: peerId -> set of remote multiaddrs for all active connections
+    const peerConnMap = new Map<string, Set<string>>();
+    try {
+      const conns = (node as any).getConnections?.() ?? [];
+      for (const conn of conns) {
+        try {
+          const peerId = conn.remotePeer?.toString?.() ?? String(conn.remotePeer ?? '');
+          const addrStr = conn.remoteAddr?.toString?.() ?? '';
+          if (!peerId) continue;
+          if (!peerConnMap.has(peerId)) {
+            peerConnMap.set(peerId, new Set<string>());
+          }
+          if (addrStr) {
+            peerConnMap.get(peerId)!.add(addrStr);
+          }
+        } catch {
+          // ignore per-connection errors
+        }
+      }
+    } catch {
+      // best-effort only
+    }
+
+    const peerConnections = Array.from(peerConnMap.entries()).map(
+      ([peerId, addrSet]) => ({
+        peerId,
+        addrs: Array.from(addrSet),
+      }),
+    );
+
     return {
       running: true,
       peerId: node.peerId.toString(),
-      listenAddrs: node.getMultiaddrs().map((ma) => ma.toString()),
-      peers: node.getPeers().map((p) => p.toString()),
+      listenAddrs,
+      peers,
+      peerConnections,
       topics: Array.from(this.topics),
       displayName: id.displayName,
       identity: {

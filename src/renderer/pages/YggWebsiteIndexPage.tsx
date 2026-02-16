@@ -215,7 +215,9 @@ export default function YggWebsiteIndexPage() {
                 <th className="WebsiteIndexHeadCell">URL</th>
                 <th className="WebsiteIndexHeadCell">说明</th>
                 <th className="WebsiteIndexHeadCell">公告</th>
-                <th className="WebsiteIndexHeadCell WebsiteIndexActions">操作</th>
+                <th className="WebsiteIndexHeadCell WebsiteIndexActions">
+                  操作
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -224,12 +226,7 @@ export default function YggWebsiteIndexPage() {
                 const q = query.trim().toLowerCase();
                 if (
                   q &&
-                  ![
-                    n.id,
-                    n.url,
-                    n.desc,
-                    n.notice,
-                  ]
+                  ![n.id, n.url, n.desc, n.notice]
                     .join('\n')
                     .toLowerCase()
                     .includes(q)

@@ -9,6 +9,7 @@ export type InvokeChannels =
   | 'services:stop'
   | 'services:openDir'
   | 'yggdrasilctl:run'
+  | 'ygg:getIPv6'
   | 'ygg:index:load'
   | 'open-in-app'
   | 'open-external'

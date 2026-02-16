@@ -1,3 +1,3 @@
 export const FEATURES = {
-  chat: false,
+  chat: true,
 } as const;

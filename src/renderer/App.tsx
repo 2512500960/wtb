@@ -8,6 +8,7 @@ import ServiceCard from './components/ServiceCard/ServiceCard';
 import ChatPage from './pages/ChatPage';
 import SettingsPage from './pages/SettingsPage';
 import YggWebsiteIndexPage from './pages/YggWebsiteIndexPage';
+import { FEATURES } from './features/flags';
 
 const YGG_WEBSITE_INDEX_URL = 'http://[21e:a51c:885b:7db0:166e:927:98cd:d186]/';
 
@@ -44,6 +45,7 @@ function Home() {
     number | null
   >(null);
   const [p2pPeerCount, setP2pPeerCount] = React.useState<number | null>(null);
+  const [yggAddress, setYggAddress] = React.useState<string | null>(null);
 
   const openExternal = React.useCallback((url: string) => {
     try {
@@ -69,6 +71,25 @@ function Home() {
 
   const ygg = services.find((s) => s.name === 'yggdrasil');
   const yggRunning = ygg?.state === 'running';
+
+  React.useEffect(() => {
+    if (!yggRunning) {
+      setYggAddress(null);
+      return;
+    }
+
+    const cancelled = false;
+    (async () => {
+      try {
+        const addr = (await window.electron.ipcRenderer.invoke(
+          'ygg:getIPv6',
+        )) as string;
+        if (!cancelled) setYggAddress(addr);
+      } catch {
+        if (!cancelled) setYggAddress(null);
+      }
+    })();
+  }, [yggRunning]);
 
   const tryParseJson = React.useCallback((input: string) => {
     const trimmed = (input ?? '').trim();
@@ -192,6 +213,27 @@ function Home() {
             已连接 Peer：{connectedPeerCount ?? '—'}，P2P Peers：
             {p2pPeerCount ?? '—'}
           </div>
+          <div className="LauncherSubtitle">
+            Yggdrasil IPv6：
+            {yggAddress ?? '—'}
+            {yggAddress ? (
+              <button
+                type="button"
+                className="ServiceGhostButton"
+                style={{ marginLeft: 8 }}
+                onClick={() => {
+                  if (!yggAddress) return;
+                  try {
+                    navigator.clipboard.writeText(yggAddress);
+                  } catch {
+                    // ignore clipboard errors
+                  }
+                }}
+              >
+                复制
+              </button>
+            ) : null}
+          </div>
         </div>
       </div>
 
@@ -215,7 +257,12 @@ function Home() {
           icon="🧭"
           disabled={!yggRunning}
         />
-
+        <LauncherTileLink
+          to="/irc"
+          label="聊天"
+          icon="💬"
+          disabled={!yggRunning}
+        />
         <LauncherTileLink
           to="/settings"
           label="软件设置"
@@ -467,7 +514,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/ygg" element={<YggWebsiteIndexPage />} />
-        <Route path="/irc" element={<ChatPage />} />
+        {FEATURES.chat && <Route path="/irc" element={<ChatPage />} />}
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/status" element={<StatusPage />} />
       </Routes>

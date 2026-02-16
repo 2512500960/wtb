@@ -3,6 +3,7 @@ export type ChatStatus = {
   peerId?: string;
   listenAddrs: string[];
   peers: string[];
+  peerConnections?: { peerId: string; addrs: string[] }[];
   topics: string[];
   displayName?: string;
   identity?: {

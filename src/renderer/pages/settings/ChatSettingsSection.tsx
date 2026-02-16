@@ -107,6 +107,28 @@ export default function ChatSettingsSection() {
           </div>
 
           <div className="ChatTopItem ChatTopItemWide">
+            <div className="ChatTopLabel">已连接的 peers</div>
+            <pre className="ChatListenPre">
+              {(status?.peers ?? []).join('\n') || '—'}
+            </pre>
+          </div>
+
+          <div className="ChatTopItem ChatTopItemWide">
+            <div className="ChatTopLabel">连接详情（peer → multiaddrs）</div>
+            <pre className="ChatListenPre">
+              {(status?.peerConnections ?? [])
+                .map((pc) => {
+                  const addrs =
+                    pc.addrs && pc.addrs.length
+                      ? pc.addrs.map((a) => `  ${a}`).join('\n')
+                      : '  （无连接地址）';
+                  return `${pc.peerId}\n${addrs}`;
+                })
+                .join('\n\n') || '—'}
+            </pre>
+          </div>
+
+          <div className="ChatTopItem ChatTopItemWide">
             <div className="ChatTopLabel">昵称</div>
             <div className="ChatRow">
               <input

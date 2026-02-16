@@ -1136,20 +1136,45 @@ const parseYggdrasilIPv6FromGetself = (stdout: string): string | null => {
 };
 
 export async function getYggdrasilIPv6AddressOrThrow(): Promise<string> {
-  const result = await runYggdrasilCtl('getself', 3000);
-  if (!result.ok) {
-    const msg = (result.stderr || result.stdout || '').trim();
-    throw new Error(
-      `Failed to query Yggdrasil self address${msg ? `: ${msg}` : ''}`,
-    );
+  // 通过 yggdrasilctl getself 获取 IPv6 地址，并在启动初期进行多次重试，
+  // 确保“启动完成”的判断基于地址可用而不仅仅是进程存在。
+  const maxAttempts = 10;
+  const delayMs = 1000;
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      const result = await runYggdrasilCtl('getself', 3000);
+      if (!result.ok) {
+        const msg = (result.stderr || result.stdout || '').trim();
+        lastError = new Error(
+          `Failed to query Yggdrasil self address${msg ? `: ${msg}` : ''}`,
+        );
+      } else {
+        const addr = parseYggdrasilIPv6FromGetself(result.stdout);
+        if (addr) {
+          return addr;
+        }
+        lastError = new Error(
+          'Unable to parse Yggdrasil IPv6 address from yggdrasilctl getself output.',
+        );
+      }
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+    }
+
+    // 如果还没到最后一次尝试，则等待一段时间后重试
+    if (attempt < maxAttempts - 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
   }
-  const addr = parseYggdrasilIPv6FromGetself(result.stdout);
-  if (!addr) {
-    throw new Error(
-      'Unable to parse Yggdrasil IPv6 address from yggdrasilctl getself output.',
-    );
+
+  if (lastError) {
+    throw lastError;
   }
-  return addr;
+
+  throw new Error('Failed to obtain Yggdrasil IPv6 address.');
 };
 
 function getWebStatus(): ServiceStatus {
@@ -1822,6 +1847,16 @@ ipcMain.handle(
     }
   },
 );
+
+ipcMain.handle('ygg:getIPv6', async () => {
+  const ygg = getYggdrasilStatus();
+  if (ygg.state !== 'running') {
+    throw new Error('Yggdrasil 未运行，无法获取 IPv6 地址。');
+  }
+
+  const addr = await getYggdrasilIPv6AddressOrThrow();
+  return addr;
+});
 
 ipcMain.handle('ygg:index:load', async () => {
   const ygg = getYggdrasilStatus();
