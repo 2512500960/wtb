@@ -14,7 +14,7 @@ if (process.env.NODE_ENV === 'production') {
 
 const configuration: webpack.Configuration = {
   devtool: 'inline-source-map',
-
+  // devtool: 'source-map',
   mode: 'development',
 
   target: 'electron-preload',

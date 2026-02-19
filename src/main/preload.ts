@@ -11,6 +11,7 @@ export type InvokeChannels =
   | 'yggdrasilctl:run'
   | 'ygg:getIPv6'
   | 'ygg:index:load'
+  | 'cinny:open'
   | 'open-in-app'
   | 'open-external'
   | 'chat:status'
@@ -32,7 +33,20 @@ export type ChatInvokeChannels =
   | 'chat:conversation:startDm'
   | 'chat:message:send';
 
-export type AllInvokeChannels = InvokeChannels | ChatInvokeChannels;
+// Service announcements IPC
+export type AnnouncementInvokeChannels =
+  | 'announcements:status'
+  | 'announcements:start'
+  | 'announcements:stop'
+  | 'announcements:local:add'
+  | 'announcements:local:remove'
+  | 'announcements:local:list'
+  | 'announcements:discovered:list';
+
+export type AllInvokeChannels =
+  | InvokeChannels
+  | ChatInvokeChannels
+  | AnnouncementInvokeChannels;
 export type Channels = SendChannels;
 
 const electronHandler = {

@@ -1,0 +1,232 @@
+import fs from 'fs';
+import path from 'path';
+import log from 'electron-log';
+import { app } from 'electron';
+import crypto from 'crypto';
+import YAML from 'yaml';
+
+export type WtbConfigV1 = {
+  version: 1;
+  p2p: {
+    /** Optional: list of bootstrap peer multiaddrs to dial on startup */
+    bootstrapMultiaddrs: string[];
+
+    /** Optional discovery settings */
+    discovery?: {
+      /** Enable kad-dht (used for peer/content routing). Default: true */
+      enableDht?: boolean;
+      /** Bootstrap peer discovery tick interval (ms). Default: 60_000 */
+      bootstrapIntervalMs?: number;
+    };
+  };
+};
+
+const CONFIG_FILE_NAME = 'wtb.conf';
+
+let cachedConfig: WtbConfigV1 | null = null;
+
+const ensureDir = (dirPath: string): void => {
+  fs.mkdirSync(dirPath, { recursive: true });
+};
+
+const sha256Hex = (input: string): string => {
+  return crypto.createHash('sha256').update(input).digest('hex');
+};
+
+const safeNowTag = (): string => {
+  const iso = new Date().toISOString();
+  return iso.replace(/[:.]/g, '-');
+};
+
+export const getWtbDataDir = (): string => {
+  const override = process.env.WTB_DATA_DIR;
+  if (override && override.trim()) return override;
+
+  if (app.isPackaged) {
+    const exeDir = path.dirname(app.getPath('exe'));
+    const portableBase =
+      (process.env.PORTABLE_EXECUTABLE_DIR || '').trim() || exeDir;
+    const portableDataDir = path.join(portableBase, 'wtb-data');
+
+    if ((process.env.PORTABLE_EXECUTABLE_DIR || '').trim()) {
+      return portableDataDir;
+    }
+
+    try {
+      if (fs.existsSync(portableDataDir)) {
+        return portableDataDir;
+      }
+    } catch {
+      // ignore
+    }
+
+    const programFiles = (process.env.ProgramFiles || '').trim();
+    const programFilesX86 = (process.env['ProgramFiles(x86)'] || '').trim();
+    const isUnderDir = (childPath: string, parentPath: string): boolean => {
+      const child = path.resolve(childPath).toLowerCase();
+      const parent = path.resolve(parentPath).toLowerCase();
+      return child === parent || child.startsWith(parent + path.sep);
+    };
+    const looksInstalled =
+      (programFiles && isUnderDir(exeDir, programFiles)) ||
+      (programFilesX86 && isUnderDir(exeDir, programFilesX86));
+
+    if (!looksInstalled) {
+      try {
+        fs.accessSync(exeDir, fs.constants.W_OK);
+        return portableDataDir;
+      } catch {
+        // not writable
+      }
+    }
+
+    try {
+      const roaming = app.getPath('appData');
+      if (roaming && roaming.trim()) {
+        return path.join(roaming, 'wtb');
+      }
+    } catch {
+      // ignore
+    }
+
+    return portableDataDir;
+  }
+
+  return path.join(__dirname, '../../', 'wtb-data');
+};
+
+export const getWtbConfigPath = (): string => {
+  return path.join(getWtbDataDir(), CONFIG_FILE_NAME);
+};
+
+const defaultConfigV1 = (): WtbConfigV1 => {
+  return {
+    version: 1,
+    p2p: {
+      bootstrapMultiaddrs: [],
+      discovery: {
+        enableDht: true,
+        bootstrapIntervalMs: 60_000,
+      },
+    },
+  };
+};
+
+const normalizeConfigV1 = (raw: unknown): WtbConfigV1 => {
+  const def = defaultConfigV1();
+  const obj = (raw && typeof raw === 'object' ? (raw as any) : {}) as any;
+
+  const version = obj.version === 1 ? 1 : 1;
+
+  const bootstrapRaw = obj?.p2p?.bootstrapMultiaddrs;
+  const bootstrapMultiaddrs = Array.isArray(bootstrapRaw)
+    ? bootstrapRaw
+        .map((v) => (typeof v === 'string' ? v.trim() : ''))
+        .filter((v) => !!v)
+    : def.p2p.bootstrapMultiaddrs;
+
+  const discoveryObj =
+    obj?.p2p?.discovery && typeof obj.p2p.discovery === 'object'
+      ? obj.p2p.discovery
+      : {};
+
+  const enableDhtRaw = (discoveryObj as any).enableDht;
+  const enableDht =
+    typeof enableDhtRaw === 'boolean' ? enableDhtRaw : def.p2p.discovery?.enableDht;
+
+  const intervalRaw = (discoveryObj as any).bootstrapIntervalMs;
+  const intervalNum =
+    typeof intervalRaw === 'number' ? intervalRaw : Number(intervalRaw);
+  const bootstrapIntervalMs =
+    Number.isFinite(intervalNum) && intervalNum >= 5_000
+      ? Math.floor(intervalNum)
+      : def.p2p.discovery?.bootstrapIntervalMs;
+
+  return {
+    version,
+    p2p: {
+      bootstrapMultiaddrs,
+      discovery: {
+        enableDht,
+        bootstrapIntervalMs,
+      },
+    },
+  };
+};
+
+const renderYamlWithHeader = (cfg: WtbConfigV1): string => {
+  const header =
+    '# WorldTreeBrowser 配置文件\n'
+    + '# 位置：wtb-data/wtb.conf（可直接编辑）\n'
+    + '#\n'
+    + '# 说明：\n'
+    + '# - p2p.bootstrapMultiaddrs：启动时尝试 dial 的 bootstrap peer 列表（multiaddr）\n'
+    + '#   示例：/ip6/<ygg-ip>/tcp/<port>/p2p/<peerId>\n'
+    + '# - p2p.discovery.enableDht：是否启用 kad-dht（用于更自动的发现/路由）\n'
+    + '# - p2p.discovery.bootstrapIntervalMs：bootstrap 发现轮询间隔（毫秒）\n'
+    + '#\n';
+
+  const yamlBody = YAML.stringify(cfg);
+  // Ensure a trailing newline for nicer diffs.
+  return `${header}${yamlBody.trimEnd()}\n`;
+};
+
+const writeConfigAtomic = (filePath: string, text: string): void => {
+  const dir = path.dirname(filePath);
+  ensureDir(dir);
+  const tmp = `${filePath}.tmp`;
+  fs.writeFileSync(tmp, text, { encoding: 'utf8' });
+  fs.renameSync(tmp, filePath);
+};
+
+export const loadOrCreateWtbConfig = (): WtbConfigV1 => {
+  if (cachedConfig) return cachedConfig;
+
+  const cfgPath = getWtbConfigPath();
+  try {
+    if (!fs.existsSync(cfgPath)) {
+      const def = defaultConfigV1();
+      writeConfigAtomic(cfgPath, renderYamlWithHeader(def));
+      cachedConfig = def;
+      log.info('Created default config: %s', cfgPath);
+      return def;
+    }
+
+    const rawText = fs.readFileSync(cfgPath, 'utf8');
+    const parsed = YAML.parse(rawText);
+    const cfg = normalizeConfigV1(parsed);
+    cachedConfig = cfg;
+    return cfg;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn('Failed to load config, regenerating defaults: %s', msg);
+
+    try {
+      if (fs.existsSync(cfgPath)) {
+        const backupPath = `${cfgPath}.broken-${safeNowTag()}-${sha256Hex(msg).slice(0, 8)}`;
+        fs.copyFileSync(cfgPath, backupPath);
+        log.warn('Backed up broken config to: %s', backupPath);
+      }
+    } catch {
+      // ignore
+    }
+
+    const def = defaultConfigV1();
+    try {
+      writeConfigAtomic(cfgPath, renderYamlWithHeader(def));
+    } catch {
+      // ignore
+    }
+    cachedConfig = def;
+    return def;
+  }
+};
+
+export const getWtbConfig = (): WtbConfigV1 => {
+  return loadOrCreateWtbConfig();
+};
+
+export const reloadWtbConfig = (): WtbConfigV1 => {
+  cachedConfig = null;
+  return loadOrCreateWtbConfig();
+};

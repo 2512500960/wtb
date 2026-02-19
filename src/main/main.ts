@@ -41,6 +41,12 @@ import {
   type ChatMessage,
   type ChatStatus,
 } from './libp2p_group_chat';
+import { ServiceAnnouncementsManager } from './service_announcements';
+import type {
+  ServiceAnnouncementStatus,
+  LocalServiceConfig,
+  AnnouncementSystemStatus,
+} from '../types/announcements';
 
 class AppUpdater {
   constructor() {
@@ -76,6 +82,10 @@ let webListenAddress: string | null = null;
 let webListenPort: number | null = null;
 const webOpenSockets = new Set<Socket>();
 
+let cinnyServer: http.Server | null = null;
+let cinnyListenPort: number | null = null;
+const cinnyOpenSockets = new Set<Socket>();
+
 const YGG_WEBSITE_INDEX_DATA_URL =
   'http://[202:8467:9fa8:c35a:ef47:861d:fdbd:4f1b]:8137/index.json';
 
@@ -92,7 +102,11 @@ type SignedWebsiteIndexEnvelope = {
 const httpGetText = async (
   url: string,
   timeoutMs: number,
-): Promise<{ statusCode: number; headers: http.IncomingHttpHeaders; body: string }> => {
+): Promise<{
+  statusCode: number;
+  headers: http.IncomingHttpHeaders;
+  body: string;
+}> => {
   const parsed = new URL(url);
   const transport = parsed.protocol === 'https:' ? https : http;
 
@@ -130,7 +144,138 @@ const httpGetText = async (
   });
 };
 
-const parseSignedWebsiteIndex = (raw: string): {
+const contentTypeFromPath = (filePath: string): string => {
+  const ext = path.extname(filePath).toLowerCase();
+  switch (ext) {
+    case '.html':
+      return 'text/html; charset=utf-8';
+    case '.js':
+      return 'text/javascript; charset=utf-8';
+    case '.css':
+      return 'text/css; charset=utf-8';
+    case '.json':
+      return 'application/json; charset=utf-8';
+    case '.svg':
+      return 'image/svg+xml';
+    case '.png':
+      return 'image/png';
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg';
+    case '.webp':
+      return 'image/webp';
+    case '.ico':
+      return 'image/x-icon';
+    case '.woff2':
+      return 'font/woff2';
+    case '.woff':
+      return 'font/woff';
+    case '.ttf':
+      return 'font/ttf';
+    case '.map':
+      return 'application/json; charset=utf-8';
+    case '.txt':
+      return 'text/plain; charset=utf-8';
+    default:
+      return 'application/octet-stream';
+  }
+};
+
+const startCinnyStaticServer = async (rootDir: string): Promise<number> => {
+  if (cinnyServer && cinnyListenPort) return cinnyListenPort;
+
+  const server = http.createServer(async (req, res) => {
+    try {
+      const method = (req.method || 'GET').toUpperCase();
+      if (method !== 'GET' && method !== 'HEAD') {
+        res.statusCode = 405;
+        res.end('Method Not Allowed');
+        return;
+      }
+
+      const requestUrl = req.url || '/';
+      const parsed = new URL(requestUrl, 'http://127.0.0.1');
+      let pathname = parsed.pathname || '/';
+
+      // Normalize and prevent directory traversal.
+      pathname = pathname.replace(/\\/g, '/');
+      if (!pathname.startsWith('/')) pathname = `/${pathname}`;
+
+      // Map URL path to a file under rootDir.
+      // Important: map '/' to 'index.html' BEFORE doing traversal checks.
+      let rel = decodeURIComponent(pathname).replace(/^\/+/, '');
+      if (!rel || pathname.endsWith('/')) {
+        rel = 'index.html';
+      }
+      const safeRel = path.normalize(rel).replace(/^([A-Za-z]:)?[\\/]+/, '');
+
+      const rootResolved = path.resolve(rootDir);
+      const fileResolved = path.resolve(rootResolved, safeRel);
+
+      const rootPrefix = rootResolved + path.sep;
+      const inRoot = isWindows
+        ? fileResolved.toLowerCase().startsWith(rootPrefix.toLowerCase())
+        : fileResolved.startsWith(rootPrefix);
+      if (!inRoot) {
+        res.statusCode = 403;
+        res.end('Forbidden');
+        return;
+      }
+
+      const filePath = fileResolved;
+
+      if (!(await pathExists(filePath))) {
+        res.statusCode = 404;
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.end('Not Found');
+        return;
+      }
+
+      const ct = contentTypeFromPath(filePath);
+      res.setHeader('Content-Type', ct);
+      // Avoid Electron caching stale assets during dev.
+      res.setHeader('Cache-Control', 'no-store');
+
+      if (method === 'HEAD') {
+        res.statusCode = 200;
+        res.end();
+        return;
+      }
+
+      const buf = await fs.promises.readFile(filePath);
+      res.statusCode = 200;
+      res.end(buf);
+    } catch (e) {
+      res.statusCode = 500;
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.end(e instanceof Error ? e.message : 'Internal Server Error');
+    }
+  });
+
+  server.on('connection', (socket: Socket) => {
+    cinnyOpenSockets.add(socket);
+    socket.on('close', () => cinnyOpenSockets.delete(socket));
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => resolve());
+  });
+
+  const addr = server.address();
+  if (!addr || typeof addr === 'string') {
+    server.close();
+    throw new Error('Cinny 静态服务启动失败');
+  }
+
+  cinnyServer = server;
+  cinnyListenPort = addr.port;
+  return addr.port;
+};
+
+const parseSignedWebsiteIndex = (
+  raw: string,
+): {
   payloadText: string;
   sigB64: string;
   alg: 'ed25519';
@@ -148,7 +293,8 @@ const parseSignedWebsiteIndex = (raw: string): {
     (typeof env.signatureB64 === 'string' && env.signatureB64) ||
     (typeof env.signature === 'string' && env.signature) ||
     '';
-  if (!sig) throw new Error('索引数据缺少签名字段（sigB64/signatureB64/signature）');
+  if (!sig)
+    throw new Error('索引数据缺少签名字段（sigB64/signatureB64/signature）');
 
   const algRaw = typeof env.alg === 'string' ? env.alg.toLowerCase() : '';
   const alg: 'ed25519' =
@@ -161,7 +307,9 @@ const parseSignedWebsiteIndex = (raw: string): {
     (typeof env.payload === 'string' && env.payload) ||
     '';
   if (!rawPayload) {
-    throw new Error('索引数据缺少 payload（必须是 JSON 字符串或其 base64 编码）');
+    throw new Error(
+      '索引数据缺少 payload（必须是 JSON 字符串或其 base64 编码）',
+    );
   }
 
   let payloadText: string | null = null;
@@ -228,6 +376,218 @@ const groupChat = new Libp2pGroupChatService((msg: ChatMessage) => {
     // ignore
   }
 });
+
+// 服务公告管理器
+const announcementsManager = new ServiceAnnouncementsManager();
+
+let announcementsAutoStartAttempted = false;
+
+const ensureDirAsync = async (dirPath: string): Promise<void> => {
+  await fs.promises.mkdir(dirPath, { recursive: true });
+};
+
+const pathExists = async (p: string): Promise<boolean> => {
+  try {
+    await fs.promises.access(p, fs.constants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const copyDirIfMissing = async (srcDir: string, dstDir: string) => {
+  if (await pathExists(dstDir)) return;
+  await ensureDirAsync(path.dirname(dstDir));
+  // Node 16+ supports fs.cp
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const cp = (fs.promises as any).cp as
+    | ((src: string, dest: string, opts: unknown) => Promise<void>)
+    | undefined;
+  if (typeof cp === 'function') {
+    await cp(srcDir, dstDir, { recursive: true });
+    return;
+  }
+
+  // Fallback for very old Node builds (unlikely)
+  const entries = await fs.promises.readdir(srcDir, { withFileTypes: true });
+  await ensureDirAsync(dstDir);
+  await Promise.all(
+    entries.map(async (ent) => {
+      const src = path.join(srcDir, ent.name);
+      const dst = path.join(dstDir, ent.name);
+      if (ent.isDirectory()) {
+        await copyDirIfMissing(src, dst);
+      } else {
+        await fs.promises.copyFile(src, dst);
+      }
+    }),
+  );
+};
+
+const getBundledCinnyDir = (): string => {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'assets', 'cinny')
+    : path.join(__dirname, '../../assets', 'cinny');
+};
+
+const getUserCinnyDir = (): string => {
+  return path.join(app.getPath('userData'), 'cinny');
+};
+
+const ensureCinnyConfig = async (cinnyDir: string): Promise<void> => {
+  try {
+    const configPath = path.join(cinnyDir, 'config.json');
+    if (!(await pathExists(configPath))) return;
+
+    const raw = await fs.promises.readFile(configPath, { encoding: 'utf8' });
+    const data = JSON.parse(raw) as any;
+    if (!data || typeof data !== 'object') return;
+
+    if (!data.hashRouter || typeof data.hashRouter !== 'object') {
+      data.hashRouter = { enabled: true, basename: '/' };
+    } else {
+      data.hashRouter.enabled = true;
+      if (typeof data.hashRouter.basename !== 'string') {
+        data.hashRouter.basename = '/';
+      }
+    }
+
+    await fs.promises.writeFile(configPath, `${JSON.stringify(data, null, 2)}\n`, {
+      encoding: 'utf8',
+    });
+  } catch {
+    // ignore best-effort config patching
+  }
+};
+
+const createInAppWindow = (): BrowserWindow => {
+  const child = new BrowserWindow({
+    width: 1000,
+    height: 700,
+    show: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
+  });
+
+  child.webContents.on('context-menu', (_event, params) => {
+    try {
+      const hasSelection = (params.selectionText || '').trim().length > 0;
+      const isEditable = !!params.isEditable;
+
+      const template = isEditable
+        ? [
+            { role: 'cut' as const, enabled: hasSelection },
+            { role: 'copy' as const, enabled: hasSelection },
+            { role: 'paste' as const },
+            { type: 'separator' as const },
+            { role: 'selectAll' as const },
+          ]
+        : [
+            { role: 'copy' as const, enabled: hasSelection },
+            { role: 'selectAll' as const },
+          ];
+
+      Menu.buildFromTemplate(template).popup({ window: child });
+    } catch {
+      // ignore
+    }
+  });
+
+  child.once('ready-to-show', () => child.show());
+
+  // Prevent navigating to non-http(s)/file schemes inside the in-app window.
+  child.webContents.on('will-navigate', (e, navUrl) => {
+    try {
+      const parsed = new URL(navUrl);
+      if (
+        parsed.protocol !== 'http:' &&
+        parsed.protocol !== 'https:' &&
+        parsed.protocol !== 'file:'
+      ) {
+        e.preventDefault();
+      }
+    } catch {
+      e.preventDefault();
+    }
+  });
+
+  // Keep all popups inside Electron.
+  child.webContents.setWindowOpenHandler((details) => {
+    try {
+      const parsed = new URL(details.url);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        return { action: 'deny' };
+      }
+
+      const popup = createInAppWindow();
+      popup.loadURL(parsed.toString()).catch(() => {
+        // ignore
+      });
+      return { action: 'deny' };
+    } catch {
+      return { action: 'deny' };
+    }
+  });
+
+  return child;
+};
+
+const scheduleAutoStartAnnouncementsIfNeeded = (reason: string): void => {
+  if (announcementsAutoStartAttempted) return;
+  const ygg = getYggdrasilStatus();
+  if (ygg.state !== 'running') return;
+  announcementsAutoStartAttempted = true;
+  setTimeout(() => {
+    tryAutoStartAnnouncements(reason).catch(() => {
+      // ignore
+    });
+  }, 0);
+};
+
+const startAnnouncementsOrThrow = async (): Promise<void> => {
+  const ygg = getYggdrasilStatus();
+  if (ygg.state !== 'running') {
+    throw new Error(
+      'Yggdrasil 未运行，无法启动服务公告。请先在首页启动 Yggdrasil。',
+    );
+  }
+
+  // 确保 libp2p group chat 已启动（公告复用同一个 libp2p 节点与身份）
+  let chatStatus: ChatStatus;
+  if (!groupChat.isRunning()) {
+    chatStatus = await groupChat.start();
+  } else {
+    chatStatus = groupChat.status();
+  }
+
+  // 设置身份密钥到公告管理器
+  if (chatStatus.identity) {
+    announcementsManager.setIdentityKeys(
+      (groupChat as any).master.client.signPrivateKeyDerB64,
+      chatStatus.identity.signPublicKeyDerB64,
+    );
+  }
+
+  const libp2pNode = (groupChat as any).node;
+  if (!libp2pNode) {
+    throw new Error('libp2p 节点未初始化');
+  }
+
+  await announcementsManager.start(libp2pNode);
+};
+
+const tryAutoStartAnnouncements = async (reason: string): Promise<void> => {
+  try {
+    const st = await announcementsManager.getStatus();
+    if (st.running) return;
+    await startAnnouncementsOrThrow();
+    log.info(`Auto-started service announcements: ${reason}`);
+  } catch (err) {
+    log.debug(`Auto-start announcements skipped/failed: ${reason}`, err);
+  }
+};
 
 const requireChatRunning = (): void => {
   if (!groupChat.isRunning()) {
@@ -477,7 +837,7 @@ const updateYggdrasilConfPeers = (
       })
     : Hjson.stringify(doc, { quotes: 'all', separator: true, space: 2 });
 
-  fs.writeFileSync(confPath, stripUtf8Bom(out) + '\n', { encoding: 'utf8' });
+  fs.writeFileSync(confPath, `${stripUtf8Bom(out)}\n`, { encoding: 'utf8' });
 };
 
 const generateYggdrasilConfIfMissing = (
@@ -543,7 +903,7 @@ const updateYggdrasilConfP2PDataDir = (
       })
     : Hjson.stringify(doc, { quotes: 'all', separator: true, space: 2 });
 
-  fs.writeFileSync(confPath, stripUtf8Bom(out) + '\n', { encoding: 'utf8' });
+  fs.writeFileSync(confPath, `${stripUtf8Bom(out)}\n`, { encoding: 'utf8' });
 };
 
 const buildYggdrasilStartupHint = (baseDir: string): string | null => {
@@ -1108,7 +1468,7 @@ const parseYggdrasilIPv6FromGetself = (stdout: string): string | null => {
     const parsed = JSON.parse(text);
     if (parsed && typeof parsed === 'object') {
       // Prefer explicit `address` field if present
-      const address = (parsed as any).address;
+      const { address } = parsed as any;
       if (typeof address === 'string' && address.includes(':')) {
         return address.trim();
       }
@@ -1120,7 +1480,7 @@ const parseYggdrasilIPv6FromGetself = (stdout: string): string | null => {
       }
 
       // Fall back to subnet (take the part before a slash if present)
-      const subnet = (parsed as any).subnet;
+      const { subnet } = parsed as any;
       if (typeof subnet === 'string') {
         const maybe = subnet.split('/')[0].trim();
         if (maybe.includes(':')) return maybe;
@@ -1175,7 +1535,7 @@ export async function getYggdrasilIPv6AddressOrThrow(): Promise<string> {
   }
 
   throw new Error('Failed to obtain Yggdrasil IPv6 address.');
-};
+}
 
 function getWebStatus(): ServiceStatus {
   if (webServer && webServer.listening && webListenAddress && webListenPort) {
@@ -1591,13 +1951,23 @@ const stopWebService = async (): Promise<ServiceStatus> => {
 };
 
 ipcMain.handle('services:getAll', async () => {
-  return getAllServiceStatuses();
+  const all = getAllServiceStatuses();
+  // If yggdrasil is already running (e.g. started before app launch), auto-start announcements.
+  scheduleAutoStartAnnouncementsIfNeeded('yggdrasil already running (services:getAll)');
+  return all;
 });
 
 ipcMain.handle('services:start', async (_event, serviceName: ServiceName) => {
   try {
     if (serviceName === 'yggdrasil') {
-      return await startYggdrasil();
+      const res = await startYggdrasil();
+      // Auto-start announcements when Yggdrasil becomes available.
+      setTimeout(() => {
+        tryAutoStartAnnouncements('yggdrasil started').catch(() => {
+          // ignore
+        });
+      }, 0);
+      return res;
     }
 
     if (serviceName === 'web') {
@@ -1624,7 +1994,13 @@ ipcMain.handle('services:start', async (_event, serviceName: ServiceName) => {
 ipcMain.handle('services:stop', async (_event, serviceName: ServiceName) => {
   try {
     if (serviceName === 'yggdrasil') {
-      return await stopYggdrasil();
+      const res = await stopYggdrasil();
+      // Best-effort: stop announcements when Yggdrasil is stopped.
+      announcementsManager.stop().catch(() => {
+        // ignore
+      });
+      announcementsAutoStartAttempted = false;
+      return res;
     }
 
     if (serviceName === 'web') {
@@ -1848,6 +2224,59 @@ ipcMain.handle(
   },
 );
 
+// ========================================
+// 服务公告 IPC 处理器
+// ========================================
+
+ipcMain.handle('announcements:status', async () => {
+  const st = (await announcementsManager.getStatus()) satisfies AnnouncementSystemStatus;
+  // Best-effort auto-start: if Yggdrasil is up, announcements should come up without a manual button.
+  const ygg = getYggdrasilStatus();
+  if (!st.running && ygg.state === 'running') {
+    await tryAutoStartAnnouncements('announcements:status requested');
+    return (await announcementsManager.getStatus()) satisfies AnnouncementSystemStatus;
+  }
+  return st;
+});
+
+ipcMain.handle('announcements:start', async () => {
+  await startAnnouncementsOrThrow();
+  return (await announcementsManager.getStatus()) satisfies AnnouncementSystemStatus;
+});
+
+ipcMain.handle('announcements:stop', async () => {
+  await announcementsManager.stop();
+  return (await announcementsManager.getStatus()) satisfies AnnouncementSystemStatus;
+});
+
+ipcMain.handle(
+  'announcements:local:add',
+  async (_event, input: { url: string; desc: string }) => {
+    const st = await announcementsManager.getStatus();
+    if (!st.running) {
+      // Make publishing work without requiring the user to click a separate "start" button.
+      await startAnnouncementsOrThrow();
+    }
+    return (await announcementsManager.addLocalService(
+      input.url,
+      input.desc,
+    )) satisfies LocalServiceConfig;
+  },
+);
+
+ipcMain.handle('announcements:local:remove', async (_event, id: string) => {
+  await announcementsManager.removeLocalService(id);
+  return { ok: true };
+});
+
+ipcMain.handle('announcements:local:list', async () => {
+  return (await announcementsManager.listLocalServices()) satisfies LocalServiceConfig[];
+});
+
+ipcMain.handle('announcements:discovered:list', async () => {
+  return (await announcementsManager.listDiscoveredServices()) satisfies ServiceAnnouncementStatus[];
+});
+
 ipcMain.handle('ygg:getIPv6', async () => {
   const ygg = getYggdrasilStatus();
   if (ygg.state !== 'running') {
@@ -1861,7 +2290,9 @@ ipcMain.handle('ygg:getIPv6', async () => {
 ipcMain.handle('ygg:index:load', async () => {
   const ygg = getYggdrasilStatus();
   if (ygg.state !== 'running') {
-    throw new Error('Yggdrasil 未运行，无法加载网站索引。请先在首页启动 Yggdrasil。');
+    throw new Error(
+      'Yggdrasil 未运行，无法加载网站索引。请先在首页启动 Yggdrasil。',
+    );
   }
 
   let parsed: URL;
@@ -1921,50 +2352,55 @@ ipcMain.handle('open-in-app', async (_event, url: string) => {
       return;
     }
 
-    const child = new BrowserWindow({
-      width: 1000,
-      height: 700,
-      show: false,
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true,
-      },
-    });
-
-    child.webContents.on('context-menu', (_event, params) => {
-      try {
-        const hasSelection = (params.selectionText || '').trim().length > 0;
-        const isEditable = !!params.isEditable;
-
-        const template = isEditable
-          ? [
-              { role: 'cut' as const, enabled: hasSelection },
-              { role: 'copy' as const, enabled: hasSelection },
-              { role: 'paste' as const },
-              { type: 'separator' as const },
-              { role: 'selectAll' as const },
-            ]
-          : [
-              { role: 'copy' as const, enabled: hasSelection },
-              { role: 'selectAll' as const },
-            ];
-
-        Menu.buildFromTemplate(template).popup({ window: child });
-      } catch {
-        // ignore
-      }
-    });
-
-    child.once('ready-to-show', () => child.show());
-
-    child.webContents.setWindowOpenHandler((details) => {
-      shell.openExternal(details.url);
-      return { action: 'deny' };
-    });
-
+    const child = createInAppWindow();
     await child.loadURL(url);
   } catch (err) {
     log.warn('open-in-app failed', err);
+  }
+});
+
+// Open embedded Cinny (offline static files bundled with the app)
+ipcMain.handle('cinny:open', async () => {
+  try {
+    const bundledDir = getBundledCinnyDir();
+    const userDir = getUserCinnyDir();
+    const bundledIndex = path.join(bundledDir, 'index.html');
+    const userIndex = path.join(userDir, 'index.html');
+
+    if (!(await pathExists(bundledIndex))) {
+      await dialog.showMessageBox({
+        type: 'warning',
+        title: 'Cinny 未集成',
+        message: '未找到内置 Cinny 静态文件（assets/cinny/index.html）。',
+        detail:
+          '请在源码目录执行：\n\n  npm run cinny:fetch\n\n或将 Cinny release 的 dist/ 内容拷贝到 assets/cinny/ 后重新打包。',
+      });
+      return;
+    }
+
+    // Copy bundled Cinny into userData so we can overwrite config.json later.
+    await copyDirIfMissing(bundledDir, userDir);
+
+    // If user copy exists but is incomplete, refresh it.
+    if (!(await pathExists(userIndex))) {
+      try {
+        await fs.promises.rm(userDir, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+      await copyDirIfMissing(bundledDir, userDir);
+    }
+
+    // Make sure hash routing is enabled for file:// loading.
+    await ensureCinnyConfig(userDir);
+
+    // Serve via localhost so absolute paths (/assets/*, /manifest.json) work.
+    const rootToServe = (await pathExists(userIndex)) ? userDir : bundledDir;
+    const port = await startCinnyStaticServer(rootToServe);
+    const child = createInAppWindow();
+    await child.loadURL(`http://127.0.0.1:${port}/`);
+  } catch (err) {
+    log.warn('cinny:open failed', err);
   }
 });
 
@@ -2091,11 +2527,26 @@ app.on('before-quit', () => {
       webOpenSockets.clear();
       webServer.close();
     }
+
+    if (cinnyServer) {
+      for (const socket of Array.from(cinnyOpenSockets)) {
+        try {
+          socket.destroy();
+        } catch {
+          // ignore
+        }
+      }
+      cinnyOpenSockets.clear();
+      cinnyServer.close();
+    }
   } catch {
     // ignore
   }
 
-  // Stop libp2p group chat best-effort on quit
+  // Stop libp2p group chat and announcements best-effort on quit
+  announcementsManager.stop().catch(() => {
+    // ignore
+  });
   groupChat.stop().catch(() => {
     // ignore
   });

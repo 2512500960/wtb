@@ -8,6 +8,8 @@ import ServiceCard from './components/ServiceCard/ServiceCard';
 import ChatPage from './pages/ChatPage';
 import SettingsPage from './pages/SettingsPage';
 import YggWebsiteIndexPage from './pages/YggWebsiteIndexPage';
+import ServiceAnnouncementsPage from './pages/ServiceAnnouncementsPage';
+import PeersPage from './pages/PeersPage';
 import { FEATURES } from './features/flags';
 
 const YGG_WEBSITE_INDEX_URL = 'http://[21e:a51c:885b:7db0:166e:927:98cd:d186]/';
@@ -35,6 +37,62 @@ type YggdrasilCtlResult = {
   durationMs: number;
 };
 
+function ModalShell({
+  title,
+  open,
+  onClose,
+  children,
+}: {
+  title: string;
+  open: boolean;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="ChatModalOverlay"
+      role="presentation"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        className="ChatModal"
+        role="dialog"
+        aria-modal="true"
+        style={{
+          width: 'min(980px, calc(100vw - 32px))',
+          maxHeight: 'min(84vh, 860px)',
+          overflow: 'auto',
+        }}
+      >
+        <div className="ChatModalHeader">
+          <div className="ChatModalTitle">{title}</div>
+          <button
+            type="button"
+            className="ServiceGhostButton"
+            onClick={onClose}
+          >
+            关闭
+          </button>
+        </div>
+        <div className="ChatModalBody">{children}</div>
+      </div>
+    </div>
+  );
+}
+
 // LauncherTile and ServiceCard components extracted to separate files
 
 function Home() {
@@ -46,6 +104,7 @@ function Home() {
   >(null);
   const [p2pPeerCount, setP2pPeerCount] = React.useState<number | null>(null);
   const [yggAddress, setYggAddress] = React.useState<string | null>(null);
+  const [showPeers, setShowPeers] = React.useState(false);
 
   const openExternal = React.useCallback((url: string) => {
     try {
@@ -212,6 +271,15 @@ function Home() {
           <div className="LauncherSubtitle">
             已连接 Peer：{connectedPeerCount ?? '—'}，P2P Peers：
             {p2pPeerCount ?? '—'}
+            <button
+              type="button"
+              className="ServiceGhostButton"
+              style={{ marginLeft: 8, width: 120 }}
+              disabled={!yggRunning}
+              onClick={() => setShowPeers(true)}
+            >
+              查看 peers
+            </button>
           </div>
           <div className="LauncherSubtitle">
             Yggdrasil IPv6：
@@ -237,6 +305,14 @@ function Home() {
         </div>
       </div>
 
+      <ModalShell
+        title="当前连接的 Peers"
+        open={showPeers}
+        onClose={() => setShowPeers(false)}
+      >
+        <PeersPage embedded />
+      </ModalShell>
+
       <div className="LauncherGrid">
         <LauncherTileExternalLink
           href={YGG_WEBSITE_INDEX_URL}
@@ -257,10 +333,36 @@ function Home() {
           icon="🧭"
           disabled={!yggRunning}
         />
+
+        <button
+          className="LauncherTile"
+          type="button"
+          onClick={() => {
+            try {
+              window.electron.ipcRenderer.invoke('cinny:open');
+            } catch {
+              setError('无法打开 Cinny（IPC 不可用）');
+            }
+          }}
+          aria-label="Matrix (Cinny)"
+        >
+          <div className="LauncherIcon" aria-hidden>
+            🟩
+          </div>
+          <div className="LauncherLabel">Matrix (Cinny)</div>
+        </button>
+        {FEATURES.chat ? (
+          <LauncherTileLink
+            to="/irc"
+            label="聊天"
+            icon="💬"
+            disabled={!yggRunning}
+          />
+        ) : null}
         <LauncherTileLink
-          to="/irc"
-          label="聊天"
-          icon="💬"
+          to="/announcements"
+          label="服务公告"
+          icon="📢"
           disabled={!yggRunning}
         />
         <LauncherTileLink
@@ -494,20 +596,6 @@ function StatusPage() {
   );
 }
 
-function PlaceholderPage({ title }: { title: string }) {
-  return (
-    <div className="PageRoot">
-      <div className="PageTopBar">
-        <Link className="BackLink" to="/">
-          ← 返回
-        </Link>
-        <div className="PageTitle">{title}</div>
-      </div>
-      <div className="PageBody">功能开发中…</div>
-    </div>
-  );
-}
-
 export default function App() {
   return (
     <Router>
@@ -515,8 +603,10 @@ export default function App() {
         <Route path="/" element={<Home />} />
         <Route path="/ygg" element={<YggWebsiteIndexPage />} />
         {FEATURES.chat && <Route path="/irc" element={<ChatPage />} />}
+        <Route path="/announcements" element={<ServiceAnnouncementsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/status" element={<StatusPage />} />
+        <Route path="/peers" element={<PeersPage embedded={false} />} />
       </Routes>
     </Router>
   );

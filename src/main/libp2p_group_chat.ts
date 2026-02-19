@@ -10,13 +10,31 @@ import { noise } from '@chainsafe/libp2p-noise';
 import { yamux } from '@chainsafe/libp2p-yamux';
 import { identify } from '@libp2p/identify';
 import { gossipsub } from '@chainsafe/libp2p-gossipsub';
+import { ping } from '@libp2p/ping';
 import { multiaddr } from '@multiformats/multiaddr';
+import { kadDHT } from '@libp2p/kad-dht';
+import { bootstrap } from '@libp2p/bootstrap';
+
+import { getWtbConfig } from './wtb_config';
 import { webSockets } from '@libp2p/websockets';
 import {
   fromString as u8FromString,
   toString as u8ToString,
 } from 'uint8arrays';
 import { getYggdrasilIPv6AddressOrThrow } from './main';
+
+const envInt = (name: string, def: number): number => {
+  const raw = (process.env[name] ?? '').trim();
+  if (!raw) return def;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) ? n : def;
+};
+
+const envBool = (name: string, def: boolean): boolean => {
+  const raw = (process.env[name] ?? '').trim();
+  if (!raw) return def;
+  return raw !== '0' && raw.toLowerCase() !== 'false';
+};
 
 type MsgStoreMaster = {
   schemaVersion: 1;
@@ -129,7 +147,7 @@ const randomB64 = (bytes: number): string =>
 const safePreview = (text: string, maxLen: number = 60): string => {
   const cleaned = (text ?? '').replace(/[\r\n\t]+/g, ' ').trim();
   if (cleaned.length <= maxLen) return cleaned;
-  return cleaned.slice(0, maxLen) + '…';
+  return `${cleaned.slice(0, maxLen)}…`;
 };
 
 const canWriteDir = (dirPath: string): boolean => {
@@ -249,7 +267,29 @@ const pickFreeTcpPortOnHost = (host: string): Promise<number> => {
 const HARDCODED_BOOTSTRAP_MULTIADDRS: string[] = [];
 
 const getBootstrapMultiaddrs = (): string[] => {
-  return [...HARDCODED_BOOTSTRAP_MULTIADDRS];
+  // Prefer config file so users can edit without rebuilding.
+  const cfg = getWtbConfig();
+  const fromConfig = cfg?.p2p?.bootstrapMultiaddrs ?? [];
+  return [...HARDCODED_BOOTSTRAP_MULTIADDRS, ...fromConfig]
+    .map((v) => (typeof v === 'string' ? v.trim() : ''))
+    .filter((v) => !!v);
+};
+
+const getDiscoveryOptions = (): {
+  enableDht: boolean;
+  bootstrapIntervalMs: number;
+} => {
+  const cfg = getWtbConfig();
+  const enableDht = cfg?.p2p?.discovery?.enableDht ?? true;
+  const bootstrapIntervalMs =
+    cfg?.p2p?.discovery?.bootstrapIntervalMs ?? 60_000;
+  return {
+    enableDht: !!enableDht,
+    bootstrapIntervalMs:
+      Number.isFinite(bootstrapIntervalMs) && bootstrapIntervalMs >= 5_000
+        ? bootstrapIntervalMs
+        : 60_000,
+  };
 };
 
 const ensureDir = (dirPath: string): void => {
@@ -270,7 +310,7 @@ const writeJsonFile = (filePath: string, value: unknown): void => {
   const dir = path.dirname(filePath);
   ensureDir(dir);
   const tmp = `${filePath}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', {
+  fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, {
     encoding: 'utf8',
   });
   fs.renameSync(tmp, filePath);
@@ -407,7 +447,7 @@ const appendConversationMessage = (
 ): void => {
   ensureDir(getMsgStoreDir());
   const fp = getConversationFilePath(storageId);
-  fs.appendFileSync(fp, JSON.stringify(msg) + '\n', { encoding: 'utf8' });
+  fs.appendFileSync(fp, `${JSON.stringify(msg)}\n`, { encoding: 'utf8' });
 };
 
 const loadConversationMessages = (
@@ -436,7 +476,11 @@ const loadConversationMessages = (
 
 export class Libp2pGroupChatService {
   private node: Libp2p | null = null;
+
+  private diagTimer: NodeJS.Timeout | null = null;
+
   private topics = new Set<string>();
+
   private onMessage?: (msg: ChatMessage) => void;
 
   private master: MsgStoreMaster;
@@ -444,6 +488,107 @@ export class Libp2pGroupChatService {
   constructor(onMessage?: (msg: ChatMessage) => void) {
     this.onMessage = onMessage;
     this.master = ensureMaster();
+  }
+
+  private stopDiagnosticsTimer(): void {
+    if (this.diagTimer) {
+      clearInterval(this.diagTimer);
+      this.diagTimer = null;
+    }
+  }
+
+  private startDiagnosticsTimer(node: Libp2p): void {
+    this.stopDiagnosticsTimer();
+
+    const intervalMs = envInt('WTB_P2P_DIAG_INTERVAL_MS', 60_000);
+    if (intervalMs <= 0) return;
+
+    const enableDhtProbe = envBool('WTB_P2P_DIAG_DHT_PROBE', true);
+    const dhtProbeTimeoutMs = envInt('WTB_P2P_DIAG_DHT_TIMEOUT_MS', 2_000);
+    const dhtProbeLimit = envInt('WTB_P2P_DIAG_DHT_LIMIT', 20);
+
+    const tick = async () => {
+      try {
+        const connectedPeers = node.getPeers().map((p) => p.toString());
+        const connectionCount =
+          (node as any).getConnections?.()?.length ?? undefined;
+
+        let peerStorePeers: string[] | undefined;
+        try {
+          const ps: any = (node as any).peerStore;
+          if (ps?.all instanceof Function) {
+            const all = await ps.all();
+            peerStorePeers = (all ?? [])
+              .map((pi: any) => pi?.id?.toString?.() ?? '')
+              .filter((s: string) => s.length > 0);
+          }
+        } catch {
+          // ignore
+        }
+
+        log.info(
+          'p2p diag: connectedPeers=%d connections=%s peerStorePeers=%s',
+          connectedPeers.length,
+          connectionCount == null ? 'n/a' : String(connectionCount),
+          peerStorePeers == null ? 'n/a' : String(peerStorePeers.length),
+        );
+        if (connectedPeers.length > 0) {
+          log.info('p2p diag: connected peerIds: %o', connectedPeers);
+        }
+
+        if (peerStorePeers && peerStorePeers.length > 0) {
+          log.info('p2p diag: peerStore peerIds: %o', peerStorePeers);
+        }
+
+        if (
+          enableDhtProbe &&
+          (node as any).services?.dht &&
+          (node as any).peerRouting?.getClosestPeers
+        ) {
+          const key = crypto.randomBytes(32);
+          const ac = new AbortController();
+          const timeout = setTimeout(
+            () => ac.abort(),
+            Math.max(1, dhtProbeTimeoutMs),
+          );
+          const found: string[] = [];
+          try {
+            for await (const p of (node as any).peerRouting.getClosestPeers(
+              key,
+              {
+                signal: ac.signal,
+              },
+            )) {
+              const idStr = p?.id?.toString?.() ?? '';
+              if (idStr) found.push(idStr);
+              if (found.length >= Math.max(1, dhtProbeLimit)) break;
+            }
+          } catch {
+            // ignore
+          } finally {
+            clearTimeout(timeout);
+          }
+
+          if (found.length > 0) {
+            log.info(
+              'p2p diag: dht closestPeers (sample %d): %o',
+              found.length,
+              found,
+            );
+          } else {
+            log.info('p2p diag: dht closestPeers probe returned none');
+          }
+        }
+      } catch (err) {
+        log.warn('p2p diag tick failed', err);
+      }
+    };
+
+    // Run once immediately, then on interval.
+    void tick();
+    this.diagTimer = setInterval(() => {
+      void tick();
+    }, intervalMs);
   }
 
   isRunning(): boolean {
@@ -696,12 +841,12 @@ export class Libp2pGroupChatService {
   }
 
   async sendMessage(convId: string, text: string): Promise<void> {
-    const node = this.node;
+    const { node } = this;
     if (!node) throw new Error('libp2p 未启动');
     const conv = this.master.conversations[convId];
     if (!conv) throw new Error('会话不存在');
 
-    const topic = conv.topic;
+    const { topic } = conv;
     const now = Date.now();
     const nonceB64 = randomB64(12);
     const fromPeerId = node.peerId.toString();
@@ -730,7 +875,7 @@ export class Libp2pGroupChatService {
         sigB64: this.signEnvelope(withText),
       };
     } else {
-      const peerId = conv.peerId;
+      const { peerId } = conv;
       if (!peerId) throw new Error('私聊缺少对端 peerId');
       const peerEncPub = conv.peerEncPublicKeyDerB64;
       const peerSignPub = conv.peerSignPublicKeyDerB64;
@@ -816,6 +961,9 @@ export class Libp2pGroupChatService {
         `/ip6/${yggdrasilIPv6Address}/tcp/${listenPort}`,
       );
       // console.log('Libp2p will listen on', yggdrasilIPv6AddressMA.toString());
+      const bootstrapMultiaddrs = getBootstrapMultiaddrs();
+      const discovery = getDiscoveryOptions();
+
       const node = await createLibp2p({
         // addresses: {
         //   listen: ['/ip6/::/tcp/0'],
@@ -839,14 +987,76 @@ export class Libp2pGroupChatService {
 
         connectionEncrypters: [noise()],
         streamMuxers: [yamux()],
+        peerDiscovery: bootstrapMultiaddrs.length
+          ? [
+              bootstrap({
+                list: bootstrapMultiaddrs,
+                interval: discovery.bootstrapIntervalMs,
+              }),
+            ]
+          : [],
         services: {
+          ping: ping(),
           identify: identify(),
           pubsub: gossipsub({
             emitSelf: false,
             globalSignaturePolicy: 'StrictSign',
           }),
+          bootstrap: bootstrap({
+            list: [
+              '/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
+              '/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb',
+              '/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt',
+              '/dnsaddr/va1.bootstrap.libp2p.io/p2p/12D3KooWKnDdG3iXw9eTFijk3EWSunZcFi54Zka4wmtqtt6rPxc8',
+              '/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ',
+            ],
+          }),
+          ...(discovery.enableDht
+            ? {
+                dht: kadDHT({
+                  // Default to client mode so regular clients don't become routing infrastructure.
+                  clientMode: true,
+                }),
+              }
+            : {}),
         },
       });
+
+      // Best-effort: auto-dial peers as they are discovered.
+      // This is intentionally conservative; dial failures are expected.
+      node.addEventListener('peer:discovery', (evt: any) => {
+        try {
+          const detail = evt?.detail;
+          const peerIdStr =
+            detail?.id?.toString?.() ?? String(detail?.id ?? '');
+          const addrs = Array.isArray(detail?.multiaddrs)
+            ? detail.multiaddrs.map((ma: any) => ma.toString())
+            : [];
+          // log.info('peer discovered: %s %o', peerIdStr, addrs);
+
+          // Try dial by peer id (if peerStore has addrs) else dial the first multiaddr.
+          Promise.resolve()
+            .then(async () => {
+              if (peerIdStr) {
+                try {
+                  await (node as any).dial?.(detail.id);
+                  return;
+                } catch {
+                  // fall back
+                }
+              }
+              if (addrs.length > 0) {
+                await (node as any).dial?.(multiaddr(addrs[0]));
+              }
+            })
+            .catch(() => {
+              // ignore
+            });
+        } catch {
+          // ignore
+        }
+      });
+
       return node;
     };
 
@@ -893,10 +1103,10 @@ export class Libp2pGroupChatService {
     // Best-effort: dial bootstrap peers so nodes can actually discover each other.
     // Without at least one connection, gossipsub will have no mesh peers and publishes
     // will commonly report "NoPeersSubscribedToTopic".
-    const bootstrap = getBootstrapMultiaddrs();
-    if (bootstrap.length > 0) {
-      log.info('Dialing %d bootstrap peer(s)...', bootstrap.length);
-      for (const addr of bootstrap) {
+    const bootstrapers = getBootstrapMultiaddrs();
+    if (bootstrapers.length > 0) {
+      log.info('Dialing %d bootstrap peer(s)...', bootstrapers.length);
+      for (const addr of bootstrapers) {
         try {
           await node.dial(multiaddr(addr));
         } catch (err) {
@@ -1020,14 +1230,22 @@ export class Libp2pGroupChatService {
     }
 
     this.node = node;
+    try {
+      const logPath = (log as any)?.transports?.file?.getFile?.()?.path;
+      if (logPath) log.info('electron-log file: %s', logPath);
+    } catch {
+      // ignore
+    }
+    this.startDiagnosticsTimer(node);
     log.info('MessageStore directory: %s', getMsgStoreDir());
     return this.status();
   }
 
   async stop(): Promise<ChatStatus> {
-    const node = this.node;
+    const { node } = this;
     this.node = null;
     this.topics.clear();
+    this.stopDiagnosticsTimer();
 
     if (node) {
       try {
@@ -1041,7 +1259,7 @@ export class Libp2pGroupChatService {
   }
 
   status(): ChatStatus {
-    const node = this.node;
+    const { node } = this;
     const id = this.getIdentity();
     if (!node) {
       return {
@@ -1072,7 +1290,8 @@ export class Libp2pGroupChatService {
       const conns = (node as any).getConnections?.() ?? [];
       for (const conn of conns) {
         try {
-          const peerId = conn.remotePeer?.toString?.() ?? String(conn.remotePeer ?? '');
+          const peerId =
+            conn.remotePeer?.toString?.() ?? String(conn.remotePeer ?? '');
           const addrStr = conn.remoteAddr?.toString?.() ?? '';
           if (!peerId) continue;
           if (!peerConnMap.has(peerId)) {
@@ -1112,7 +1331,7 @@ export class Libp2pGroupChatService {
   }
 
   async dial(multiaddrStr: string): Promise<ChatStatus> {
-    const node = this.node;
+    const { node } = this;
     if (!node) throw new Error('libp2p 未启动');
     if (!multiaddrStr || typeof multiaddrStr !== 'string')
       throw new Error('multiaddr 为空');
@@ -1123,7 +1342,7 @@ export class Libp2pGroupChatService {
   }
 
   async subscribe(topic: string): Promise<ChatStatus> {
-    const node = this.node;
+    const { node } = this;
     if (!node) throw new Error('libp2p 未启动');
     const t = (topic ?? '').trim();
     if (!t) throw new Error('topic 为空');
@@ -1134,7 +1353,7 @@ export class Libp2pGroupChatService {
   }
 
   async publish(topic: string, message: string): Promise<void> {
-    const node = this.node;
+    const { node } = this;
     if (!node) throw new Error('libp2p 未启动');
     const t = (topic ?? '').trim();
     if (!t) throw new Error('topic 为空');
