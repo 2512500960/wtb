@@ -12,6 +12,7 @@ export type InvokeChannels =
   | 'ygg:getIPv6'
   | 'ygg:index:load'
   | 'cinny:open'
+  | 'element:open'
   | 'open-in-app'
   | 'open-external'
   | 'chat:status'

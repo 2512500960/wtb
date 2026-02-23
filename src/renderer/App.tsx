@@ -351,6 +351,24 @@ function Home() {
           </div>
           <div className="LauncherLabel">Matrix (Cinny)</div>
         </button>
+
+        <button
+          className="LauncherTile"
+          type="button"
+          onClick={() => {
+            try {
+              window.electron.ipcRenderer.invoke('element:open');
+            } catch {
+              setError('无法打开 Element（IPC 不可用）');
+            }
+          }}
+          aria-label="Matrix (Element)"
+        >
+          <div className="LauncherIcon" aria-hidden>
+            🟦
+          </div>
+          <div className="LauncherLabel">Matrix (Element)</div>
+        </button>
         {FEATURES.chat ? (
           <LauncherTileLink
             to="/irc"

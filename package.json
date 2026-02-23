@@ -51,7 +51,8 @@
     "start:renderer": "cross-env NODE_ENV=development TS_NODE_TRANSPILE_ONLY=true NODE_OPTIONS=\"-r ts-node/register --no-warnings\" webpack serve --config ./.erb/configs/webpack.config.renderer.dev.ts",
     "test": "jest",
     "p2p:bootstrap": "ts-node ./build_tools/p2p_bootstrap_node.ts",
-    "cinny:fetch": "powershell -ExecutionPolicy Bypass -File ./build_tools/fetch_cinny_release.ps1"
+    "cinny:fetch": "powershell -ExecutionPolicy Bypass -File ./build_tools/fetch_cinny_release.ps1",
+    "element:fetch": "powershell -ExecutionPolicy Bypass -File ./build_tools/fetch_element_release.ps1"
   },
   "browserslist": [
     "extends browserslist-config-erb"

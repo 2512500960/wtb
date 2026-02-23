@@ -13,6 +13,7 @@ import {
   app,
   BrowserWindow,
   Menu,
+  session,
   shell,
   ipcMain,
   dialog,
@@ -67,6 +68,33 @@ let mainWindow: BrowserWindow | null = null;
 
 const isWindows = process.platform === 'win32';
 
+// NOTE: Do NOT force a global Chromium locale via `--lang`.
+// It is process-wide and would override per-window Accept-Language settings,
+// which we rely on (e.g. Element prefers English UI while the rest of the app
+// prefers Chinese).
+
+const CHINESE_ACCEPT_LANGUAGES = 'zh-CN,zh;q=0.9,en;q=0.6';
+
+// Element: prefer English UI but keep Chinese as fallback.
+const ELEMENT_ACCEPT_LANGUAGES = 'en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7';
+
+const forceAcceptLanguages = (
+  s: Electron.Session,
+  acceptLanguages: string,
+): void => {
+  try {
+    s.setUserAgent(s.getUserAgent(), acceptLanguages);
+  } catch {
+    // ignore
+  }
+};
+
+const forceChineseAcceptLanguage = (s: Electron.Session): void =>
+  forceAcceptLanguages(s, CHINESE_ACCEPT_LANGUAGES);
+
+const forceElementAcceptLanguage = (s: Electron.Session): void =>
+  forceAcceptLanguages(s, ELEMENT_ACCEPT_LANGUAGES);
+
 type ServiceName = 'yggdrasil' | 'web' | 'ipfs';
 
 type ServiceStatus = {
@@ -85,6 +113,12 @@ const webOpenSockets = new Set<Socket>();
 let cinnyServer: http.Server | null = null;
 let cinnyListenPort: number | null = null;
 const cinnyOpenSockets = new Set<Socket>();
+let cinnyRootDir: string | null = null;
+
+let elementServer: http.Server | null = null;
+let elementListenPort: number | null = null;
+const elementOpenSockets = new Set<Socket>();
+let elementRootDir: string | null = null;
 
 const YGG_WEBSITE_INDEX_DATA_URL =
   'http://[202:8467:9fa8:c35a:ef47:861d:fdbd:4f1b]:8137/index.json';
@@ -151,10 +185,14 @@ const contentTypeFromPath = (filePath: string): string => {
       return 'text/html; charset=utf-8';
     case '.js':
       return 'text/javascript; charset=utf-8';
+    case '.mjs':
+      return 'text/javascript; charset=utf-8';
     case '.css':
       return 'text/css; charset=utf-8';
     case '.json':
       return 'application/json; charset=utf-8';
+    case '.webmanifest':
+      return 'application/manifest+json; charset=utf-8';
     case '.svg':
       return 'image/svg+xml';
     case '.png':
@@ -174,6 +212,8 @@ const contentTypeFromPath = (filePath: string): string => {
       return 'font/ttf';
     case '.map':
       return 'application/json; charset=utf-8';
+    case '.wasm':
+      return 'application/wasm';
     case '.txt':
       return 'text/plain; charset=utf-8';
     default:
@@ -182,7 +222,30 @@ const contentTypeFromPath = (filePath: string): string => {
 };
 
 const startCinnyStaticServer = async (rootDir: string): Promise<number> => {
-  if (cinnyServer && cinnyListenPort) return cinnyListenPort;
+  const resolvedRoot = path.resolve(rootDir);
+  if (cinnyServer && cinnyListenPort && cinnyRootDir === resolvedRoot) {
+    return cinnyListenPort;
+  }
+
+  if (cinnyServer) {
+    try {
+      for (const socket of Array.from(cinnyOpenSockets)) {
+        try {
+          socket.destroy();
+        } catch {
+          // ignore
+        }
+      }
+      cinnyOpenSockets.clear();
+      cinnyServer.close();
+    } catch {
+      // ignore
+    } finally {
+      cinnyServer = null;
+      cinnyListenPort = null;
+      cinnyRootDir = null;
+    }
+  }
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -209,7 +272,7 @@ const startCinnyStaticServer = async (rootDir: string): Promise<number> => {
       }
       const safeRel = path.normalize(rel).replace(/^([A-Za-z]:)?[\\/]+/, '');
 
-      const rootResolved = path.resolve(rootDir);
+      const rootResolved = resolvedRoot;
       const fileResolved = path.resolve(rootResolved, safeRel);
 
       const rootPrefix = rootResolved + path.sep;
@@ -270,6 +333,139 @@ const startCinnyStaticServer = async (rootDir: string): Promise<number> => {
 
   cinnyServer = server;
   cinnyListenPort = addr.port;
+  cinnyRootDir = resolvedRoot;
+  return addr.port;
+};
+
+const startElementStaticServer = async (rootDir: string): Promise<number> => {
+  const resolvedRoot = path.resolve(rootDir);
+  if (elementServer && elementListenPort && elementRootDir === resolvedRoot) {
+    return elementListenPort;
+  }
+
+  if (elementServer) {
+    try {
+      for (const socket of Array.from(elementOpenSockets)) {
+        try {
+          socket.destroy();
+        } catch {
+          // ignore
+        }
+      }
+      elementOpenSockets.clear();
+      elementServer.close();
+    } catch {
+      // ignore
+    } finally {
+      elementServer = null;
+      elementListenPort = null;
+      elementRootDir = null;
+    }
+  }
+
+  const server = http.createServer(async (req, res) => {
+    try {
+      const method = (req.method || 'GET').toUpperCase();
+      if (method !== 'GET' && method !== 'HEAD') {
+        res.statusCode = 405;
+        res.end('Method Not Allowed');
+        return;
+      }
+
+      const requestUrl = req.url || '/';
+      const parsed = new URL(requestUrl, 'http://127.0.0.1');
+      let pathname = parsed.pathname || '/';
+
+      pathname = pathname.replace(/\\/g, '/');
+      if (!pathname.startsWith('/')) pathname = `/${pathname}`;
+
+      let rel = decodeURIComponent(pathname).replace(/^\/+/, '');
+      if (!rel || pathname.endsWith('/')) {
+        rel = 'index.html';
+      }
+      const safeRel = path.normalize(rel).replace(/^([A-Za-z]:)?[\\/]+/, '');
+
+      const rootResolved = resolvedRoot;
+      const fileResolved = path.resolve(rootResolved, safeRel);
+
+      const rootPrefix = rootResolved + path.sep;
+      const inRoot = isWindows
+        ? fileResolved.toLowerCase().startsWith(rootPrefix.toLowerCase())
+        : fileResolved.startsWith(rootPrefix);
+      if (!inRoot) {
+        res.statusCode = 403;
+        res.end('Forbidden');
+        return;
+      }
+
+      const filePath = fileResolved;
+
+      if (!(await pathExists(filePath))) {
+        // Element first tries config.<hostname>.json (e.g. config.127.0.0.1.json).
+        // If not present, fall back to config.json so offline bundles still boot.
+        const base = path.basename(filePath).toLowerCase();
+        if (base.startsWith('config.') && base.endsWith('.json')) {
+          const fallback = path.join(rootResolved, 'config.json');
+          if (await pathExists(fallback)) {
+            const ct = contentTypeFromPath(fallback);
+            res.setHeader('Content-Type', ct);
+            res.setHeader('Cache-Control', 'no-store');
+            if (method === 'HEAD') {
+              res.statusCode = 200;
+              res.end();
+              return;
+            }
+            const buf = await fs.promises.readFile(fallback);
+            res.statusCode = 200;
+            res.end(buf);
+            return;
+          }
+        }
+        res.statusCode = 404;
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.end('Not Found');
+        return;
+      }
+
+      const ct = contentTypeFromPath(filePath);
+      res.setHeader('Content-Type', ct);
+      res.setHeader('Cache-Control', 'no-store');
+
+      if (method === 'HEAD') {
+        res.statusCode = 200;
+        res.end();
+        return;
+      }
+
+      const buf = await fs.promises.readFile(filePath);
+      res.statusCode = 200;
+      res.end(buf);
+    } catch (e) {
+      res.statusCode = 500;
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.end(e instanceof Error ? e.message : 'Internal Server Error');
+    }
+  });
+
+  server.on('connection', (socket: Socket) => {
+    elementOpenSockets.add(socket);
+    socket.on('close', () => elementOpenSockets.delete(socket));
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => resolve());
+  });
+
+  const addr = server.address();
+  if (!addr || typeof addr === 'string') {
+    server.close();
+    throw new Error('Element 静态服务启动失败');
+  }
+
+  elementServer = server;
+  elementListenPort = addr.port;
+  elementRootDir = resolvedRoot;
   return addr.port;
 };
 
@@ -430,8 +626,18 @@ const getBundledCinnyDir = (): string => {
     : path.join(__dirname, '../../assets', 'cinny');
 };
 
+const getBundledElementDir = (): string => {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'assets', 'element')
+    : path.join(__dirname, '../../assets', 'element');
+};
+
 const getUserCinnyDir = (): string => {
   return path.join(app.getPath('userData'), 'cinny');
+};
+
+const getUserElementDir = (): string => {
+  return path.join(app.getPath('userData'), 'element');
 };
 
 const ensureCinnyConfig = async (cinnyDir: string): Promise<void> => {
@@ -460,6 +666,55 @@ const ensureCinnyConfig = async (cinnyDir: string): Promise<void> => {
   }
 };
 
+const ensureElementConfig = async (elementDir: string): Promise<void> => {
+  try {
+    const configPath = path.join(elementDir, 'config.json');
+    if (!(await pathExists(configPath))) {
+      const samplePath = path.join(elementDir, 'config.sample.json');
+      if (await pathExists(samplePath)) {
+        const raw = await fs.promises.readFile(samplePath, { encoding: 'utf8' });
+        await fs.promises.writeFile(configPath, raw, { encoding: 'utf8' });
+      } else {
+        const minimal = {
+          default_server_config: {
+            'm.homeserver': {
+              base_url: 'https://matrix.org',
+              server_name: 'matrix.org',
+            },
+            'm.identity_server': {
+              base_url: 'https://vector.im',
+            },
+          },
+          disable_custom_urls: false,
+          disable_guests: false,
+        };
+
+        await fs.promises.writeFile(
+          configPath,
+          `${JSON.stringify(minimal, null, 2)}\n`,
+          {
+            encoding: 'utf8',
+          },
+        );
+      }
+    }
+
+    // Also seed host-specific configs Element tries to fetch.
+    // We always serve from 127.0.0.1, but 'localhost' can show up too.
+    const rawCfg = await fs.promises.readFile(configPath, { encoding: 'utf8' });
+    const variants = ['config.127.0.0.1.json', 'config.localhost.json'];
+    await Promise.all(
+      variants.map(async (name) => {
+        const p = path.join(elementDir, name);
+        if (await pathExists(p)) return;
+        await fs.promises.writeFile(p, rawCfg, { encoding: 'utf8' });
+      }),
+    );
+  } catch {
+    // ignore best-effort config seeding
+  }
+};
+
 const createInAppWindow = (): BrowserWindow => {
   const child = new BrowserWindow({
     width: 1000,
@@ -470,6 +725,9 @@ const createInAppWindow = (): BrowserWindow => {
       contextIsolation: true,
     },
   });
+
+  // Force Accept-Language for this window.
+  forceChineseAcceptLanguage(child.webContents.session);
 
   child.webContents.on('context-menu', (_event, params) => {
     try {
@@ -522,6 +780,150 @@ const createInAppWindow = (): BrowserWindow => {
       }
 
       const popup = createInAppWindow();
+      popup.loadURL(parsed.toString()).catch(() => {
+        // ignore
+      });
+      return { action: 'deny' };
+    } catch {
+      return { action: 'deny' };
+    }
+  });
+
+  return child;
+};
+
+const createCinnyWindow = (): BrowserWindow => {
+  const child = new BrowserWindow({
+    width: 1000,
+    height: 700,
+    show: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      // Separate storage/caches/SW from the main app.
+      partition: 'persist:cinny',
+    },
+  });
+
+  forceChineseAcceptLanguage(child.webContents.session);
+
+  child.webContents.on('context-menu', (_event, params) => {
+    try {
+      const hasSelection = (params.selectionText || '').trim().length > 0;
+      const isEditable = !!params.isEditable;
+
+      const template = isEditable
+        ? [
+            { role: 'cut' as const, enabled: hasSelection },
+            { role: 'copy' as const, enabled: hasSelection },
+            { role: 'paste' as const },
+            { type: 'separator' as const },
+            { role: 'selectAll' as const },
+          ]
+        : [
+            { role: 'copy' as const, enabled: hasSelection },
+            { role: 'selectAll' as const },
+          ];
+
+      Menu.buildFromTemplate(template).popup({ window: child });
+    } catch {
+      // ignore
+    }
+  });
+
+  child.once('ready-to-show', () => child.show());
+
+  // Restrict to http(s) only; Cinny itself is served from localhost.
+  child.webContents.on('will-navigate', (e, navUrl) => {
+    try {
+      const parsed = new URL(navUrl);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        e.preventDefault();
+      }
+    } catch {
+      e.preventDefault();
+    }
+  });
+
+  child.webContents.setWindowOpenHandler((details) => {
+    try {
+      const parsed = new URL(details.url);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        return { action: 'deny' };
+      }
+
+      const popup = createCinnyWindow();
+      popup.loadURL(parsed.toString()).catch(() => {
+        // ignore
+      });
+      return { action: 'deny' };
+    } catch {
+      return { action: 'deny' };
+    }
+  });
+
+  return child;
+};
+
+const createElementWindow = (): BrowserWindow => {
+  const child = new BrowserWindow({
+    width: 1100,
+    height: 760,
+    show: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      partition: 'persist:element',
+    },
+  });
+
+  forceElementAcceptLanguage(child.webContents.session);
+
+  child.webContents.on('context-menu', (_event, params) => {
+    try {
+      const hasSelection = (params.selectionText || '').trim().length > 0;
+      const isEditable = !!params.isEditable;
+
+      const template = isEditable
+        ? [
+            { role: 'cut' as const, enabled: hasSelection },
+            { role: 'copy' as const, enabled: hasSelection },
+            { role: 'paste' as const },
+            { type: 'separator' as const },
+            { role: 'selectAll' as const },
+          ]
+        : [
+            { role: 'copy' as const, enabled: hasSelection },
+            { role: 'selectAll' as const },
+          ];
+
+      Menu.buildFromTemplate(template).popup({ window: child });
+    } catch {
+      // ignore
+    }
+  });
+
+  child.once('ready-to-show', () => child.show());
+
+  child.webContents.on('will-navigate', (e, navUrl) => {
+    try {
+      const parsed = new URL(navUrl);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        e.preventDefault();
+      }
+    } catch {
+      e.preventDefault();
+    }
+  });
+
+  child.webContents.setWindowOpenHandler((details) => {
+    try {
+      const parsed = new URL(details.url);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        return { action: 'deny' };
+      }
+
+      const popup = createElementWindow();
       popup.loadURL(parsed.toString()).catch(() => {
         // ignore
       });
@@ -2378,29 +2780,132 @@ ipcMain.handle('cinny:open', async () => {
       return;
     }
 
-    // Copy bundled Cinny into userData so we can overwrite config.json later.
-    await copyDirIfMissing(bundledDir, userDir);
+    let rootToServe = bundledDir;
 
-    // If user copy exists but is incomplete, refresh it.
-    if (!(await pathExists(userIndex))) {
-      try {
-        await fs.promises.rm(userDir, { recursive: true, force: true });
-      } catch {
-        // ignore
-      }
+    if (app.isPackaged) {
+      // Packaged: copy to userData so future dynamic config is possible.
       await copyDirIfMissing(bundledDir, userDir);
+
+      // If user copy exists but is incomplete, refresh it.
+      if (!(await pathExists(userIndex))) {
+        try {
+          await fs.promises.rm(userDir, { recursive: true, force: true });
+        } catch {
+          // ignore
+        }
+        await copyDirIfMissing(bundledDir, userDir);
+      }
+
+      rootToServe = (await pathExists(userIndex)) ? userDir : bundledDir;
     }
 
-    // Make sure hash routing is enabled for file:// loading.
-    await ensureCinnyConfig(userDir);
+    // Ensure hash routing so it works without redirects.
+    await ensureCinnyConfig(rootToServe);
 
     // Serve via localhost so absolute paths (/assets/*, /manifest.json) work.
-    const rootToServe = (await pathExists(userIndex)) ? userDir : bundledDir;
     const port = await startCinnyStaticServer(rootToServe);
-    const child = createInAppWindow();
+    const child = createCinnyWindow();
+
+    // Avoid SW/Cache serving stale config.json.
+    try {
+      await child.webContents.session.clearStorageData({
+        storages: ['serviceworkers', 'cachestorage'],
+      });
+      await child.webContents.session.clearCache();
+    } catch {
+      // ignore
+    }
+
     await child.loadURL(`http://127.0.0.1:${port}/`);
   } catch (err) {
     log.warn('cinny:open failed', err);
+  }
+});
+
+// Open embedded Element (offline static files bundled with the app)
+ipcMain.handle('element:open', async () => {
+  try {
+    const bundledDir = getBundledElementDir();
+    const userDir = getUserElementDir();
+    const bundledIndex = path.join(bundledDir, 'index.html');
+    const userIndex = path.join(userDir, 'index.html');
+
+    if (!(await pathExists(bundledIndex))) {
+      await dialog.showMessageBox({
+        type: 'warning',
+        title: 'Element 未集成',
+        message: '未找到内置 Element 静态文件（assets/element/index.html）。',
+        detail:
+          '请在源码目录执行：\n\n  npm run element:fetch\n\n或将 Element Web release 的静态文件拷贝到 assets/element/ 后重新打包。',
+      });
+      return;
+    }
+
+    let rootToServe = bundledDir;
+
+    if (app.isPackaged) {
+      // Packaged: copy to userData so future dynamic config is possible.
+      await copyDirIfMissing(bundledDir, userDir);
+
+      // If user copy exists but is incomplete, refresh it.
+      if (!(await pathExists(userIndex))) {
+        try {
+          await fs.promises.rm(userDir, { recursive: true, force: true });
+        } catch {
+          // ignore
+        }
+        await copyDirIfMissing(bundledDir, userDir);
+      }
+
+      rootToServe = (await pathExists(userIndex)) ? userDir : bundledDir;
+    }
+
+    // Element requires config.json (default_server_config) to boot.
+    await ensureElementConfig(rootToServe);
+
+    const port = await startElementStaticServer(rootToServe);
+    const elementUrl = `http://127.0.0.1:${port}/`;
+
+    // Default behaviour: control whether to open Element in the external
+    // system browser or an Electron BrowserWindow. Change
+    // `DEFAULT_USE_EXTERNAL_BROWSER` to modify the default used when the
+    // environment variables are not set.
+    const DEFAULT_USE_EXTERNAL_BROWSER = true;
+
+    const envVal = process.env.ELEMENT_USE_EXTERNAL_BROWSER ?? process.env.ELEMENT_USE_LOCAL_BROWSER;
+    const useExternal = envVal !== undefined ? envVal === 'true' : DEFAULT_USE_EXTERNAL_BROWSER;
+
+    if (useExternal) {
+      try {
+        // Use Electron's shell to open the URL in the external browser.
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { shell } = require('electron');
+        await shell.openExternal(elementUrl);
+        log.info('element: opened in external browser', elementUrl);
+      } catch (err) {
+        log.warn('element: failed to open external browser', err);
+      }
+    } else {
+      const child = createElementWindow();
+
+      try {
+        await child.webContents.session.clearStorageData({
+          // Avoid SW/Cache serving stale assets/config, but keep Element's
+          // persistent app state (login, settings, language selection, etc.).
+          storages: [
+            'serviceworkers',
+            'cachestorage',
+          ],
+        });
+        await child.webContents.session.clearCache();
+      } catch {
+        // ignore
+      }
+
+      await child.loadURL(elementUrl);
+    }
+  } catch (err) {
+    log.warn('element:open failed', err);
   }
 });
 
@@ -2538,6 +3043,20 @@ app.on('before-quit', () => {
       }
       cinnyOpenSockets.clear();
       cinnyServer.close();
+      cinnyRootDir = null;
+    }
+
+    if (elementServer) {
+      for (const socket of Array.from(elementOpenSockets)) {
+        try {
+          socket.destroy();
+        } catch {
+          // ignore
+        }
+      }
+      elementOpenSockets.clear();
+      elementServer.close();
+      elementRootDir = null;
     }
   } catch {
     // ignore
@@ -2569,6 +3088,11 @@ app.on('window-all-closed', () => {
 app
   .whenReady()
   .then(() => {
+    try {
+      forceChineseAcceptLanguage(session.defaultSession);
+    } catch {
+      // ignore
+    }
     createWindow();
     app.on('activate', () => {
       // On macOS it's common to re-create a window in the app when the
