@@ -394,6 +394,7 @@ body {
 }
 
 .StatusPre {
+  user-select: text;
   margin: 0;
   padding: 12px;
   border-radius: 12px;

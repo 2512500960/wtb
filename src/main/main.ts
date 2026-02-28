@@ -1275,7 +1275,7 @@ const generateYggdrasilConfIfMissing = (
   try {
     const baseDir = path.dirname(yggExe);
     const publicPeers = loadBundledPublicPeers(baseDir);
-    const selected = pickRandomPublicPeerAddresses(publicPeers, 5);
+    const selected = pickRandomPublicPeerAddresses(publicPeers, 7);
     updateYggdrasilConfPeers(confPath, selected);
   } catch (error) {
     log.warn('Failed to inject public peers into yggdrasil.conf', error);
