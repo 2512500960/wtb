@@ -658,9 +658,13 @@ const ensureCinnyConfig = async (cinnyDir: string): Promise<void> => {
       }
     }
 
-    await fs.promises.writeFile(configPath, `${JSON.stringify(data, null, 2)}\n`, {
-      encoding: 'utf8',
-    });
+    await fs.promises.writeFile(
+      configPath,
+      `${JSON.stringify(data, null, 2)}\n`,
+      {
+        encoding: 'utf8',
+      },
+    );
   } catch {
     // ignore best-effort config patching
   }
@@ -672,7 +676,9 @@ const ensureElementConfig = async (elementDir: string): Promise<void> => {
     if (!(await pathExists(configPath))) {
       const samplePath = path.join(elementDir, 'config.sample.json');
       if (await pathExists(samplePath)) {
-        const raw = await fs.promises.readFile(samplePath, { encoding: 'utf8' });
+        const raw = await fs.promises.readFile(samplePath, {
+          encoding: 'utf8',
+        });
         await fs.promises.writeFile(configPath, raw, { encoding: 'utf8' });
       } else {
         const minimal = {
@@ -1762,7 +1768,10 @@ type YggdrasilCtlCommand =
   | 'gettun'
   | 'getp2ppeers'
   | 'getmulticastinterfaces'
-  | 'list';
+  | 'list'
+  | 'getselfjson'
+  | 'getpeersjson'
+  | 'getp2ppeersjson';
 
 type YggdrasilCtlResult = {
   ok: boolean;
@@ -1783,6 +1792,9 @@ const yggdrasilCtlAllowedCommands: ReadonlySet<string> = new Set<string>([
   'getp2ppeers',
   'getmulticastinterfaces',
   'list',
+  'getselfjson',
+  'getpeersjson',
+  'getp2ppeersjson',
 ]);
 
 const runYggdrasilCtl = async (
@@ -1802,8 +1814,13 @@ const runYggdrasilCtl = async (
 
   const start = Date.now();
   // yggdrasilctl supports JSON output via `-json`, and options MUST come before the command.
-  const args = ['-json', command];
-
+  // not all commands should be run with `-json`
+  let args: string[];
+  if (command === 'getselfjson' || command === 'getpeersjson' || command === 'getp2ppeersjson') {
+    args = ['-json', command.replace(/json$/, '')];
+  } else {
+    args = [command];
+  }
   return await new Promise<YggdrasilCtlResult>((resolve, reject) => {
     const child = spawn(exePath, args, {
       windowsHide: true,
@@ -2355,7 +2372,9 @@ const stopWebService = async (): Promise<ServiceStatus> => {
 ipcMain.handle('services:getAll', async () => {
   const all = getAllServiceStatuses();
   // If yggdrasil is already running (e.g. started before app launch), auto-start announcements.
-  scheduleAutoStartAnnouncementsIfNeeded('yggdrasil already running (services:getAll)');
+  scheduleAutoStartAnnouncementsIfNeeded(
+    'yggdrasil already running (services:getAll)',
+  );
   return all;
 });
 
@@ -2631,7 +2650,8 @@ ipcMain.handle(
 // ========================================
 
 ipcMain.handle('announcements:status', async () => {
-  const st = (await announcementsManager.getStatus()) satisfies AnnouncementSystemStatus;
+  const st =
+    (await announcementsManager.getStatus()) satisfies AnnouncementSystemStatus;
   // Best-effort auto-start: if Yggdrasil is up, announcements should come up without a manual button.
   const ygg = getYggdrasilStatus();
   if (!st.running && ygg.state === 'running') {
@@ -2872,8 +2892,11 @@ ipcMain.handle('element:open', async () => {
     // environment variables are not set.
     const DEFAULT_USE_EXTERNAL_BROWSER = true;
 
-    const envVal = process.env.ELEMENT_USE_EXTERNAL_BROWSER ?? process.env.ELEMENT_USE_LOCAL_BROWSER;
-    const useExternal = envVal !== undefined ? envVal === 'true' : DEFAULT_USE_EXTERNAL_BROWSER;
+    const envVal =
+      process.env.ELEMENT_USE_EXTERNAL_BROWSER ??
+      process.env.ELEMENT_USE_LOCAL_BROWSER;
+    const useExternal =
+      envVal !== undefined ? envVal === 'true' : DEFAULT_USE_EXTERNAL_BROWSER;
 
     if (useExternal) {
       try {
@@ -2892,10 +2915,7 @@ ipcMain.handle('element:open', async () => {
         await child.webContents.session.clearStorageData({
           // Avoid SW/Cache serving stale assets/config, but keep Element's
           // persistent app state (login, settings, language selection, etc.).
-          storages: [
-            'serviceworkers',
-            'cachestorage',
-          ],
+          storages: ['serviceworkers', 'cachestorage'],
         });
         await child.webContents.session.clearCache();
       } catch {

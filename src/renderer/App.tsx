@@ -142,25 +142,44 @@ function Home() {
     }
   }, []);
 
-  const countFromYggCtlStdout = React.useCallback(
+  const countFromYggCtlStdoutP2PPeer = React.useCallback(
     (stdout: string): number | null => {
       const data = tryParseJson(stdout);
       if (data == null) return null;
-
-      if (Array.isArray(data)) return data.length;
-
-      if (typeof data === 'object') {
-        const obj = data as Record<string, unknown>;
-
-        const peers = obj.peers ?? obj.Peers;
-        if (Array.isArray(peers)) return peers.length;
-        if (peers && typeof peers === 'object') {
-          return Object.keys(peers as Record<string, unknown>).length;
-        }
-
-        return Object.keys(obj).length;
+      // check if data has ygg_peers field and is an array
+      if (
+        typeof data === 'object' &&
+        data !== null &&
+        'ygg_peers' in data &&
+        Array.isArray((data as Record<string, unknown>).ygg_peers)
+      ) {
+        return ((data as Record<string, unknown>).ygg_peers as unknown[])
+          .length;
       }
+      return null;
+    },
+    [tryParseJson],
+  );
 
+  const countFromYggCtlStdoutTranditionalPeer = React.useCallback(
+    (stdout: string): number | null => {
+      const data = tryParseJson(stdout);
+      if (data == null) return null;
+      // data is object, use peers field of it
+      const obj = data as Record<string, unknown>;
+      const peers = obj.peers ?? obj.Peers;
+      if (Array.isArray(peers)) {
+        // count peers that are "up"; tolerate boolean, numeric and string representations
+        const filterData = peers.filter(
+          (item) =>
+            typeof item === 'object' &&
+            item !== null &&
+            'up' in item &&
+            (item as Record<string, unknown>).up,
+        );
+        // console.log('Filtered peers with up=true:', filterData);
+        return filterData.length;
+      }
       return null;
     },
     [tryParseJson],
@@ -169,19 +188,22 @@ function Home() {
   const refreshPeerCounts = React.useCallback(async () => {
     try {
       const [peersResRaw, p2pResRaw] = await Promise.all([
-        window.electron.ipcRenderer.invoke('yggdrasilctl:run', 'getpeers'),
-        window.electron.ipcRenderer.invoke('yggdrasilctl:run', 'getp2ppeers'),
+        window.electron.ipcRenderer.invoke('yggdrasilctl:run', 'getpeersjson'),
+        window.electron.ipcRenderer.invoke(
+          'yggdrasilctl:run',
+          'getp2ppeersjson',
+        ),
       ]);
       const peersRes = peersResRaw as Partial<YggdrasilCtlResult> | null;
       const p2pRes = p2pResRaw as Partial<YggdrasilCtlResult> | null;
 
       const connected =
         peersRes && peersRes.ok
-          ? countFromYggCtlStdout(String(peersRes.stdout ?? ''))
+          ? countFromYggCtlStdoutTranditionalPeer(String(peersRes.stdout ?? ''))
           : null;
       const p2p =
         p2pRes && p2pRes.ok
-          ? countFromYggCtlStdout(String(p2pRes.stdout ?? ''))
+          ? countFromYggCtlStdoutP2PPeer(String(p2pRes.stdout ?? ''))
           : null;
 
       setConnectedPeerCount(connected);
@@ -190,7 +212,7 @@ function Home() {
       setConnectedPeerCount(null);
       setP2pPeerCount(null);
     }
-  }, [countFromYggCtlStdout]);
+  }, [countFromYggCtlStdoutP2PPeer, countFromYggCtlStdoutTranditionalPeer]);
 
   React.useEffect(() => {
     refreshPeerCounts();

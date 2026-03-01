@@ -1,8 +1,8 @@
 ﻿import * as React from 'react';
 import { Link } from 'react-router-dom';
 
-type YggdrasilCtlCommand = 'getpeers' | 'getp2ppeers';
-
+type YggdrasilCtlCommand = 'getpeersjson' | 'getp2ppeersjson';
+const SHOW_TRANSPORTS_ADDRESS = false;
 type YggdrasilCtlResult = {
   ok: boolean;
   command: YggdrasilCtlCommand;
@@ -72,27 +72,43 @@ function tryParseJson(input: string): unknown | null {
   }
 }
 
-function countFromStdout(stdout: string): number | null {
+const countFromYggCtlStdoutP2PPeer = (stdout: string): number | null => {
   const data = tryParseJson(stdout);
   if (data == null) return null;
-
-  if (Array.isArray(data)) return data.length;
-
-  if (typeof data === 'object') {
-    const obj = data as Record<string, unknown>;
-
-    // yggdrasilctl 有时会把 peers 包在 peers/Peers 字段里
-    const peers = obj.peers ?? obj.Peers;
-    if (Array.isArray(peers)) return peers.length;
-    if (peers && typeof peers === 'object') {
-      return Object.keys(peers as Record<string, unknown>).length;
-    }
-
-    return Object.keys(obj).length;
+  // check if data has ygg_peers field and is an array
+  if (
+    typeof data === 'object' &&
+    data !== null &&
+    'ygg_peers' in data &&
+    Array.isArray((data as Record<string, unknown>).ygg_peers)
+  ) {
+    return ((data as Record<string, unknown>).ygg_peers as unknown[]).length;
   }
-
   return null;
-}
+};
+
+const countFromYggCtlStdoutTranditionalPeer = (
+  stdout: string,
+): number | null => {
+  const data = tryParseJson(stdout);
+  if (data == null) return null;
+  // data is object, use peers field of it
+  const obj = data as Record<string, unknown>;
+  const peers = obj.peers ?? obj.Peers;
+  if (Array.isArray(peers)) {
+    // count peers that are "up"; tolerate boolean, numeric and string representations
+    const filterData = peers.filter(
+      (item) =>
+        typeof item === 'object' &&
+        item !== null &&
+        'up' in item &&
+        (item as Record<string, unknown>).up,
+    );
+    // console.log('Filtered peers with up=true:', filterData);
+    return filterData.length;
+  }
+  return null;
+};
 
 function prettyStdout(stdout: string): string {
   const data = tryParseJson(stdout);
@@ -171,8 +187,11 @@ export default function PeersPage({ embedded }: { embedded: boolean }) {
     setError(null);
     try {
       const [peersRaw, p2pRaw] = await Promise.all([
-        window.electron.ipcRenderer.invoke('yggdrasilctl:run', 'getpeers'),
-        window.electron.ipcRenderer.invoke('yggdrasilctl:run', 'getp2ppeers'),
+        window.electron.ipcRenderer.invoke('yggdrasilctl:run', 'getpeersjson'),
+        window.electron.ipcRenderer.invoke(
+          'yggdrasilctl:run',
+          'getp2ppeersjson',
+        ),
       ]);
       setPeersRes(peersRaw as YggdrasilCtlResult);
       setP2pRes(p2pRaw as YggdrasilCtlResult);
@@ -195,8 +214,12 @@ export default function PeersPage({ embedded }: { embedded: boolean }) {
     return () => window.clearInterval(id);
   }, [refresh]);
 
-  const peersCount = peersRes?.ok ? countFromStdout(peersRes.stdout) : null;
-  const p2pCount = p2pRes?.ok ? countFromStdout(p2pRes.stdout) : null;
+  const peersCount = peersRes?.ok
+    ? countFromYggCtlStdoutTranditionalPeer(peersRes.stdout)
+    : null;
+  const p2pCount = p2pRes?.ok
+    ? countFromYggCtlStdoutP2PPeer(p2pRes.stdout)
+    : null;
 
   const peersParsed = peersRes?.ok ? parseGetPeers(peersRes.stdout) : null;
   const p2pParsed = p2pRes?.ok ? parseP2PPeers(p2pRes.stdout) : null;
@@ -327,10 +350,10 @@ export default function PeersPage({ embedded }: { embedded: boolean }) {
           )}
         </div>
 
-        <div className="StatusBlock">
+        <div className="StatusBlock" style={{ visibility: 'visible' }}>
           <div className="StatusBlockHeader">
             <div className="StatusBlockTitle">
-              getp2ppeers{' '}
+              getp2ppeersjson{' '}
               <span className="StatusBlockDesc">- libp2p peers</span>
             </div>
             <StatusBadge res={p2pRes} />
@@ -374,6 +397,7 @@ export default function PeersPage({ embedded }: { embedded: boolean }) {
                   </div>
 
                   {p2pParsed.transport_peers &&
+                  SHOW_TRANSPORTS_ADDRESS &&
                   p2pParsed.transport_peers.length ? (
                     <>
                       <div className="StatusBlockTitle">transport_peers</div>

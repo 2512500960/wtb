@@ -7,7 +7,10 @@ export type YggdrasilCtlCommand =
   | 'gettun'
   | 'getp2ppeers'
   | 'getmulticastinterfaces'
-  | 'list';
+  | 'list'
+  | 'getselfjson'
+  | 'getpeersjson'
+  | 'getp2ppeersjson';
 
 export type YggdrasilCtlResult = {
   ok: boolean;
