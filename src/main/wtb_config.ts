@@ -103,7 +103,14 @@ const defaultConfigV1 = (): WtbConfigV1 => {
   return {
     version: 1,
     p2p: {
-      bootstrapMultiaddrs: [],
+      bootstrapMultiaddrs: [
+        '/ip6/201:f536:8bb3:f51d:3377:70d4:fb3b:a829/tcp/4001/p2p/12D3KooWQ9ApfKJ2y4AL13QEnn2PuKZzsyjKk1iz2GCCNNUXrrmA',
+        '/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
+        '/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb',
+        '/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt',
+        '/dnsaddr/va1.bootstrap.libp2p.io/p2p/12D3KooWKnDdG3iXw9eTFijk3EWSunZcFi54Zka4wmtqtt6rPxc8',
+        '/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ',
+      ],
       discovery: {
         enableDht: true,
         bootstrapIntervalMs: 60_000,
