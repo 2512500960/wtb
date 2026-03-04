@@ -1,4 +1,4 @@
-type ElectronHandler = import('../main/preload').ElectronHandler;
+import type { ElectronHandler } from '../main/preload';
 
 declare global {
   // eslint-disable-next-line no-unused-vars
@@ -6,3 +6,5 @@ declare global {
     electron: ElectronHandler;
   }
 }
+
+export {};

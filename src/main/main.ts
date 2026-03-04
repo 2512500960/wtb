@@ -2695,6 +2695,16 @@ ipcMain.handle('announcements:local:list', async () => {
   return (await announcementsManager.listLocalServices()) satisfies LocalServiceConfig[];
 });
 
+ipcMain.handle('announcements:republish', async () => {
+  const st = await announcementsManager.getStatus();
+  if (!st.running) {
+    // Match announcements:local:add behavior: auto-start if needed.
+    await startAnnouncementsOrThrow();
+  }
+  await announcementsManager.republishNow();
+  return (await announcementsManager.getStatus()) satisfies AnnouncementSystemStatus;
+});
+
 ipcMain.handle('announcements:discovered:list', async () => {
   return (await announcementsManager.listDiscoveredServices()) satisfies ServiceAnnouncementStatus[];
 });

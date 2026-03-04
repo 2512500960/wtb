@@ -220,6 +220,19 @@ export default function ServiceAnnouncementsPage() {
     }
   }, [refreshStatus, refreshLocalServices, refreshDiscoveredServices]);
 
+  const forceRepublish = React.useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await window.electron.ipcRenderer.invoke('announcements:republish');
+      await refreshAll();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [refreshAll]);
+
   React.useEffect(() => {
     // If the form changes, require a fresh confirmation.
     setPublishConfirmPending(false);
@@ -232,7 +245,7 @@ export default function ServiceAnnouncementsPage() {
     // Auto-fill local Yggdrasil IPv6 if available.
     window.electron.ipcRenderer
       .invoke('ygg:getIPv6')
-      .then((addr) => setYggIPv6(String(addr)))
+      .then((addr: unknown) => setYggIPv6(String(addr)))
       .catch(() => {
         // ignore
       });
@@ -430,6 +443,16 @@ export default function ServiceAnnouncementsPage() {
             disabled={busy}
           >
             刷新
+          </button>
+          <button
+            type="button"
+            className="ServiceGhostButton"
+            onClick={forceRepublish}
+            disabled={busy}
+            style={{ marginLeft: 8, width: 140 }}
+            title="强制立即重发一次所有本机服务公告（即使上次因为无订阅者而跳过）"
+          >
+            立即重发公告
           </button>
         </div>
 

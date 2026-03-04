@@ -39,6 +39,7 @@ export type AnnouncementInvokeChannels =
   | 'announcements:status'
   | 'announcements:start'
   | 'announcements:stop'
+  | 'announcements:republish'
   | 'announcements:local:add'
   | 'announcements:local:remove'
   | 'announcements:local:list'

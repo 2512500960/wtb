@@ -175,6 +175,17 @@ const ANNOUNCEMENT_TOPIC = 'ygg-service-announcements-v1';
 // 重发间隔（10 分钟）
 const REPUBLISH_INTERVAL_MS = 10 * 60 * 1000;
 
+// 用于在小网络里通过 DHT 主动“碰见”其他客户端（不依赖 bootstrap 节点转发 pubsub）
+const ANNOUNCEMENT_RENDEZVOUS_KEY = crypto
+  .createHash('sha256')
+  .update('wtb:announcements:rendezvous:v1')
+  .digest();
+
+const DISCOVER_THROTTLE_MS = 10_000;
+const DISCOVER_TIMEOUT_MS = 2_000;
+const DISCOVER_LIMIT = 16;
+const DIAL_TIMEOUT_MS = 1_500;
+
 // 限制描述长度，避免公告消息过大（也与 UI 侧保持一致）
 const MAX_SERVICE_DESC_LENGTH = 200;
 
@@ -253,6 +264,8 @@ export class ServiceAnnouncementsManager {
 
   private republishTimer: NodeJS.Timeout | null = null;
 
+  private lastDiscoverAttemptAt = 0;
+
   // 从 libp2p chat 获取的身份密钥
   private signPrivateKeyDerB64: string | null = null;
 
@@ -268,6 +281,74 @@ export class ServiceAnnouncementsManager {
   private isNoPeersSubscribedToTopicError(err: unknown): boolean {
     const msg = err instanceof Error ? err.message : String(err);
     return msg.includes('PublishError.NoPeersSubscribedToTopic');
+  }
+
+  private async discoverPeersViaDhtBestEffort(reason: string): Promise<void> {
+    const node = this.node;
+    if (!node) return;
+
+    const now = Date.now();
+    if (now - this.lastDiscoverAttemptAt < DISCOVER_THROTTLE_MS) return;
+    this.lastDiscoverAttemptAt = now;
+
+    const peerRouting = (node as any)?.peerRouting;
+    const getClosestPeers = peerRouting?.getClosestPeers;
+    if (!(getClosestPeers instanceof Function)) return;
+
+    // Best-effort: query a stable key so different clients converge.
+    const ac = new AbortController();
+    const timeout = setTimeout(() => ac.abort(), DISCOVER_TIMEOUT_MS);
+    const found: any[] = [];
+    try {
+      for await (const p of getClosestPeers.call(peerRouting, ANNOUNCEMENT_RENDEZVOUS_KEY, {
+        signal: ac.signal,
+      })) {
+        if (!p) continue;
+        const idStr = p?.id?.toString?.() ?? '';
+        if (!idStr) continue;
+        if (idStr === node.peerId?.toString?.()) continue;
+        found.push(p);
+        if (found.length >= DISCOVER_LIMIT) break;
+      }
+    } catch {
+      // ignore
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (found.length === 0) return;
+
+    const connected = new Set<string>();
+    try {
+      const peers = node.getPeers?.() ?? [];
+      for (const p of peers) connected.add(p.toString());
+    } catch {
+      // ignore
+    }
+
+    let dialed = 0;
+    for (const p of found) {
+      try {
+        const pid = p?.id;
+        const pidStr = pid?.toString?.() ?? '';
+        if (!pidStr) continue;
+        if (connected.has(pidStr)) continue;
+        const dialAc = new AbortController();
+        const dialTimeout = setTimeout(() => dialAc.abort(), DIAL_TIMEOUT_MS);
+        try {
+          await (node as any).dial?.(pid, { signal: dialAc.signal });
+        } finally {
+          clearTimeout(dialTimeout);
+        }
+        dialed += 1;
+      } catch {
+        // ignore dial errors
+      }
+    }
+
+    if (dialed > 0) {
+      log.info('announcements: dht discover dialed %d peer(s) (%s)', dialed, reason);
+    }
   }
 
   /**
@@ -349,6 +430,17 @@ export class ServiceAnnouncementsManager {
       localServicesCount: counts.local,
       discoveredServicesCount: counts.discovered,
     };
+  }
+
+  /**
+   * 立即重发一次所有本地服务公告（用于手动“强制重试”）
+   */
+  async republishNow(): Promise<void> {
+    if (!this.node) {
+      throw new Error('公告系统未运行');
+    }
+    await this.discoverPeersViaDhtBestEffort('manual republish');
+    await this.republishAllServices();
   }
 
   private getPeerSnapshotBestEffort(): {
@@ -544,6 +636,20 @@ export class ServiceAnnouncementsManager {
         // Expected in small / bootstrap networks: no subscribers yet.
         // We'll retry on the republish timer; don't surface as an error.
         log.info(`Skipped publish service ${id}: no peers subscribed`);
+
+        // Try to actively discover and dial other clients via DHT, then retry once.
+        await this.discoverPeersViaDhtBestEffort('publish skipped: no subscribers');
+        try {
+          await this.node.services.pubsub.publish(
+            ANNOUNCEMENT_TOPIC,
+            u8FromString(wireData),
+          );
+          config.lastPublishedAt = Date.now();
+          await this.store.upsertLocalService(config);
+          log.info(`Published service announcement after discover: ${id}`);
+        } catch {
+          // still no subscribers or transient publish failure - keep silent like before
+        }
         return;
       }
 
@@ -765,6 +871,7 @@ export class ServiceAnnouncementsManager {
    * 重发所有本地服务
    */
   private async republishAllServices(): Promise<void> {
+    await this.discoverPeersViaDhtBestEffort('republish');
     const locals = await this.store.listLocalServices();
     for (const svc of locals) {
       const id = svc.id;

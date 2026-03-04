@@ -974,14 +974,8 @@ export class Libp2pGroupChatService {
         addresses: {
           // Bind to a specific interface address (Yggdrasil) so we don't advertise loopback
           // or other host-local/private addresses from unrelated interfaces.
-          listen: [
-            '/ip4/0.0.0.0/tcp/0',
-            // yggdrasilIPv6AddressMA.toString(),
-            '/ip6/::/tcp/0',
-          ],
-          // // Yggdrasil uses ULA (fd00::/8). Some libp2p address managers may treat these as
-          // // "private" and omit them from advertised multiaddrs unless explicitly announced.
-          // announce: [yggdrasilIPv6AddressMA.toString()],
+          listen: [yggdrasilIPv6AddressMA.toString()],
+          announce: [yggdrasilIPv6AddressMA.toString()],
         },
         transports: [tcp()],
 

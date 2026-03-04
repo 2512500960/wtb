@@ -1,4 +1,5 @@
 import { createRoot } from 'react-dom/client';
+import './window_electron';
 import App from './App';
 
 const container = document.getElementById('root') as HTMLElement;
