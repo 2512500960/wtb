@@ -173,7 +173,7 @@ type Libp2pNode = any;
 const ANNOUNCEMENT_TOPIC = 'ygg-service-announcements-v1';
 
 // 重发间隔（10 分钟）
-const REPUBLISH_INTERVAL_MS = 10 * 60 * 1000;
+const REPUBLISH_INTERVAL_MS = 3 * 60 * 1000;
 
 // 用于在小网络里通过 DHT 主动“碰见”其他客户端（不依赖 bootstrap 节点转发 pubsub）
 const ANNOUNCEMENT_RENDEZVOUS_KEY = crypto
@@ -263,6 +263,12 @@ export class ServiceAnnouncementsManager {
   private subscribed = false;
 
   private republishTimer: NodeJS.Timeout | null = null;
+
+  private peerConnectListener: ((evt: any) => void) | null = null;
+  private pubsubMessageListener: ((evt: any) => void) | null = null;
+
+  private lastResubscribeAt = 0;
+  private lastPeerConnectRepublishAt = 0;
 
   private lastDiscoverAttemptAt = 0;
 
@@ -380,10 +386,24 @@ export class ServiceAnnouncementsManager {
     }
 
     // 监听消息
-    this.node.services.pubsub.addEventListener(
-      'message',
-      this.handleMessage.bind(this),
-    );
+    this.pubsubMessageListener = this.handleMessage.bind(this);
+    this.node.services.pubsub.addEventListener('message', this.pubsubMessageListener);
+
+    // IMPORTANT: In small networks, peers may connect *after* we subscribed.
+    // Some pubsub implementations won't automatically re-send existing subscriptions
+    // to newly connected peers, which makes publish() think subs=0 forever.
+    // On each peer connection, toggle subscription to force a SUBSCRIBE update.
+    this.peerConnectListener = (evt: any) => {
+      try {
+        const peerId = evt?.detail?.toString?.() ?? String(evt?.detail ?? '');
+        log.info('announcements: peer connected %s; re-sync subscriptions', peerId);
+      } catch {
+        // ignore
+      }
+      void this.resubscribeAnnouncementTopicBestEffort('peer:connect');
+      void this.republishAfterPeerConnectBestEffort();
+    };
+    this.node.addEventListener('peer:connect', this.peerConnectListener);
 
     // 启动周期性重发
     this.startRepublishTimer();
@@ -408,9 +428,68 @@ export class ServiceAnnouncementsManager {
       log.warn('Failed to unsubscribe from announcement topic', err);
     }
 
+    try {
+      if (this.pubsubMessageListener) {
+        this.node.services.pubsub.removeEventListener('message', this.pubsubMessageListener);
+      }
+    } catch {
+      // ignore
+    } finally {
+      this.pubsubMessageListener = null;
+    }
+
+    try {
+      if (this.peerConnectListener) {
+        this.node.removeEventListener('peer:connect', this.peerConnectListener);
+      }
+    } catch {
+      // ignore
+    } finally {
+      this.peerConnectListener = null;
+    }
+
     this.node = null;
     await this.store.flush();
     log.info('ServiceAnnouncementsManager stopped');
+  }
+
+  private async resubscribeAnnouncementTopicBestEffort(reason: string): Promise<void> {
+    const node = this.node;
+    if (!node) return;
+    if (!this.subscribed) return;
+
+    const now = Date.now();
+    // Throttle resubscribe bursts (e.g. multiple peer:connect events)
+    if (now - this.lastResubscribeAt < 3000) return;
+    this.lastResubscribeAt = now;
+
+    try {
+      // Toggle to force a subscription update to peers.
+      node.services.pubsub.unsubscribe(ANNOUNCEMENT_TOPIC);
+    } catch {
+      // ignore
+    }
+
+    try {
+      node.services.pubsub.subscribe(ANNOUNCEMENT_TOPIC);
+      log.debug('announcements: re-subscribed to %s (%s)', ANNOUNCEMENT_TOPIC, reason);
+    } catch (err) {
+      log.debug('announcements: re-subscribe failed (%s)', reason, err);
+    }
+  }
+
+  private async republishAfterPeerConnectBestEffort(): Promise<void> {
+    const now = Date.now();
+    // Avoid spamming republish if connections flap
+    if (now - this.lastPeerConnectRepublishAt < 5000) return;
+    this.lastPeerConnectRepublishAt = now;
+
+    // Give pubsub a brief moment to exchange subscriptions
+    setTimeout(() => {
+      this.republishAllServices().catch(() => {
+        // ignore
+      });
+    }, 800);
   }
 
   /**
@@ -491,6 +570,43 @@ export class ServiceAnnouncementsManager {
           addrs: Array.from(addrSet),
         }),
       );
+    } catch {
+      // ignore
+    }
+
+    return out;
+  }
+
+  private getPubsubSnapshotBestEffort(): {
+    topics?: string[];
+    pubsubPeers?: string[];
+    announcementSubscribers?: string[];
+  } {
+    const node = this.node;
+    if (!node) return {};
+
+    const out: {
+      topics?: string[];
+      pubsubPeers?: string[];
+      announcementSubscribers?: string[];
+    } = {};
+
+    try {
+      out.topics = node.services?.pubsub?.getTopics?.() ?? undefined;
+    } catch {
+      // ignore
+    }
+
+    try {
+      const peers = node.services?.pubsub?.getPeers?.() ?? undefined;
+      out.pubsubPeers = peers ? peers.map((p: any) => p.toString()) : undefined;
+    } catch {
+      // ignore
+    }
+
+    try {
+      const subs = node.services?.pubsub?.getSubscribers?.(ANNOUNCEMENT_TOPIC) ?? undefined;
+      out.announcementSubscribers = subs ? subs.map((p: any) => p.toString()) : undefined;
     } catch {
       // ignore
     }
@@ -635,7 +751,20 @@ export class ServiceAnnouncementsManager {
       if (this.isNoPeersSubscribedToTopicError(err)) {
         // Expected in small / bootstrap networks: no subscribers yet.
         // We'll retry on the republish timer; don't surface as an error.
-        log.info(`Skipped publish service ${id}: no peers subscribed`);
+        const ps = this.getPubsubSnapshotBestEffort();
+        const subs = ps.announcementSubscribers?.length ?? 0;
+        const pubsubPeers = ps.pubsubPeers?.length ?? 0;
+        const topics = ps.topics?.length ?? 0;
+        log.info(
+          `Skipped publish service ${id}: no peers subscribed (subs=${subs} pubsubPeers=${pubsubPeers} topics=${topics})`,
+        );
+        if (pubsubPeers > 0 || subs > 0) {
+          log.debug('announcements: pubsub snapshot (sample)', {
+            pubsubPeers: (ps.pubsubPeers ?? []).slice(0, 8),
+            subscribers: (ps.announcementSubscribers ?? []).slice(0, 8),
+            topics: (ps.topics ?? []).slice(0, 16),
+          });
+        }
 
         // Try to actively discover and dial other clients via DHT, then retry once.
         await this.discoverPeersViaDhtBestEffort('publish skipped: no subscribers');
@@ -693,7 +822,20 @@ export class ServiceAnnouncementsManager {
       log.info(`Published revocation for service: ${id}`);
     } catch (err) {
       if (this.isNoPeersSubscribedToTopicError(err)) {
-        log.info(`Skipped publish revocation for ${id}: no peers subscribed`);
+        const ps = this.getPubsubSnapshotBestEffort();
+        const subs = ps.announcementSubscribers?.length ?? 0;
+        const pubsubPeers = ps.pubsubPeers?.length ?? 0;
+        const topics = ps.topics?.length ?? 0;
+        log.info(
+          `Skipped publish revocation for ${id}: no peers subscribed (subs=${subs} pubsubPeers=${pubsubPeers} topics=${topics})`,
+        );
+        if (pubsubPeers > 0 || subs > 0) {
+          log.debug('announcements: pubsub snapshot (sample)', {
+            pubsubPeers: (ps.pubsubPeers ?? []).slice(0, 8),
+            subscribers: (ps.announcementSubscribers ?? []).slice(0, 8),
+            topics: (ps.topics ?? []).slice(0, 16),
+          });
+        }
         return;
       }
 

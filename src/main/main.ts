@@ -42,7 +42,8 @@ import {
   type ChatMessage,
   type ChatStatus,
 } from './libp2p_group_chat';
-import { ServiceAnnouncementsManager } from './service_announcements';
+// import { ServiceAnnouncementsManager } from './service_announcements'; // 已切换到 HTTP pull 模式
+import { ServiceSyncHttpManager } from './service_sync_http';
 import type {
   ServiceAnnouncementStatus,
   LocalServiceConfig,
@@ -573,8 +574,9 @@ const groupChat = new Libp2pGroupChatService((msg: ChatMessage) => {
   }
 });
 
-// 服务公告管理器
-const announcementsManager = new ServiceAnnouncementsManager();
+// 服务同步管理器（HTTP pull 模式，替代原 pubsub 方案）
+// const announcementsManager = new ServiceAnnouncementsManager(); // 旧 pubsub 实现
+const announcementsManager = new ServiceSyncHttpManager();
 
 let announcementsAutoStartAttempted = false;
 

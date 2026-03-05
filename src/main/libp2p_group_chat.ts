@@ -479,6 +479,8 @@ export class Libp2pGroupChatService {
 
   private diagTimer: NodeJS.Timeout | null = null;
 
+  private bootstrapRetryTimer: NodeJS.Timeout | null = null;
+
   private topics = new Set<string>();
 
   private onMessage?: (msg: ChatMessage) => void;
@@ -587,6 +589,70 @@ export class Libp2pGroupChatService {
     // Run once immediately, then on interval.
     void tick();
     this.diagTimer = setInterval(() => {
+      void tick();
+    }, intervalMs);
+  }
+
+  private stopBootstrapRetryTimer(): void {
+    if (this.bootstrapRetryTimer) {
+      clearInterval(this.bootstrapRetryTimer);
+      this.bootstrapRetryTimer = null;
+    }
+  }
+
+  private startBootstrapRetryTimer(node: Libp2p, pendingAddrs: string[]): void {
+    this.stopBootstrapRetryTimer();
+
+    const pending = new Set((pendingAddrs ?? []).filter((a) => (a ?? '').trim().length > 0));
+    if (pending.size === 0) return;
+
+    const intervalMs = 10_000;
+    log.info('bootstrap dial retry enabled: %d pending, interval=%dms', pending.size, intervalMs);
+
+    const tick = async () => {
+      // Stop if node was replaced/stopped.
+      if (this.node !== node) {
+        this.stopBootstrapRetryTimer();
+        return;
+      }
+
+      // If we have any connection already, stop retrying.
+      try {
+        const peers = node.getPeers?.() ?? [];
+        const conns = (node as any).getConnections?.() ?? [];
+        if ((peers?.length ?? 0) > 0 || (conns?.length ?? 0) > 0) {
+          log.info('bootstrap dial retry stopped: now connected (peers=%d conns=%d)', peers.length ?? 0, conns.length ?? 0);
+          this.stopBootstrapRetryTimer();
+          return;
+        }
+      } catch {
+        // ignore
+      }
+
+      if (pending.size === 0) {
+        this.stopBootstrapRetryTimer();
+        return;
+      }
+
+      // Retry all pending addresses; keep failures for the next tick.
+      const addrs = Array.from(pending);
+      for (const addr of addrs) {
+        try {
+          await node.dial(multiaddr(addr));
+          pending.delete(addr);
+          log.info('bootstrap dial succeeded: %s', addr);
+        } catch (err) {
+          log.warn('bootstrap dial retry failed: %s', addr, err);
+        }
+      }
+
+      if (pending.size === 0) {
+        log.info('bootstrap dial retry completed: all bootstrap peers dialed');
+        this.stopBootstrapRetryTimer();
+      }
+    };
+
+    this.bootstrapRetryTimer = setInterval(() => {
       void tick();
     }, intervalMs);
   }
@@ -947,6 +1013,7 @@ export class Libp2pGroupChatService {
     if (this.node) return this.status();
     console.log('Starting libp2p group chat service...');
     this.master = ensureMaster();
+    this.stopBootstrapRetryTimer();
     const yggdrasilIPv6Address = await getYggdrasilIPv6AddressOrThrow();
     const desiredPort = getP2pPort();
     let p2pPort = desiredPort;
@@ -995,6 +1062,13 @@ export class Libp2pGroupChatService {
           pubsub: gossipsub({
             emitSelf: false,
             globalSignaturePolicy: 'StrictSign',
+            // In tiny networks, we can be connected to a peer that *is* subscribed
+            // but subscription state hasn't propagated yet. Without this, publish()
+            // throws PublishError.NoPeersSubscribedToTopic and nothing is sent.
+            // With floodPublish enabled, we still attempt delivery to connected peers.
+            allowPublishToZeroTopicPeers: true,
+            floodPublish: true,
+            fallbackToFloodsub: true,
           }),
           ...(bootstrapMultiaddrs.length
             ? {
@@ -1099,12 +1173,18 @@ export class Libp2pGroupChatService {
     const bootstrapers = getBootstrapMultiaddrs();
     if (bootstrapers.length > 0) {
       log.info('Dialing %d bootstrap peer(s)...', bootstrapers.length);
+      const failed: string[] = [];
       for (const addr of bootstrapers) {
         try {
           await node.dial(multiaddr(addr));
         } catch (err) {
+          failed.push(addr);
           log.warn('bootstrap dial failed: %s', addr, err);
         }
+      }
+
+      if (failed.length > 0) {
+        this.startBootstrapRetryTimer(node, failed);
       }
     }
 
@@ -1239,6 +1319,7 @@ export class Libp2pGroupChatService {
     this.node = null;
     this.topics.clear();
     this.stopDiagnosticsTimer();
+    this.stopBootstrapRetryTimer();
 
     if (node) {
       try {

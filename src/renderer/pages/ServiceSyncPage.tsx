@@ -1,7 +1,8 @@
 /**
- * 服务公告页面
- * - 发布本地服务到 libp2p gossipsub
- * - 发现并展示远程服务
+ * Service discovery page (HTTP Pull mode)
+ * - Discovers remote services via DHT rendezvous + HTTP pull after libp2p direct connect
+ * - GET /services: peers pull our local services
+ * - POST /notify: receive a hint, immediately pull the caller
  */
 
 import * as React from 'react';
@@ -60,6 +61,7 @@ function ModalShell({
             className="ServiceGhostButton"
             onClick={onClose}
           >
+            {/* close */}
             关闭
           </button>
         </div>
@@ -92,7 +94,7 @@ function formatTTL(seconds: number): string {
   return `${Math.floor(seconds / 86400)} 天`;
 }
 
-export default function ServiceAnnouncementsPage() {
+export default function ServiceSyncPage() {
   const MAX_DESC_LEN = 200;
 
   const [status, setStatus] = React.useState<AnnouncementSystemStatus | null>(
@@ -110,7 +112,6 @@ export default function ServiceAnnouncementsPage() {
 
   const [showPeers, setShowPeers] = React.useState(false);
 
-  // 新增服务表单
   const [yggIPv6, setYggIPv6] = React.useState<string>('');
   const [newServiceProtocol, setNewServiceProtocol] = React.useState(
     'http' as
@@ -137,7 +138,7 @@ export default function ServiceAnnouncementsPage() {
       await navigator.clipboard.writeText(text);
     } catch {
       // eslint-disable-next-line no-alert
-      window.prompt('复制下面内容：', text);
+      window.prompt('复制以下内容：', text);
     }
   }, []);
 
@@ -157,17 +158,13 @@ export default function ServiceAnnouncementsPage() {
     if (!Number.isInteger(portNum) || portNum <= 0 || portNum > 65535) {
       return '';
     }
-
     const pathPart = normalizePath(newServicePath);
-
-    // For web-style schemes, a trailing slash is a sensible default.
     const shouldDefaultSlash =
       proto === 'http' ||
       proto === 'https' ||
       proto === 'ws' ||
       proto === 'wss';
     const finalPath = pathPart || (shouldDefaultSlash ? '/' : '');
-
     return `${proto}://[${yggIPv6}]:${portNum}${finalPath}`;
   }, [newServicePath, newServicePort, newServiceProtocol, yggIPv6]);
 
@@ -220,7 +217,7 @@ export default function ServiceAnnouncementsPage() {
     }
   }, [refreshStatus, refreshLocalServices, refreshDiscoveredServices]);
 
-  const forceRepublish = React.useCallback(async () => {
+  const forceSync = React.useCallback(async () => {
     setBusy(true);
     setError(null);
     try {
@@ -234,7 +231,6 @@ export default function ServiceAnnouncementsPage() {
   }, [refreshAll]);
 
   React.useEffect(() => {
-    // If the form changes, require a fresh confirmation.
     setPublishConfirmPending(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [computedLocalUrl, newServiceDesc]);
@@ -242,7 +238,6 @@ export default function ServiceAnnouncementsPage() {
   React.useEffect(() => {
     refreshAll();
 
-    // Auto-fill local Yggdrasil IPv6 if available.
     window.electron.ipcRenderer
       .invoke('ygg:getIPv6')
       .then((addr: unknown) => setYggIPv6(String(addr)))
@@ -250,7 +245,6 @@ export default function ServiceAnnouncementsPage() {
         // ignore
       });
 
-    // 定期刷新状态与发现的服务（避免闭包里 status 变成“永远是初始值”）
     const interval = setInterval(() => {
       refreshStatus()
         .then((st) => {
@@ -294,7 +288,7 @@ export default function ServiceAnnouncementsPage() {
     }
 
     if (desc.length > MAX_DESC_LEN) {
-      setError(`服务描述过长（最多 ${MAX_DESC_LEN} 字符）`);
+      setError(`服务描述过长（最多 ${MAX_DESC_LEN} 个字符）`);
       return null;
     }
 
@@ -334,9 +328,7 @@ export default function ServiceAnnouncementsPage() {
   const removeService = async (id: string) => {
     if (
       // eslint-disable-next-line no-alert
-      !window.confirm(
-        '确定要撤回此服务公告吗？撤回消息将广播到网络，但已发现此服务的节点可能需要一段时间才能收到撤回消息。',
-      )
+      !window.confirm('确定移除此服务记录？')
     ) {
       return;
     }
@@ -360,16 +352,20 @@ export default function ServiceAnnouncementsPage() {
     window.electron.ipcRenderer.invoke('open-external', url);
   };
 
+  const syncModeText = status?.subscribedTopic
+    ? `模式：${status.subscribedTopic}`
+    : null;
+
   let discoveredBlock: React.ReactNode;
   if (!running) {
     discoveredBlock = (
       <div className="ServiceHint">
-        公告系统未运行时不会接收远程服务；启动 Yggdrasil 后会自动启动公告后台。
+        服务同步未运行；Yggdrasil 启动后会自动启动。
       </div>
     );
   } else if (discoveredServices.length === 0) {
     discoveredBlock = (
-      <div className="ServiceHint">暂无发现的服务，请等待其他节点发布。</div>
+      <div className="ServiceHint">尚未发现服务；正在等待其他节点同步。</div>
     );
   } else {
     discoveredBlock = (
@@ -379,10 +375,10 @@ export default function ServiceAnnouncementsPage() {
             <tr>
               <th align="center">描述</th>
               <th align="center">URI</th>
-              <th align="center">Peer</th>
-              <th align="center">发布</th>
-              <th align="center">TTL</th>
-              <th align="center">接收</th>
+              <th align="center">节点</th>
+              <th align="center">发布时间</th>
+              <th align="center">有效期</th>
+              <th align="center">接收时间</th>
               <th align="center">操作</th>
             </tr>
           </thead>
@@ -402,7 +398,7 @@ export default function ServiceAnnouncementsPage() {
                     style={{ width: 90 }}
                     onClick={() => copyToClipboard(svc.url)}
                   >
-                    复制URL
+                    复制 URL
                   </button>
                   <button
                     type="button"
@@ -425,16 +421,17 @@ export default function ServiceAnnouncementsPage() {
     <div className="PageRoot">
       <div className="PageTopBar">
         <Link className="BackLink" to="/">
-          ← 返回
+          {/* back */}
+          &larr; 返回
         </Link>
-        <div className="PageTitle">服务公告</div>
+        <div className="PageTitle">服务发现</div>
       </div>
 
       <div className="PageBody">
         <div className="StatusControls">
           <div className="StatusSummary">
             状态：{running ? '运行中' : '未启动'}
-            {status?.peerId ? `，Peer：${status.peerId}` : ''}
+            {status?.peerId ? `，节点：${status.peerId}` : ''}
           </div>
           <button
             type="button"
@@ -447,21 +444,21 @@ export default function ServiceAnnouncementsPage() {
           <button
             type="button"
             className="ServiceGhostButton"
-            onClick={forceRepublish}
+            onClick={forceSync}
             disabled={busy}
             style={{ marginLeft: 8, width: 140 }}
-            title="强制立即重发一次所有本机服务公告（即使上次因为无订阅者而跳过）"
+            title="通过 DHT 重新发现节点并立即拉取服务列表"
           >
-            立即重发公告
+            立即同步
           </button>
         </div>
 
         {status?.running ? (
           <div className="ServiceHint">
             <div>
-              Topic：{status.subscribedTopic || '（未订阅）'}
+              {syncModeText}
               {typeof status.peers?.length === 'number'
-                ? `，已知 peers：${status.peers.length}`
+                ? `，节点数：${status.peers.length}`
                 : ''}
               {typeof status.peerConnections?.length === 'number'
                 ? `，活跃连接：${status.peerConnections.length}`
@@ -481,13 +478,13 @@ export default function ServiceAnnouncementsPage() {
         <ModalShell
           open={showPeers}
           onClose={() => setShowPeers(false)}
-          title="公告系统连接详情"
+          title="服务同步连接详情"
         >
           {status?.running ? (
             <div className="PageBody" style={{ margin: 0, userSelect: 'text' }}>
               {status.listenAddrs && status.listenAddrs.length > 0 ? (
                 <div style={{ wordBreak: 'break-all' }}>
-                  Listen：{status.listenAddrs.join(' , ')}
+                  监听：{status.listenAddrs.join(' , ')}
                 </div>
               ) : null}
 
@@ -510,21 +507,21 @@ export default function ServiceAnnouncementsPage() {
                 </div>
               ) : (
                 <div style={{ marginTop: 10 }}>
-                  当前没有活跃连接；在没有任何连接的情况下，gossipsub
-                  不会收到其他节点的公告。
+                  没有活跃连接；没有连接将无法发现服务。
                 </div>
               )}
             </div>
           ) : (
-            <div className="ServiceHint">公告系统未运行</div>
+            <div className="ServiceHint">服务同步未运行</div>
           )}
         </ModalShell>
 
         <div className="ServiceHint">
-          公告系统会订阅统一 Topic，接收其他客户端发布的服务信息；
-          本机填写并“发布”后，会自动周期性重发。
+          启动后，会通过 DHT 发现邻居，并在建立 libp2p 直连后通过 HTTP
+          拉取服务列表。新连接会自动同步；可使用 &quot;立即同步&quot;
+          强制立即刷新。
           <div style={{ marginTop: 6 }}>
-            公告后台会在 Yggdrasil 运行后自动启动，无需手动点击“启动”。
+            Yggdrasil 运行后会自动启动，无需手动操作。
           </div>
         </div>
 
@@ -537,8 +534,7 @@ export default function ServiceAnnouncementsPage() {
 
           <div className="ChatStack">
             <div className="ChatTinyHint">
-              本机 Yggdrasil IPv6：
-              {yggIPv6 || '（未获取；请先启动 Yggdrasil）'}
+              本地 Yggdrasil IPv6：{yggIPv6 || '（不可用，请先启动 Yggdrasil）'}
             </div>
 
             <div className="ChatRow">
@@ -555,8 +551,8 @@ export default function ServiceAnnouncementsPage() {
               >
                 <option value="http">http</option>
                 <option value="https">https</option>
-                <option value="ws">websocket (ws)</option>
-                <option value="wss">websocket (wss)</option>
+                <option value="ws">WebSocket (ws)</option>
+                <option value="wss">WebSocket (wss)</option>
                 <option value="tcp">tcp</option>
                 <option value="udp">udp</option>
                 <option value="quic">quic</option>
@@ -588,14 +584,14 @@ export default function ServiceAnnouncementsPage() {
               id="newServiceDesc"
               type="text"
               className="ChatInput"
-              placeholder={`服务描述（最多 ${MAX_DESC_LEN} 字符）`}
+              placeholder={`服务描述（最多 ${MAX_DESC_LEN} 个字符）`}
               value={newServiceDesc}
               onChange={(e) => setNewServiceDesc(e.target.value)}
               disabled={busy}
               maxLength={MAX_DESC_LEN}
             />
             <div className="ChatTinyHint">
-              URL：{computedLocalUrl || '（请输入协议与端口）'}
+              URL：{computedLocalUrl || '（请输入协议和端口）'}
               <span style={{ marginLeft: 12 }}>
                 {newServiceDesc.length}/{MAX_DESC_LEN}
               </span>
@@ -610,7 +606,7 @@ export default function ServiceAnnouncementsPage() {
                     onClick={confirmPublish}
                     disabled={busy}
                   >
-                    {busy ? '发布中…' : '确认发布'}
+                    {busy ? '发布中...' : '确认发布'}
                   </button>
                   <button
                     type="button"
@@ -633,7 +629,7 @@ export default function ServiceAnnouncementsPage() {
                 </button>
               )}
               <div className="ChatTinyHint">
-                发布后会自动签名并广播（支持撤回）。
+                其他节点在从我们这里拉取时会收到该服务。
               </div>
             </div>
           </div>
@@ -642,12 +638,12 @@ export default function ServiceAnnouncementsPage() {
         <div className="ServiceSection">
           <div className="ServiceHeader">
             <div className="ServiceTitle">
-              本机发布的服务（{localServices.length}）
+              本地已发布服务（{localServices.length}）
             </div>
           </div>
 
           {localServices.length === 0 ? (
-            <div className="ServiceHint">暂无本地发布的服务。</div>
+            <div className="ServiceHint">暂无本地已发布服务。</div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -655,8 +651,8 @@ export default function ServiceAnnouncementsPage() {
                   <tr>
                     <th align="left">描述</th>
                     <th align="left">URI</th>
-                    <th align="left">seq</th>
-                    <th align="left">最后发布</th>
+                    <th align="left">序号</th>
+                    <th align="left">最后发布时间</th>
                     <th align="left">操作</th>
                   </tr>
                 </thead>
@@ -679,7 +675,7 @@ export default function ServiceAnnouncementsPage() {
                           disabled={busy}
                           style={{ marginLeft: 8, width: 90 }}
                         >
-                          复制URL
+                          复制 URL
                         </button>
                         <button
                           type="button"
@@ -697,7 +693,7 @@ export default function ServiceAnnouncementsPage() {
                           disabled={busy}
                           style={{ marginLeft: 8 }}
                         >
-                          撤回
+                          移除
                         </button>
                       </td>
                     </tr>
@@ -711,7 +707,7 @@ export default function ServiceAnnouncementsPage() {
         <div className="ServiceSection">
           <div className="ServiceHeader">
             <div className="ServiceTitle">
-              发现的其他设备服务（{discoveredServices.length}）
+              发现的远程服务（{discoveredServices.length}）
             </div>
           </div>
 
