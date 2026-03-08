@@ -130,6 +130,7 @@ export default function ChatPage() {
           )) as ChatStatus;
           if (!chatSt.running) {
             try {
+              console.log('Yggdrasil is running; UI is triggering starting chat service...');
               const res = (await window.electron.ipcRenderer.invoke(
                 'chat:start',
               )) as ChatStatus;

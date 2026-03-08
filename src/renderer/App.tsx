@@ -8,8 +8,8 @@ import ServiceCard from './components/ServiceCard/ServiceCard';
 import ChatPage from './pages/ChatPage';
 import SettingsPage from './pages/SettingsPage';
 import YggWebsiteIndexPage from './pages/YggWebsiteIndexPage';
-// import ServiceAnnouncementsPage from './pages/ServiceAnnouncementsPage'; // 已切换到 HTTP pull 模式
-import ServiceSyncPage from './pages/ServiceSyncPage';
+// import ServiceAnnouncementsPage from './pages/ServiceAnnouncementsPage';
+// import ServiceSyncPage from './pages/ServiceSyncPage';
 import PeersPage from './pages/PeersPage';
 import StatusPage from './pages/StatusPage';
 import { FEATURES } from './features/flags';
@@ -382,12 +382,12 @@ function Home() {
             disabled={!yggRunning}
           />
         ) : null}
-        <LauncherTileLink
+        {/* <LauncherTileLink
           to="/announcements"
           label="服务公告"
           icon="📢"
           disabled={!yggRunning}
-        />
+        /> */}
         <LauncherTileLink
           to="/settings"
           label="软件设置"
@@ -437,7 +437,7 @@ export default function App() {
         <Route path="/ygg" element={<YggWebsiteIndexPage />} />
         {FEATURES.chat && <Route path="/irc" element={<ChatPage />} />}
         {/* <Route path="/announcements" element={<ServiceAnnouncementsPage />} /> */}
-        <Route path="/announcements" element={<ServiceSyncPage />} />
+        {/* <Route path="/announcements" element={<ServiceSyncPage />} /> */}
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/status" element={<StatusPage />} />
         <Route path="/peers" element={<PeersPage embedded={false} />} />

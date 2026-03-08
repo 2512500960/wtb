@@ -19,6 +19,12 @@ export type WtbConfigV1 = {
       bootstrapIntervalMs?: number;
     };
   };
+
+  /** Optional: yggdrasil-related settings */
+  yggdrasil?: {
+    /** Optional: list of public peer URLs to write into yggdrasil.conf `Peers` */
+    publicPeers?: string[];
+  };
 };
 
 const CONFIG_FILE_NAME = 'wtb.conf';
@@ -119,6 +125,30 @@ const defaultConfigV1 = (): WtbConfigV1 => {
   };
 };
 
+const normalizeStringList = (
+  raw: unknown,
+  options?: { max?: number },
+): string[] | undefined => {
+  if (!Array.isArray(raw)) return undefined;
+  const max =
+    options?.max && Number.isFinite(options.max) && options.max > 0
+      ? Math.floor(options.max)
+      : undefined;
+
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const v of raw) {
+    if (typeof v !== 'string') continue;
+    const s = v.trim();
+    if (!s) continue;
+    if (seen.has(s)) continue;
+    out.push(s);
+    seen.add(s);
+    if (max && out.length >= max) break;
+  }
+  return out.length ? out : undefined;
+};
+
 const normalizeConfigV1 = (raw: unknown): WtbConfigV1 => {
   const def = defaultConfigV1();
   const obj = (raw && typeof raw === 'object' ? (raw as any) : {}) as any;
@@ -149,6 +179,10 @@ const normalizeConfigV1 = (raw: unknown): WtbConfigV1 => {
       ? Math.floor(intervalNum)
       : def.p2p.discovery?.bootstrapIntervalMs;
 
+  const yggObj =
+    obj?.yggdrasil && typeof obj.yggdrasil === 'object' ? obj.yggdrasil : null;
+  const publicPeers = normalizeStringList(yggObj?.publicPeers, { max: 10 });
+
   return {
     version,
     p2p: {
@@ -158,6 +192,7 @@ const normalizeConfigV1 = (raw: unknown): WtbConfigV1 => {
         bootstrapIntervalMs,
       },
     },
+    yggdrasil: publicPeers ? { publicPeers } : undefined,
   };
 };
 
@@ -171,6 +206,8 @@ const renderYamlWithHeader = (cfg: WtbConfigV1): string => {
     + '#   示例：/ip6/<ygg-ip>/tcp/<port>/p2p/<peerId>\n'
     + '# - p2p.discovery.enableDht：是否启用 kad-dht（用于更自动的发现/路由）\n'
     + '# - p2p.discovery.bootstrapIntervalMs：bootstrap 发现轮询间隔（毫秒）\n'
+    + '# - yggdrasil.publicPeers：可选。Yggdrasil 公共 peer 列表（URL），将写入 yggdrasil.conf 的 Peers。\n'
+    + '#   - 支持 1~10 个；不填则保持现有随机 peers 逻辑。\n'
     + '#\n';
 
   const yamlBody = YAML.stringify(cfg);
@@ -236,4 +273,48 @@ export const getWtbConfig = (): WtbConfigV1 => {
 export const reloadWtbConfig = (): WtbConfigV1 => {
   cachedConfig = null;
   return loadOrCreateWtbConfig();
+};
+
+export const setWtbYggdrasilPublicPeers = (peers: string[] | null): WtbConfigV1 => {
+  const cfgPath = getWtbConfigPath();
+  let parsed: any = {};
+
+  try {
+    if (fs.existsSync(cfgPath)) {
+      const rawText = fs.readFileSync(cfgPath, 'utf8');
+      parsed = YAML.parse(rawText) || {};
+    }
+  } catch {
+    parsed = {};
+  }
+
+  if (!parsed || typeof parsed !== 'object') parsed = {};
+  if (!parsed.yggdrasil || typeof parsed.yggdrasil !== 'object') {
+    parsed.yggdrasil = {};
+  }
+
+  const normalizedPeers = normalizeStringList(peers, { max: 10 });
+  if (normalizedPeers && normalizedPeers.length) {
+    parsed.yggdrasil.publicPeers = normalizedPeers;
+  } else {
+    // Remove the key to keep initial/default behavior intact.
+    try {
+      delete parsed.yggdrasil.publicPeers;
+    } catch {
+      // ignore
+    }
+  }
+
+  // If the object becomes empty, remove it as well.
+  try {
+    const keys = Object.keys(parsed.yggdrasil || {});
+    if (!keys.length) delete parsed.yggdrasil;
+  } catch {
+    // ignore
+  }
+
+  const cfg = normalizeConfigV1(parsed);
+  writeConfigAtomic(cfgPath, renderYamlWithHeader(cfg));
+  cachedConfig = cfg;
+  return cfg;
 };

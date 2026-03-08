@@ -150,13 +150,7 @@ import log from 'electron-log';
 
 import { getWtbDataDir } from './wtb_config';
 
-const u8FromString = (input: string): Uint8Array => {
-  return Buffer.from(input, 'utf8');
-};
-
-const u8ToString = (input: Uint8Array): string => {
-  return Buffer.from(input).toString('utf8');
-};
+import { u8FromString, u8ToString } from './libp2p_node';
 
 import type {
   ServiceAnnouncementPayload,

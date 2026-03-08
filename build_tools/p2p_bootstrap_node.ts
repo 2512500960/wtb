@@ -24,6 +24,7 @@ import { kadDHT } from '@libp2p/kad-dht';
 import { gossipsub } from '@chainsafe/libp2p-gossipsub';
 import { ping } from '@libp2p/ping';
 import { bootstrap } from '@libp2p/bootstrap';
+import { attachWtbHelloHandler } from '../src/main/libp2p_node';
 const envStr = (name: string, def: string = ''): string => {
   const v = (process.env[name] || '').trim();
   return v || def;
@@ -78,6 +79,9 @@ async function main(): Promise<void> {
         : {}),
     },
   });
+
+  // Allow WTB clients in strict mode to verify this peer.
+  attachWtbHelloHandler(node as any);
 
   await node.start();
 

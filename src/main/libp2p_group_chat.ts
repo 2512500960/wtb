@@ -4,24 +4,15 @@ import crypto from 'crypto';
 import net from 'net';
 import log from 'electron-log';
 import { app } from 'electron';
-import { createLibp2p, type Libp2p } from 'libp2p';
-import { tcp } from '@libp2p/tcp';
-import { noise } from '@chainsafe/libp2p-noise';
-import { yamux } from '@chainsafe/libp2p-yamux';
-import { identify } from '@libp2p/identify';
-import { gossipsub } from '@chainsafe/libp2p-gossipsub';
-import { ping } from '@libp2p/ping';
 import { multiaddr } from '@multiformats/multiaddr';
-import { kadDHT } from '@libp2p/kad-dht';
-import { bootstrap } from '@libp2p/bootstrap';
 
 import { getWtbConfig } from './wtb_config';
 import { webSockets } from '@libp2p/websockets';
-import {
-  fromString as u8FromString,
-  toString as u8ToString,
-} from 'uint8arrays';
+import { createWtbLibp2pNode, u8FromString, u8ToString } from './libp2p_node';
 import { getYggdrasilIPv6AddressOrThrow } from './main';
+
+// libp2p 类型（避免 ESM/CJS 导入问题）
+type Libp2p = any;
 
 const envInt = (name: string, def: number): number => {
   const raw = (process.env[name] ?? '').trim();
@@ -511,7 +502,7 @@ export class Libp2pGroupChatService {
 
     const tick = async () => {
       try {
-        const connectedPeers = node.getPeers().map((p) => p.toString());
+        const connectedPeers = node.getPeers().map((p: any) => p.toString());
         const connectionCount =
           (node as any).getConnections?.()?.length ?? undefined;
 
@@ -642,7 +633,7 @@ export class Libp2pGroupChatService {
           pending.delete(addr);
           log.info('bootstrap dial succeeded: %s', addr);
         } catch (err) {
-          log.warn('bootstrap dial retry failed: %s', addr, err);
+          // log.warn('bootstrap dial retry failed: %s', addr, err);
         }
       }
 
@@ -1030,101 +1021,16 @@ export class Libp2pGroupChatService {
       // console.log('Libp2p will listen on', yggdrasilIPv6AddressMA.toString());
       const bootstrapMultiaddrs = getBootstrapMultiaddrs();
       const discovery = getDiscoveryOptions();
+      const strictWtbPeers = envBool('WTB_P2P_STRICT_WTB_PEERS', true);
 
-      const node = await createLibp2p({
-        // addresses: {
-        //   listen: ['/ip6/::/tcp/0'],
-        // },
-        // addresses: {
-        //   listen: [yggdrasilIPv6AddressMA.toString(),'/ip4/0.0.0.0/tcp/0'],
-        // },
-        addresses: {
-          // Bind to a specific interface address (Yggdrasil) so we don't advertise loopback
-          // or other host-local/private addresses from unrelated interfaces.
-          listen: [yggdrasilIPv6AddressMA.toString()],
-          announce: [yggdrasilIPv6AddressMA.toString()],
-        },
-        transports: [tcp()],
-
-        connectionEncrypters: [noise()],
-        streamMuxers: [yamux()],
-        peerDiscovery: bootstrapMultiaddrs.length
-          ? [
-              bootstrap({
-                list: bootstrapMultiaddrs,
-                interval: discovery.bootstrapIntervalMs,
-              }),
-            ]
-          : [],
-        services: {
-          ping: ping(),
-          identify: identify(),
-          pubsub: gossipsub({
-            emitSelf: false,
-            globalSignaturePolicy: 'StrictSign',
-            // In tiny networks, we can be connected to a peer that *is* subscribed
-            // but subscription state hasn't propagated yet. Without this, publish()
-            // throws PublishError.NoPeersSubscribedToTopic and nothing is sent.
-            // With floodPublish enabled, we still attempt delivery to connected peers.
-            allowPublishToZeroTopicPeers: true,
-            floodPublish: true,
-            fallbackToFloodsub: true,
-          }),
-          ...(bootstrapMultiaddrs.length
-            ? {
-                bootstrap: bootstrap({
-                  list: bootstrapMultiaddrs,
-                  interval: discovery.bootstrapIntervalMs,
-                }),
-              }
-            : {}),
-          ...(discovery.enableDht
-            ? {
-                dht: kadDHT({
-                  // Default to client mode so regular clients don't become routing infrastructure.
-                  clientMode: true,
-                }),
-              }
-            : {}),
-        },
+      return await createWtbLibp2pNode({
+        listenAddr: yggdrasilIPv6AddressMA.toString(),
+        announceAddr: yggdrasilIPv6AddressMA.toString(),
+        bootstrapMultiaddrs,
+        bootstrapIntervalMs: discovery.bootstrapIntervalMs,
+        enableDht: discovery.enableDht,
+        strictWtbPeers,
       });
-
-      // Best-effort: auto-dial peers as they are discovered.
-      // This is intentionally conservative; dial failures are expected.
-      node.addEventListener('peer:discovery', (evt: any) => {
-        try {
-          const detail = evt?.detail;
-          const peerIdStr =
-            detail?.id?.toString?.() ?? String(detail?.id ?? '');
-          const addrs = Array.isArray(detail?.multiaddrs)
-            ? detail.multiaddrs.map((ma: any) => ma.toString())
-            : [];
-          // log.info('peer discovered: %s %o', peerIdStr, addrs);
-
-          // Try dial by peer id (if peerStore has addrs) else dial the first multiaddr.
-          Promise.resolve()
-            .then(async () => {
-              if (peerIdStr) {
-                try {
-                  await (node as any).dial?.(detail.id);
-                  return;
-                } catch {
-                  // fall back
-                }
-              }
-              if (addrs.length > 0) {
-                await (node as any).dial?.(multiaddr(addrs[0]));
-              }
-            })
-            .catch(() => {
-              // ignore
-            });
-        } catch {
-          // ignore
-        }
-      });
-
-      return node;
     };
 
     let node = await makeNode(p2pPort);
@@ -1155,7 +1061,7 @@ export class Libp2pGroupChatService {
       }
     }
 
-    const startedListenAddrs = node.getMultiaddrs().map((ma) => ma.toString());
+    const startedListenAddrs = node.getMultiaddrs().map((ma: any) => ma.toString());
     log.info(
       'Libp2p node started with peerId %s, listening on %o',
       node.peerId.toString(),
@@ -1355,8 +1261,8 @@ export class Libp2pGroupChatService {
     //   peers: node.getPeers().map((p) => p.toString()),
     //   topics: Array.from(this.topics),
     // });
-    const listenAddrs = node.getMultiaddrs().map((ma) => ma.toString());
-    const peers = node.getPeers().map((p) => p.toString());
+    const listenAddrs = node.getMultiaddrs().map((ma: any) => ma.toString());
+    const peers = node.getPeers().map((p: any) => p.toString());
 
     // Build a map: peerId -> set of remote multiaddrs for all active connections
     const peerConnMap = new Map<string, Set<string>>();

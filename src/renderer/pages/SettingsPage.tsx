@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 
 import { FEATURES } from '../features/flags';
 import ChatSettingsSection from './settings/ChatSettingsSection';
+import YggdrasilPeersSettingsSection from './settings/YggdrasilPeersSettingsSection';
 
 export default function SettingsPage() {
   return (
@@ -15,11 +16,10 @@ export default function SettingsPage() {
       </div>
 
       <div className="PageBody">
-        {FEATURES.chat ? (
-          <ChatSettingsSection />
-        ) : (
-          <div className="StatusEmpty">暂无可设置项</div>
-        )}
+        <div className="StatusBlocks">
+          <YggdrasilPeersSettingsSection />
+          {FEATURES.chat ? <ChatSettingsSection /> : null}
+        </div>
       </div>
     </div>
   );

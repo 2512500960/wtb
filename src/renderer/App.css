@@ -143,6 +143,82 @@ body {
   opacity: 0.9;
   line-height: 1.4;
 }
+.PeerSelectList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.PeerSelectItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+.PeerSelectAddr {
+  word-break: break-all;
+}
+.PeerSelectMeta {
+  margin-top: 3px;
+  font-size: 11px;
+  opacity: 0.85;
+  font-weight: 700;
+}
+
+.PeerSelectTable {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.PeerSelectTh {
+  text-align: left;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.18);
+  position: sticky;
+  top: 0;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.PeerSelectTd {
+  padding: 8px 10px;
+  vertical-align: top;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 12px;
+  opacity: 0.96;
+}
+
+.PeerSelectTdCheck {
+  width: 46px;
+}
+
+.PeerSelectTdAddr {
+  width: 46%;
+}
+
+.PeerSelectAddrLabel {
+  display: inline-block;
+  cursor: pointer;
+  user-select: text;
+  word-break: break-all;
+}
+
+.PeerSelectRegionRow {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.PeerSelectRegionCell {
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 900;
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.PeerSelectRow.isChecked {
+  background: rgba(0, 0, 0, 0.12);
+}
 
 .ServiceDot {
   width: 10px;
@@ -366,6 +442,7 @@ body {
 
 .StatusBlocks {
   display: flex;
+  user-select: text;
   flex-direction: column;
   gap: 12px;
 }
