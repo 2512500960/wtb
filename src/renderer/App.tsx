@@ -3,11 +3,10 @@ import { MemoryRouter as Router, Routes, Route } from 'react-router-dom';
 import './App.css';
 import { ServiceName, ServiceStatus } from './types/services';
 import LauncherTileLink from './components/Launcher/LauncherTileLink';
-import LauncherTileExternalLink from './components/Launcher/LauncherTileExternalLink';
 import ServiceCard from './components/ServiceCard/ServiceCard';
 import ChatPage from './pages/ChatPage';
 import SettingsPage from './pages/SettingsPage';
-import YggWebsiteIndexPage from './pages/YggWebsiteIndexPage';
+// import YggWebsiteIndexPage from './pages/YggWebsiteIndexPage';
 // import ServiceAnnouncementsPage from './pages/ServiceAnnouncementsPage';
 // import ServiceSyncPage from './pages/ServiceSyncPage';
 import PeersPage from './pages/PeersPage';
@@ -16,6 +15,10 @@ import { FEATURES } from './features/flags';
 import type { YggdrasilCtlResult } from './types/yggdrasilctl';
 
 const YGG_WEBSITE_INDEX_URL = 'http://[21e:a51c:885b:7db0:166e:927:98cd:d186]/';
+
+// 临时：弃用内置的 YggWebsiteIndexPage，改为在 WTB 内弹窗打开索引站点
+const YGG_WEBSITE_INDEX_IN_APP_URL =
+  'http://[200:5948:48e2:97e3:8afb:40aa:b3ac:4d94]/';
 
 const YGG_MINI_WIKI_URL =
   'http://[200:85b:60c4:e7b5:c33b:959f:9b52:6783]/?lang=zh';
@@ -95,6 +98,14 @@ function Home() {
       window.electron.ipcRenderer.invoke('open-external', url);
     } catch {
       // Fallback to external browser
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+  }, []);
+
+  const openInApp = React.useCallback((url: string) => {
+    try {
+      window.electron.ipcRenderer.invoke('open-in-app', url);
+    } catch {
       window.open(url, '_blank', 'noopener,noreferrer');
     }
   }, []);
@@ -319,25 +330,65 @@ function Home() {
       </ModalShell>
 
       <div className="LauncherGrid">
-        <LauncherTileExternalLink
-          href={YGG_WEBSITE_INDEX_URL}
-          label="Ygg 网站索引"
-          icon="🌐"
+        <button
+          className={yggRunning ? 'LauncherTile' : 'LauncherTile isDisabled'}
+          type="button"
+          onClick={() => {
+            if (!yggRunning) return;
+            openInApp(YGG_WEBSITE_INDEX_URL);
+          }}
+          aria-label="Ygg 网站索引"
           disabled={!yggRunning}
-        />
+          title={!yggRunning ? '需要先启动 Yggdrasil 服务' : undefined}
+        >
+          <div className="LauncherIcon" aria-hidden>
+            🌐
+          </div>
+          <div className="LauncherLabel">Ygg 网站索引</div>
+          {!yggRunning ? (
+            <div className="LauncherHint">需要先启动 Yggdrasil</div>
+          ) : null}
+        </button>
 
-        <LauncherTileExternalLink
-          href={YGG_MINI_WIKI_URL}
-          label="Mini 维基百科"
-          icon="📚"
+        <button
+          className={yggRunning ? 'LauncherTile' : 'LauncherTile isDisabled'}
+          type="button"
+          onClick={() => {
+            if (!yggRunning) return;
+            openInApp(YGG_MINI_WIKI_URL);
+          }}
+          aria-label="Mini 维基百科"
           disabled={!yggRunning}
-        />
-        <LauncherTileLink
-          to="/ygg"
-          label="其他网站索引"
-          icon="🧭"
+          title={!yggRunning ? '需要先启动 Yggdrasil 服务' : undefined}
+        >
+          <div className="LauncherIcon" aria-hidden>
+            📚
+          </div>
+          <div className="LauncherLabel">Mini 维基百科</div>
+          {!yggRunning ? (
+            <div className="LauncherHint">需要先启动 Yggdrasil</div>
+          ) : null}
+        </button>
+
+        <button
+          className={yggRunning ? 'LauncherTile' : 'LauncherTile isDisabled'}
+          type="button"
+          onClick={() => {
+            if (!yggRunning) return;
+            openInApp(YGG_WEBSITE_INDEX_IN_APP_URL);
+          }}
+          aria-label="其他网站索引"
           disabled={!yggRunning}
-        />
+          title={!yggRunning ? '需要先启动 Yggdrasil 服务' : undefined}
+        >
+          <div className="LauncherIcon" aria-hidden>
+            🧭
+          </div>
+          <div className="LauncherLabel">其他网站索引</div>
+          {!yggRunning ? (
+            <div className="LauncherHint">需要先启动 Yggdrasil</div>
+          ) : null}
+        </button>
 
         <button
           className="LauncherTile"
@@ -434,7 +485,8 @@ export default function App() {
     <Router>
       <Routes>
         <Route path="/" element={<Home />} />
-        <Route path="/ygg" element={<YggWebsiteIndexPage />} />
+        {/* 临时弃用：保留文件但不再挂载路由 */}
+        {/* <Route path="/ygg" element={<YggWebsiteIndexPage />} /> */}
         {FEATURES.chat && <Route path="/irc" element={<ChatPage />} />}
         {/* <Route path="/announcements" element={<ServiceAnnouncementsPage />} /> */}
         {/* <Route path="/announcements" element={<ServiceSyncPage />} /> */}

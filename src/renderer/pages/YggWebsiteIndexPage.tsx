@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 type IndexLoadResult =
   | {
       ok: true;
-      verified: true;
+      verified: boolean;
       sourceUrl: string;
       data: unknown;
     }
@@ -18,6 +18,22 @@ type IndexItem = Record<string, unknown>;
 const pickString = (v: unknown): string => (typeof v === 'string' ? v : '');
 const pickNumber = (v: unknown): number | null =>
   typeof v === 'number' && Number.isFinite(v) ? v : null;
+const pickBoolean = (v: unknown): boolean | null =>
+  typeof v === 'boolean' ? v : null;
+
+const formatMaybeIsoUtc = (iso: string): string => {
+  const s = (iso ?? '').trim();
+  if (!s) return '';
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return s;
+  return d.toLocaleString();
+};
+
+const readGeneratedAt = (data: unknown): string => {
+  if (!data || typeof data !== 'object') return '';
+  const obj = data as Record<string, unknown>;
+  return pickString(obj.generatedAt) || pickString(obj.generated_at);
+};
 
 const readIndexArray = (data: unknown): IndexItem[] => {
   if (Array.isArray(data)) {
@@ -38,7 +54,9 @@ const readIndexArray = (data: unknown): IndexItem[] => {
           ),
         );
         obj.payloadDecoded = payloadDecoded;
-      } catch {}
+      } catch {
+        // ignore decode errors
+      }
     }
   }
   return [];
@@ -49,9 +67,12 @@ const normalizeItem = (
   idx: number,
 ): {
   id: string;
+  title: string;
+  category: string;
   url: string;
   desc: string;
   notice: string;
+  onlineText: string;
 } => {
   const idRaw =
     item.id ??
@@ -71,6 +92,19 @@ const normalizeItem = (
     pickString(item['地址']) ||
     pickString(item['链接']);
 
+  const title =
+    pickString(item.title) ||
+    pickString(item.name) ||
+    pickString(item.label) ||
+    pickString(item['标题']) ||
+    pickString(item['名称']);
+
+  const category =
+    pickString(item.category_name) ||
+    pickString(item.category) ||
+    pickString(item['分类']) ||
+    pickString(item['类别']);
+
   const desc =
     pickString(item.desc) ||
     pickString(item.description) ||
@@ -84,13 +118,38 @@ const normalizeItem = (
     pickString(item['公告']) ||
     pickString(item['通知']);
 
-  return { id, url, desc, notice };
+  const isOnline =
+    pickBoolean(item.is_online) ??
+    pickBoolean(item.isOnline) ??
+    pickBoolean(item.online) ??
+    pickBoolean(item['在线']);
+  const lastChecked =
+    pickString(item.last_checked_utc) ||
+    pickString(item.lastCheckedUtc) ||
+    pickString(item.last_checked) ||
+    pickString(item['最后检查']);
+  const onlineText =
+    isOnline == null
+      ? '—'
+      : `${isOnline ? '在线' : '离线'}${lastChecked ? `（${formatMaybeIsoUtc(lastChecked)}）` : ''}`;
+
+  return {
+    id,
+    title: title || url || '—',
+    category: category || '—',
+    url,
+    desc,
+    notice,
+    onlineText,
+  };
 };
 
 export default function YggWebsiteIndexPage() {
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [sourceUrl, setSourceUrl] = React.useState<string>('');
+  const [generatedAt, setGeneratedAt] = React.useState<string>('');
+  const [verified, setVerified] = React.useState<boolean | null>(null);
   const [items, setItems] = React.useState<IndexItem[]>([]);
   const [query, setQuery] = React.useState('');
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -117,6 +176,8 @@ export default function YggWebsiteIndexPage() {
       }
       if ('ok' in res && res.ok === true) {
         setSourceUrl(res.sourceUrl);
+        setGeneratedAt(readGeneratedAt(res.data));
+        setVerified(Boolean(res.verified));
         setItems(readIndexArray(res.data));
         return;
       }
@@ -127,6 +188,8 @@ export default function YggWebsiteIndexPage() {
     } catch (e) {
       setItems([]);
       setSourceUrl('');
+      setGeneratedAt('');
+      setVerified(null);
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
@@ -163,12 +226,21 @@ export default function YggWebsiteIndexPage() {
         <div className="PageTitle">功能网站索引</div>
       </div>
 
-      <div className="PageBody">
+      <div className="PageBody" style={{ userSelect: 'text' }}>
         <div className="StatusControls">
           <div className="StatusSummary">
-            {busy
-              ? '加载中…'
-              : `共 ${items.length || 0} 条${sourceUrl ? `（${sourceUrl}）` : ''}`}
+            {busy ? (
+              '加载中…'
+            ) : (
+              <>
+                {`共 ${items.length || 0} 条`}
+                {generatedAt
+                  ? `（更新时间：${formatMaybeIsoUtc(generatedAt)}）`
+                  : ''}
+                {sourceUrl ? `（${sourceUrl}）` : ''}
+                {verified === false ? '（未验签）' : ''}
+              </>
+            )}
           </div>
           <button
             type="button"
@@ -186,7 +258,7 @@ export default function YggWebsiteIndexPage() {
             ref={searchInputRef}
             type="text"
             className="WebsiteIndexSearchInput"
-            placeholder="按 Ctrl+F 快速定位，支持在 # / URL / 说明 / 公告 中模糊匹配"
+            placeholder="按 Ctrl+F 快速定位，支持在 # / 标题 / 分类 / URL / 说明 / 公告 中模糊匹配"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -212,8 +284,11 @@ export default function YggWebsiteIndexPage() {
             <thead>
               <tr>
                 <th className="WebsiteIndexHeadCell WebsiteIndexId">#</th>
+                <th className="WebsiteIndexHeadCell">标题</th>
+                <th className="WebsiteIndexHeadCell">分类</th>
                 <th className="WebsiteIndexHeadCell">URL</th>
                 <th className="WebsiteIndexHeadCell">说明</th>
+                <th className="WebsiteIndexHeadCell">状态</th>
                 <th className="WebsiteIndexHeadCell">公告</th>
                 <th className="WebsiteIndexHeadCell WebsiteIndexActions">
                   操作
@@ -226,7 +301,7 @@ export default function YggWebsiteIndexPage() {
                 const q = query.trim().toLowerCase();
                 if (
                   q &&
-                  ![n.id, n.url, n.desc, n.notice]
+                  ![n.id, n.title, n.category, n.url, n.desc, n.notice]
                     .join('\n')
                     .toLowerCase()
                     .includes(q)
@@ -236,12 +311,15 @@ export default function YggWebsiteIndexPage() {
                 return (
                   <tr key={n.id}>
                     <td className="WebsiteIndexCell WebsiteIndexId">#{n.id}</td>
+                    <td className="WebsiteIndexCell">{n.title || '—'}</td>
+                    <td className="WebsiteIndexCell">{n.category || '—'}</td>
                     <td className="WebsiteIndexCell WebsiteIndexUrl">
                       <div className="WebsiteIndexUrlText">{n.url || '—'}</div>
                     </td>
                     <td className="WebsiteIndexCell WebsiteIndexDesc">
                       {n.desc || '—'}
                     </td>
+                    <td className="WebsiteIndexCell">{n.onlineText}</td>
                     <td className="WebsiteIndexCell WebsiteIndexNotice">
                       {n.notice || '—'}
                     </td>

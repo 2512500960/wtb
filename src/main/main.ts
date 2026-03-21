@@ -124,7 +124,7 @@ const elementOpenSockets = new Set<Socket>();
 let elementRootDir: string | null = null;
 
 const YGG_WEBSITE_INDEX_DATA_URL =
-  'http://[202:8467:9fa8:c35a:ef47:861d:fdbd:4f1b]:8137/index.json';
+  'http://[200:5948:48e2:97e3:8afb:40aa:b3ac:4d94]:5000/index.json';
 
 type SignedWebsiteIndexEnvelope = {
   payload?: unknown;
@@ -790,9 +790,19 @@ const createInAppWindow = (): BrowserWindow => {
       }
 
       const popup = createInAppWindow();
-      popup.loadURL(parsed.toString()).catch(() => {
-        // ignore
-      });
+      // Show instantly with a loading shell, then navigate.
+      const targetUrl = parsed.toString();
+      const loadingUrl = makeInAppLoadingDataUrl(targetUrl);
+      popup
+        .loadURL(loadingUrl)
+        .catch(() => {
+          // ignore
+        })
+        .finally(() => {
+          popup.loadURL(targetUrl).catch(() => {
+            // ignore
+          });
+        });
       return { action: 'deny' };
     } catch {
       return { action: 'deny' };
@@ -800,6 +810,45 @@ const createInAppWindow = (): BrowserWindow => {
   });
 
   return child;
+};
+
+const makeInAppLoadingDataUrl = (targetUrl: string): string => {
+  const safeUrl = escapeHtml(targetUrl || '');
+  const html = `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>正在打开…</title>
+    <style>
+      body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, sans-serif; background: #0f1115; color: rgba(255,255,255,0.92); }
+      .wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+      .card { width: min(720px, calc(100vw - 48px)); border-radius: 16px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); padding: 18px 18px; }
+      .row { display: flex; gap: 14px; align-items: center; }
+      .spinner { width: 28px; height: 28px; border-radius: 999px; border: 3px solid rgba(255,255,255,0.18); border-top-color: rgba(255,255,255,0.92); animation: spin 0.9s linear infinite; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .title { font-size: 16px; font-weight: 700; margin: 0; }
+      .sub { margin-top: 10px; font-size: 12px; opacity: 0.85; word-break: break-all; line-height: 1.45; }
+      .hint { margin-top: 10px; font-size: 12px; opacity: 0.65; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <div class="row">
+          <div class="spinner" aria-hidden="true"></div>
+          <div>
+            <p class="title">正在打开网页…</p>
+            <div class="sub">${safeUrl}</div>
+          </div>
+        </div>
+        <div class="hint">网络较慢时需要耐心等待，窗口已先打开。</div>
+      </div>
+    </div>
+  </body>
+</html>`;
+
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 };
 
 const createCinnyWindow = (): BrowserWindow => {
@@ -2958,15 +3007,47 @@ ipcMain.handle('ygg:index:load', async () => {
     throw new Error(`索引请求失败：HTTP ${res.statusCode}`);
   }
 
-  const { payloadText, sigB64, alg, data } = parseSignedWebsiteIndex(res.body);
-  verifyWebsiteIndexSignatureOrThrow(payloadText, sigB64, alg);
+  // 兼容两种接口：
+  // 1) 旧：带签名信封（payload + sig），必须验签通过
+  // 2) 新：直接返回索引 JSON（如 {version, generatedAt, rows: [...] }），不验签
+  try {
+    const { payloadText, sigB64, alg, data } = parseSignedWebsiteIndex(res.body);
+    verifyWebsiteIndexSignatureOrThrow(payloadText, sigB64, alg);
+    return {
+      ok: true,
+      verified: true,
+      sourceUrl: parsed.toString(),
+      data,
+    };
+  } catch (e) {
+    // 若是“缺少签名/缺少 payload”等结构性差异，则尝试按纯 JSON 解析。
+    // 注意：如果是验签失败，这里不会进入（验签失败在上面 verify 会抛出并被本 catch 捕获），
+    // 但我们仍然不应在验签失败时回退到不验签。
+    const msg = e instanceof Error ? e.message : String(e);
+    const looksLikeEnvelopeMissingSigOrPayload =
+      msg.includes('缺少签名字段') ||
+      msg.includes('缺少 payload') ||
+      msg.includes('payload 不是合法 JSON') ||
+      msg.includes('索引数据不是合法 JSON');
 
-  return {
-    ok: true,
-    verified: true,
-    sourceUrl: parsed.toString(),
-    data,
-  };
+    if (!looksLikeEnvelopeMissingSigOrPayload) {
+      throw e;
+    }
+
+    let data: unknown;
+    try {
+      data = JSON.parse(res.body) as unknown;
+    } catch {
+      throw e;
+    }
+
+    return {
+      ok: true,
+      verified: false,
+      sourceUrl: parsed.toString(),
+      data,
+    };
+  }
 });
 
 // Open a URL via the system default browser (preferred for slow/unreliable links)
@@ -3001,7 +3082,18 @@ ipcMain.handle('open-in-app', async (_event, url: string) => {
     }
 
     const child = createInAppWindow();
-    await child.loadURL(url);
+    // Load a fast local page first so the window appears immediately.
+    const loadingUrl = makeInAppLoadingDataUrl(url);
+    try {
+      await child.loadURL(loadingUrl);
+    } catch {
+      // ignore; still try to open the target
+    }
+
+    // Then navigate to the real URL without blocking the IPC response.
+    child.loadURL(url).catch(() => {
+      // ignore
+    });
   } catch (err) {
     log.warn('open-in-app failed', err);
   }
