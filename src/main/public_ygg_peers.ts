@@ -11,6 +11,11 @@ export type PublicPeerNode = {
   reliability?: string;
 };
 
+export type PreferredPublicPeerNode = PublicPeerNode & {
+  serviceId: string;
+  scheme: string;
+};
+
 export const DEFAULT_PREFER_SCHEMES = [
   'tls',
   'quic',
@@ -28,7 +33,7 @@ const schemeRank = (
   return idx >= 0 ? idx : prefer.length + 10;
 };
 
-const safeUrl = (address: string): URL | null => {
+export const safePublicPeerUrl = (address: string): URL | null => {
   try {
     return new URL(address);
   } catch {
@@ -36,8 +41,8 @@ const safeUrl = (address: string): URL | null => {
   }
 };
 
-const serviceId = (address: string): string => {
-  const u = safeUrl(address);
+export const getPublicPeerServiceId = (address: string): string => {
+  const u = safePublicPeerUrl(address);
   if (!u) return address;
   const host = (u.hostname || '').toLowerCase();
   const key = (u.searchParams.get('key') || '').toLowerCase();
@@ -66,38 +71,54 @@ export const loadBundledPublicPeers = (
     .map((x) => x as PublicPeerNode);
 };
 
+export const listPreferredPublicPeerNodes = (
+  peers: PublicPeerNode[],
+  preferSchemes: readonly string[] = DEFAULT_PREFER_SCHEMES,
+): PreferredPublicPeerNode[] => {
+  const groups = new Map<string, PublicPeerNode[]>();
+  for (const p of peers) {
+    const address = (p.address || '').trim();
+    if (!address) continue;
+    const u = safePublicPeerUrl(address);
+    if (!u || !u.hostname) continue;
+
+    const id = getPublicPeerServiceId(address);
+    const list = groups.get(id) || [];
+    list.push(p);
+    groups.set(id, list);
+  }
+
+  const preferred: PreferredPublicPeerNode[] = [];
+  for (const [id, list] of groups.entries()) {
+    list.sort((a, b) => {
+      const aScheme = safePublicPeerUrl(a.address)?.protocol?.replace(':', '') || '';
+      const bScheme = safePublicPeerUrl(b.address)?.protocol?.replace(':', '') || '';
+      return (
+        schemeRank(aScheme, preferSchemes) - schemeRank(bScheme, preferSchemes)
+      );
+    });
+
+    const best = list[0];
+    preferred.push({
+      ...best,
+      serviceId: id,
+      scheme:
+        safePublicPeerUrl(best.address)?.protocol?.replace(':', '').toLowerCase() || '',
+    });
+  }
+
+  return preferred;
+};
+
 export const pickRandomPublicPeerAddresses = (
   peers: PublicPeerNode[],
   count: number,
   preferSchemes: readonly string[] = DEFAULT_PREFER_SCHEMES,
 ): string[] => {
   if (!Number.isFinite(count) || count <= 0) return [];
-
-  // Group by service (host + optional ?key=) to avoid picking the same node via multiple schemes.
-  const groups = new Map<string, PublicPeerNode[]>();
-  for (const p of peers) {
-    const address = (p.address || '').trim();
-    if (!address) continue;
-    const u = safeUrl(address);
-    if (!u || !u.hostname) continue;
-
-    const id = serviceId(address);
-    const list = groups.get(id) || [];
-    list.push(p);
-    groups.set(id, list);
-  }
-
-  const bestPerService: string[] = [];
-  for (const list of groups.values()) {
-    list.sort((a, b) => {
-      const aScheme = safeUrl(a.address)?.protocol?.replace(':', '') || '';
-      const bScheme = safeUrl(b.address)?.protocol?.replace(':', '') || '';
-      return (
-        schemeRank(aScheme, preferSchemes) - schemeRank(bScheme, preferSchemes)
-      );
-    });
-    bestPerService.push(list[0].address);
-  }
+  const bestPerService = listPreferredPublicPeerNodes(peers, preferSchemes).map(
+    (peer) => peer.address,
+  );
 
   shuffleInPlace(bestPerService);
   return bestPerService.slice(0, Math.min(count, bestPerService.length));

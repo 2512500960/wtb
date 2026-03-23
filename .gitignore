@@ -42,3 +42,4 @@ build_tools/index_sign_public.pem
 build_tools/index_sign_private.enc.pem
 element-desktop/
 wtb-data/yggdrasil/yggdrasil.conf
+wtb-data/yggdrasil/yggdrasil.conf

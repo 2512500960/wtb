@@ -22,9 +22,69 @@ export type WtbConfigV1 = {
 
   /** Optional: yggdrasil-related settings */
   yggdrasil?: {
-    /** Optional: list of public peer URLs to write into yggdrasil.conf `Peers` */
+    /** Optional: list of manual public peer URLs stored by WTB */
     publicPeers?: string[];
+
+    /** Optional: auto-manage runtime public peer selection */
+    autoPeerManager?: {
+      /** Enable automatic runtime peer management. Default: true */
+      enabled?: boolean;
+      /** Desired total number of public peers to keep. Default: 6 */
+      targetPeerCount?: number;
+      /** Delay before first reconcile after startup (ms). Default: 20_000 */
+      initialDelayMs?: number;
+      /** Reconcile interval (ms). Default: 15 * 60_000 */
+      reconcileIntervalMs?: number;
+      /** Number of candidate peers to probe per cycle. Default: 12 */
+      sampleSize?: number;
+      /** Number of getPeers RTT samples per probe. Default: 3 */
+      probeAttempts?: number;
+      /** Delay between RTT samples (ms). Default: 1_500 */
+      probeIntervalMs?: number;
+      /** Timeout per admin command/probe step (ms). Default: 5_000 */
+      probeTimeoutMs?: number;
+
+      /** Last automatically selected runtime peer set */
+      lastSelectedPeers?: string[];
+
+      /** Persistent probe cache used by auto scheduling */
+      probeState?: Record<
+        string,
+        {
+          region?: string;
+          lastProbedAt?: number;
+          lastLatencyMs?: number | null;
+          lastScore?: number | null;
+          reachable?: boolean;
+          successCount?: number;
+          failureCount?: number;
+        }
+      >;
+    };
   };
+};
+
+export type YggdrasilAutoPeerManagerConfig = NonNullable<
+  NonNullable<WtbConfigV1['yggdrasil']>['autoPeerManager']
+>;
+
+export type YggdrasilAutoPeerManagerConfigInput = Partial<
+  YggdrasilAutoPeerManagerConfig
+>;
+
+export type YggdrasilAutoPeerProbeState = {
+  region?: string;
+  lastProbedAt?: number;
+  lastLatencyMs?: number | null;
+  lastScore?: number | null;
+  reachable?: boolean;
+  successCount?: number;
+  failureCount?: number;
+};
+
+export type YggdrasilAutoPeerManagerRuntimeStateInput = {
+  lastSelectedPeers?: string[] | null;
+  probeState?: Record<string, YggdrasilAutoPeerProbeState> | null;
 };
 
 const CONFIG_FILE_NAME = 'wtb.conf';
@@ -149,6 +209,77 @@ const normalizeStringList = (
   return out.length ? out : undefined;
 };
 
+const normalizeBoolean = (raw: unknown, fallback: boolean): boolean => {
+  if (typeof raw === 'boolean') return raw;
+  if (typeof raw === 'string') {
+    const normalized = raw.trim().toLowerCase();
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+  }
+  return fallback;
+};
+
+const normalizeInteger = (
+  raw: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number => {
+  const num = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(num)));
+};
+
+const normalizeFiniteNumberOrNull = (raw: unknown): number | null => {
+  if (raw == null) return null;
+  const num = typeof raw === 'number' ? raw : Number(raw);
+  return Number.isFinite(num) ? num : null;
+};
+
+const normalizeProbeState = (
+  raw: unknown,
+): Record<string, YggdrasilAutoPeerProbeState> | undefined => {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+
+  const out: Record<string, YggdrasilAutoPeerProbeState> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    const uri = key.trim();
+    if (!uri) continue;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+
+    const entry = value as Record<string, unknown>;
+    out[uri] = {
+      region:
+        typeof entry.region === 'string' && entry.region.trim()
+          ? entry.region.trim().toLowerCase()
+          : undefined,
+      lastProbedAt: normalizeFiniteNumberOrNull(entry.lastProbedAt) ?? undefined,
+      lastLatencyMs: normalizeFiniteNumberOrNull(entry.lastLatencyMs),
+      lastScore: normalizeFiniteNumberOrNull(entry.lastScore),
+      reachable: normalizeBoolean(entry.reachable, false),
+      successCount: normalizeFiniteNumberOrNull(entry.successCount) ?? undefined,
+      failureCount: normalizeFiniteNumberOrNull(entry.failureCount) ?? undefined,
+    };
+  }
+
+  return Object.keys(out).length ? out : undefined;
+};
+
+export const defaultYggdrasilAutoPeerManagerConfig = (): YggdrasilAutoPeerManagerConfig => {
+  return {
+    enabled: true,
+    targetPeerCount: 6,
+    initialDelayMs: 20_000,
+    reconcileIntervalMs: 15 * 60_000,
+    sampleSize: 12,
+    probeAttempts: 3,
+    probeIntervalMs: 1_500,
+    probeTimeoutMs: 5_000,
+    lastSelectedPeers: [],
+    probeState: {},
+  };
+};
+
 const normalizeConfigV1 = (raw: unknown): WtbConfigV1 => {
   const def = defaultConfigV1();
   const obj = (raw && typeof raw === 'object' ? (raw as any) : {}) as any;
@@ -182,6 +313,62 @@ const normalizeConfigV1 = (raw: unknown): WtbConfigV1 => {
   const yggObj =
     obj?.yggdrasil && typeof obj.yggdrasil === 'object' ? obj.yggdrasil : null;
   const publicPeers = normalizeStringList(yggObj?.publicPeers, { max: 10 });
+  const autoPeerManagerRaw =
+    yggObj?.autoPeerManager && typeof yggObj.autoPeerManager === 'object'
+      ? yggObj.autoPeerManager
+      : {};
+  const autoPeerDefaults = defaultYggdrasilAutoPeerManagerConfig();
+  const autoPeerManager: YggdrasilAutoPeerManagerConfig = {
+    enabled: normalizeBoolean(
+      autoPeerManagerRaw?.enabled,
+      autoPeerDefaults.enabled ?? true,
+    ),
+    targetPeerCount: normalizeInteger(
+      autoPeerManagerRaw?.targetPeerCount,
+      autoPeerDefaults.targetPeerCount ?? 6,
+      3,
+      6,
+    ),
+    initialDelayMs: normalizeInteger(
+      autoPeerManagerRaw?.initialDelayMs,
+      autoPeerDefaults.initialDelayMs ?? 20_000,
+      0,
+      10 * 60_000,
+    ),
+    reconcileIntervalMs: normalizeInteger(
+      autoPeerManagerRaw?.reconcileIntervalMs,
+      autoPeerDefaults.reconcileIntervalMs ?? 15 * 60_000,
+      10_000,
+      24 * 60 * 60_000,
+    ),
+    sampleSize: normalizeInteger(
+      autoPeerManagerRaw?.sampleSize,
+      autoPeerDefaults.sampleSize ?? 12,
+      1,
+      64,
+    ),
+    probeAttempts: normalizeInteger(
+      autoPeerManagerRaw?.probeAttempts,
+      autoPeerDefaults.probeAttempts ?? 3,
+      1,
+      8,
+    ),
+    probeIntervalMs: normalizeInteger(
+      autoPeerManagerRaw?.probeIntervalMs,
+      autoPeerDefaults.probeIntervalMs ?? 1_500,
+      200,
+      30_000,
+    ),
+    probeTimeoutMs: normalizeInteger(
+      autoPeerManagerRaw?.probeTimeoutMs,
+      autoPeerDefaults.probeTimeoutMs ?? 5_000,
+      500,
+      60_000,
+    ),
+    lastSelectedPeers:
+      normalizeStringList(autoPeerManagerRaw?.lastSelectedPeers, { max: 16 }) ?? [],
+    probeState: normalizeProbeState(autoPeerManagerRaw?.probeState) ?? {},
+  };
 
   return {
     version,
@@ -192,7 +379,10 @@ const normalizeConfigV1 = (raw: unknown): WtbConfigV1 => {
         bootstrapIntervalMs,
       },
     },
-    yggdrasil: publicPeers ? { publicPeers } : undefined,
+    yggdrasil: {
+      ...(publicPeers ? { publicPeers } : {}),
+      autoPeerManager,
+    },
   };
 };
 
@@ -206,8 +396,14 @@ const renderYamlWithHeader = (cfg: WtbConfigV1): string => {
     + '#   示例：/ip6/<ygg-ip>/tcp/<port>/p2p/<peerId>\n'
     + '# - p2p.discovery.enableDht：是否启用 kad-dht（用于更自动的发现/路由）\n'
     + '# - p2p.discovery.bootstrapIntervalMs：bootstrap 发现轮询间隔（毫秒）\n'
-    + '# - yggdrasil.publicPeers：可选。Yggdrasil 公共 peer 列表（URL），将写入 yggdrasil.conf 的 Peers。\n'
-    + '#   - 支持 1~10 个；不填则保持现有随机 peers 逻辑。\n'
+    + '# - yggdrasil.publicPeers：手动模式下保存的 public peer 列表（URL）。\n'
+    + '#   - 支持 1~10 个；仅用于手动模式，不写入 yggdrasil.conf。\n'
+    + '# - yggdrasil.autoPeerManager：运行时自动调度 public peers。\n'
+    + '#   - enabled：是否启用。\n'
+    + '#   - targetPeerCount：目标总 peer 数（当前 UI 限制为 3~6，默认 6）。\n'
+    + '#   - reconcileIntervalMs：后台重平衡周期。\n'
+    + '#   - sampleSize / probeAttempts / probeIntervalMs / probeTimeoutMs：探测参数。\n'
+    + '#   - lastSelectedPeers / probeState：自动调度内部状态，会由程序自动维护。\n'
     + '#\n';
 
   const yamlBody = YAML.stringify(cfg);
@@ -275,7 +471,7 @@ export const reloadWtbConfig = (): WtbConfigV1 => {
   return loadOrCreateWtbConfig();
 };
 
-export const setWtbYggdrasilPublicPeers = (peers: string[] | null): WtbConfigV1 => {
+const loadMutableConfigObject = (): any => {
   const cfgPath = getWtbConfigPath();
   let parsed: any = {};
 
@@ -293,6 +489,28 @@ export const setWtbYggdrasilPublicPeers = (peers: string[] | null): WtbConfigV1 
     parsed.yggdrasil = {};
   }
 
+  return parsed;
+};
+
+const persistMutableConfigObject = (parsed: any): WtbConfigV1 => {
+  const cfgPath = getWtbConfigPath();
+
+  try {
+    const keys = Object.keys(parsed.yggdrasil || {});
+    if (!keys.length) delete parsed.yggdrasil;
+  } catch {
+    // ignore
+  }
+
+  const cfg = normalizeConfigV1(parsed);
+  writeConfigAtomic(cfgPath, renderYamlWithHeader(cfg));
+  cachedConfig = cfg;
+  return cfg;
+};
+
+export const setWtbYggdrasilPublicPeers = (peers: string[] | null): WtbConfigV1 => {
+  const parsed = loadMutableConfigObject();
+
   const normalizedPeers = normalizeStringList(peers, { max: 10 });
   if (normalizedPeers && normalizedPeers.length) {
     parsed.yggdrasil.publicPeers = normalizedPeers;
@@ -305,16 +523,79 @@ export const setWtbYggdrasilPublicPeers = (peers: string[] | null): WtbConfigV1 
     }
   }
 
-  // If the object becomes empty, remove it as well.
-  try {
-    const keys = Object.keys(parsed.yggdrasil || {});
-    if (!keys.length) delete parsed.yggdrasil;
-  } catch {
-    // ignore
+  return persistMutableConfigObject(parsed);
+};
+
+export const setWtbYggdrasilAutoPeerManagerConfig = (
+  input: YggdrasilAutoPeerManagerConfigInput,
+): WtbConfigV1 => {
+  const parsed = loadMutableConfigObject();
+  const defaults = defaultYggdrasilAutoPeerManagerConfig();
+  const existing = normalizeConfigV1(parsed).yggdrasil?.autoPeerManager || defaults;
+
+  parsed.yggdrasil.autoPeerManager = {
+    enabled:
+      typeof input.enabled === 'boolean' ? input.enabled : existing.enabled,
+    targetPeerCount:
+      input.targetPeerCount == null
+        ? existing.targetPeerCount
+        : input.targetPeerCount,
+    initialDelayMs:
+      input.initialDelayMs == null
+        ? existing.initialDelayMs
+        : input.initialDelayMs,
+    reconcileIntervalMs:
+      input.reconcileIntervalMs == null
+        ? existing.reconcileIntervalMs
+        : input.reconcileIntervalMs,
+    sampleSize:
+      input.sampleSize == null ? existing.sampleSize : input.sampleSize,
+    probeAttempts:
+      input.probeAttempts == null
+        ? existing.probeAttempts
+        : input.probeAttempts,
+    probeIntervalMs:
+      input.probeIntervalMs == null
+        ? existing.probeIntervalMs
+        : input.probeIntervalMs,
+    probeTimeoutMs:
+      input.probeTimeoutMs == null
+        ? existing.probeTimeoutMs
+        : input.probeTimeoutMs,
+    lastSelectedPeers: existing.lastSelectedPeers,
+    probeState: existing.probeState,
+  };
+
+  return persistMutableConfigObject(parsed);
+};
+
+export const setWtbYggdrasilAutoPeerManagerRuntimeState = (
+  input: YggdrasilAutoPeerManagerRuntimeStateInput,
+): WtbConfigV1 => {
+  const parsed = loadMutableConfigObject();
+
+  if (
+    !parsed.yggdrasil.autoPeerManager ||
+    typeof parsed.yggdrasil.autoPeerManager !== 'object'
+  ) {
+    parsed.yggdrasil.autoPeerManager = {};
   }
 
-  const cfg = normalizeConfigV1(parsed);
-  writeConfigAtomic(cfgPath, renderYamlWithHeader(cfg));
-  cachedConfig = cfg;
-  return cfg;
+  const normalizedSelected = normalizeStringList(input.lastSelectedPeers, {
+    max: 16,
+  });
+  if (normalizedSelected && normalizedSelected.length) {
+    parsed.yggdrasil.autoPeerManager.lastSelectedPeers = normalizedSelected;
+  } else {
+    delete parsed.yggdrasil.autoPeerManager.lastSelectedPeers;
+  }
+
+  const normalizedProbeState = normalizeProbeState(input.probeState);
+  if (normalizedProbeState && Object.keys(normalizedProbeState).length) {
+    parsed.yggdrasil.autoPeerManager.probeState = normalizedProbeState;
+  } else {
+    delete parsed.yggdrasil.autoPeerManager.probeState;
+  }
+
+  return persistMutableConfigObject(parsed);
 };

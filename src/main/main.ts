@@ -33,11 +33,13 @@ import * as Hjson from 'hjson';
 import MenuBuilder from './menu';
 import { resolveHtmlPath } from './util';
 import { WEBSITE_INDEX_ED25519_PUBLIC_KEY_PEM } from './website_index_pubkey';
+import { loadBundledPublicPeers } from './public_ygg_peers';
 import {
-  loadBundledPublicPeers,
-  pickRandomPublicPeerAddresses,
-} from './public_ygg_peers';
-import { getWtbConfig, setWtbYggdrasilPublicPeers } from './wtb_config';
+  getWtbConfig,
+  setWtbYggdrasilAutoPeerManagerConfig,
+  setWtbYggdrasilPublicPeers,
+} from './wtb_config';
+import { YggdrasilPeerAutoManager } from './yggdrasil_peer_auto_manager';
 import {
   Libp2pGroupChatService,
   type ChatConversation,
@@ -51,6 +53,15 @@ import type {
   LocalServiceConfig,
   AnnouncementSystemStatus,
 } from '../types/announcements';
+
+type YggdrasilCtlResult = {
+  ok: boolean;
+  command: string;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+};
 
 class AppUpdater {
   constructor() {
@@ -579,6 +590,19 @@ const groupChat = new Libp2pGroupChatService((msg: ChatMessage) => {
 // 服务同步管理器（HTTP pull 模式，替代原 pubsub 方案）
 // const announcementsManager = new ServiceAnnouncementsManager(); // 旧 pubsub 实现
 const announcementsManager = new ServiceSyncHttpManager();
+const yggPeerAutoManager = new YggdrasilPeerAutoManager({
+  isYggdrasilRunning: () => getYggdrasilStatus().state === 'running',
+  loadBundledPeers: () => loadBundledPublicPeers(getYggdrasilBaseDir()),
+  invokeCtl: (
+    command: 'addpeer' | 'removepeer' | 'getpeersjson',
+    args = [],
+    options?: { timeoutMs?: number },
+  ) =>
+    runYggdrasilCtlCommand(command, args, {
+      timeoutMs: options?.timeoutMs,
+      json: command === 'getpeersjson',
+    }),
+});
 
 let announcementsAutoStartAttempted = false;
 
@@ -995,6 +1019,81 @@ const createElementWindow = (): BrowserWindow => {
   return child;
 };
 
+const runYggdrasilCtlCommand = async (
+  command: string,
+  extraArgs: string[] = [],
+  options?: { timeoutMs?: number; json?: boolean },
+): Promise<YggdrasilCtlResult> => {
+  ensureWindowsOrThrow();
+
+  if (!yggdrasilCtlAllowedCommands.has(command)) {
+    throw new Error(`Unsupported yggdrasilctl command: ${command}`);
+  }
+
+  const exePath = getYggdrasilCtlExePath();
+  if (!fs.existsSync(exePath)) {
+    throw new Error(`yggdrasilctl.exe not found at: ${exePath}`);
+  }
+
+  const timeoutMs = options?.timeoutMs ?? 5000;
+  const jsonBaseCommand = yggdrasilCtlJsonCommandMap.get(command);
+  const useJson = options?.json === true || !!jsonBaseCommand;
+  const baseCommand = jsonBaseCommand || command;
+  const args = useJson
+    ? ['-json', baseCommand, ...extraArgs]
+    : [baseCommand, ...extraArgs];
+
+  const start = Date.now();
+  // Log the command being run and the timeout for better observability.
+  // log.info(`Running yggdrasilctl command: ${exePath} ${args.join(' ')} (timeout: ${timeoutMs}ms)`);
+  return await new Promise<YggdrasilCtlResult>((resolve, reject) => {
+    const child = spawn(exePath, args, {
+      windowsHide: true,
+      cwd: getYggdrasilBaseDir(),
+      env: process.env,
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    const timer = setTimeout(() => {
+      try {
+        child.kill();
+      } catch {
+        // ignore
+      }
+    }, timeoutMs);
+
+    child.stdout?.on('data', (buf) => {
+      stdout += buf.toString('utf8');
+    });
+    child.stderr?.on('data', (buf) => {
+      stderr += buf.toString('utf8');
+    });
+
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      const durationMs = Date.now() - start;
+      const exitCode = typeof code === 'number' ? code : null;
+      const ok = exitCode === 0;
+
+      resolve({
+        ok,
+        command,
+        exitCode,
+        stdout: (stdout || '').toString(),
+        stderr: (stderr || '').toString(),
+        durationMs,
+      });
+    });
+  });
+};
+
 const scheduleAutoStartAnnouncementsIfNeeded = (reason: string): void => {
   if (announcementsAutoStartAttempted) return;
   const ygg = getYggdrasilStatus();
@@ -1048,6 +1147,162 @@ const tryAutoStartAnnouncements = async (reason: string): Promise<void> => {
   } catch (err) {
     log.debug(`Auto-start announcements skipped/failed: ${reason}`, err);
   }
+};
+
+const scheduleAutoStartYggPeerManagerIfNeeded = (reason: string): void => {
+  setTimeout(() => {
+    syncYggPeerModeBestEffort(reason).catch((err: unknown) => {
+      log.debug(`Ygg peer mode sync skipped/failed: ${reason}`, err);
+    });
+  }, 0);
+};
+
+type RuntimeYggPeerEntry = {
+  uri: string;
+  up: boolean;
+  inbound: boolean;
+};
+
+const normalizeYggPeerUri = (value: string): string => value.trim();
+
+const parseRuntimeYggPeers = (stdout: string): RuntimeYggPeerEntry[] => {
+  const raw = (stdout || '').trim();
+  if (!raw) return [];
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+
+  const peersRaw = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(parsed?.peers)
+      ? parsed.peers
+      : Array.isArray(parsed?.response?.peers)
+        ? parsed.response.peers
+        : [];
+
+  return peersRaw
+    .filter((entry: any) => entry && typeof entry === 'object')
+    .map((entry: any) => ({
+      uri: normalizeYggPeerUri(String(entry.remote || entry.uri || '')),
+      up: entry.up === true,
+      inbound: entry.inbound === true,
+    }))
+    .filter((entry: RuntimeYggPeerEntry) => !!entry.uri);
+};
+
+const getConfiguredManualYggPeers = (): string[] => {
+  const cfg = getWtbConfig();
+  const peers = cfg?.yggdrasil?.publicPeers ?? [];
+  if (!Array.isArray(peers)) return [];
+
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const value of peers) {
+    if (typeof value !== 'string') continue;
+    const uri = normalizeYggPeerUri(value);
+    if (!uri || seen.has(uri)) continue;
+    seen.add(uri);
+    normalized.push(uri);
+  }
+  return normalized;
+};
+
+const addYggPeerRuntime = async (
+  uri: string,
+  timeoutMs: number = 5000,
+): Promise<void> => {
+  const result = await runYggdrasilCtlCommand('addpeer', [`uri=${uri}`], {
+    timeoutMs,
+  });
+  // error message could be in both stdout and stderr, and may vary by yggdrasil version/localization, so do a case-insensitive fuzzy match for common keywords to detect "already exists" cases and avoid false positives.
+
+  // if (!result.ok && !/already|exists|duplicate/i.test(result.stderr || '')) {
+  //   throw new Error(
+  //     result.stderr || `addYggPeerRuntime addpeer failed: ${uri}`,
+  //   );
+  // }
+  if (!result.ok) {
+    log.debug(`Failed to add yggdrasil peer at runtime: ${uri}`, {
+      stderr: result.stderr,
+      stdout: result.stdout,
+    });
+  }
+};
+
+const listRuntimeYggPeers = async (
+  timeoutMs: number = 5000,
+): Promise<RuntimeYggPeerEntry[]> => {
+  const result = await runYggdrasilCtlCommand('getpeersjson', [], {
+    timeoutMs,
+    json: true,
+  });
+  if (!result.ok) {
+    throw new Error(result.stderr || 'yggdrasilctl getpeersjson failed');
+  }
+  return parseRuntimeYggPeers(result.stdout);
+};
+
+const syncManualYggPeersBestEffort = async (reason: string): Promise<void> => {
+  const ygg = getYggdrasilStatus();
+  if (ygg.state !== 'running') return;
+
+  const desiredManualPeers = new Set(getConfiguredManualYggPeers());
+  const runtimePeers = await listRuntimeYggPeers(5000);
+  const bundledPublicPeerUris = new Set(
+    loadBundledPublicPeers(getYggdrasilBaseDir())
+      .map((peer) => normalizeYggPeerUri(peer.address))
+      .filter((value) => !!value),
+  );
+
+  for (const peer of runtimePeers) {
+    if (!bundledPublicPeerUris.has(peer.uri)) continue;
+    if (desiredManualPeers.has(peer.uri)) continue;
+    if (peer.inbound) continue;
+    // eslint-disable-next-line no-await-in-loop
+    await removeYggPeerRuntime(peer.uri, 5000);
+  }
+
+  const currentUris = new Set(runtimePeers.map((peer) => peer.uri));
+  for (const uri of desiredManualPeers) {
+    if (currentUris.has(uri)) continue;
+    // eslint-disable-next-line no-await-in-loop
+    await addYggPeerRuntime(uri, 5000);
+  }
+
+  log.info(
+    `Applied manual yggdrasil peers at runtime (${reason}). count=${desiredManualPeers.size}`,
+  );
+};
+
+const syncYggPeerModeBestEffort = async (reason: string): Promise<void> => {
+  const cfg = getWtbConfig();
+  const enabled = cfg.yggdrasil?.autoPeerManager?.enabled !== false;
+  const ygg = getYggdrasilStatus();
+
+  if (ygg.state !== 'running') {
+    await yggPeerAutoManager.stop();
+    return;
+  }
+
+  if (!enabled) {
+    await yggPeerAutoManager.stop();
+    await syncManualYggPeersBestEffort(reason);
+    return;
+  }
+
+  if (!yggPeerAutoManager.isStarted()) {
+    await yggPeerAutoManager.start(reason);
+  }
+};
+
+const syncYggPeerAutoManagerBestEffort = async (
+  reason: string,
+): Promise<void> => {
+  await syncYggPeerModeBestEffort(reason);
 };
 
 const requireChatRunning = (): void => {
@@ -1184,6 +1439,7 @@ const getYggdrasilDataDir = (): string => {
 };
 
 const getYggdrasilConfPath = (): string => {
+  log.debug('Yggdrasil config path:', path.join(getYggdrasilDataDir(), 'yggdrasil.conf'));
   return path.join(getYggdrasilDataDir(), 'yggdrasil.conf');
 };
 
@@ -1264,44 +1520,6 @@ const stripUtf8Bom = (text: string): string => {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 };
 
-const updateYggdrasilConfPeers = (
-  confPath: string,
-  peersToAdd: string[],
-): void => {
-  if (!peersToAdd.length) return;
-  const raw = stripUtf8Bom(fs.readFileSync(confPath, { encoding: 'utf8' }));
-  const doc: any = (Hjson as any).rt?.parse
-    ? (Hjson as any).rt.parse(raw)
-    : Hjson.parse(raw);
-
-  if (!Array.isArray(doc.Peers)) {
-    doc.Peers = [];
-  }
-
-  const existing = new Set<string>(
-    doc.Peers.filter((x: any) => typeof x === 'string'),
-  );
-  peersToAdd
-    .filter((addr) => typeof addr === 'string')
-    .map((addr) => (addr as string).trim())
-    .filter((addr) => !!addr)
-    .forEach((trimmed) => {
-      if (existing.has(trimmed)) return;
-      doc.Peers.push(trimmed);
-      existing.add(trimmed);
-    });
-
-  const out: string = (Hjson as any).rt?.stringify
-    ? (Hjson as any).rt.stringify(doc, {
-        quotes: 'all',
-        separator: true,
-        space: 2,
-      })
-    : Hjson.stringify(doc, { quotes: 'all', separator: true, space: 2 });
-
-  fs.writeFileSync(confPath, `${stripUtf8Bom(out)}\n`, { encoding: 'utf8' });
-};
-
 const setYggdrasilConfPeers = (confPath: string, peers: string[]): void => {
   const list = Array.isArray(peers)
     ? peers
@@ -1328,26 +1546,15 @@ const setYggdrasilConfPeers = (confPath: string, peers: string[]): void => {
   fs.writeFileSync(confPath, `${stripUtf8Bom(out)}\n`, { encoding: 'utf8' });
 };
 
-const applyConfiguredPublicPeersToYggdrasilConfBestEffort = (
-  reason: string,
-): void => {
+const clearYggdrasilConfPeersBestEffort = (reason: string): void => {
   try {
-    const cfg = getWtbConfig();
-    const peers = cfg?.yggdrasil?.publicPeers ?? [];
-    if (!Array.isArray(peers) || peers.length < 1) return;
-
     const confPath = getYggdrasilConfPath();
     if (!fs.existsSync(confPath)) return;
 
-    setYggdrasilConfPeers(confPath, peers);
-    log.info(
-      `Applied configured yggdrasil public peers to yggdrasil.conf (${reason}). count=${peers.length}`,
-    );
+    setYggdrasilConfPeers(confPath, []);
+    log.info(`Cleared yggdrasil.conf peers (${reason}).`);
   } catch (error) {
-    log.warn(
-      `Failed to apply configured yggdrasil public peers (${reason})`,
-      error,
-    );
+    log.warn(`Failed to clear yggdrasil.conf peers (${reason})`, error);
   }
 };
 
@@ -1379,132 +1586,7 @@ const generateYggdrasilConfIfMissing = async (
   }
   fs.writeFileSync(confPath, stripUtf8Bom(confText), { encoding: 'utf8' });
 
-  // After generating a fresh config, inject a small random set of public peers.
-  // This improves bootstrapping without requiring a manual edit.
-  // If user configured peers in wtb.conf, skip random injection.
-  try {
-    const cfg = getWtbConfig();
-    const configured = cfg?.yggdrasil?.publicPeers ?? [];
-    if (Array.isArray(configured) && configured.length >= 1) {
-      return;
-    }
-  } catch {
-    // ignore
-  }
-
-  const isTcpLikeUrl = (addr: string): boolean => {
-    try {
-      const u = new URL(addr);
-      const p = (u.protocol || '').toLowerCase();
-      return p === 'tcp:' || p === 'tls:' || p === 'ws:' || p === 'wss:';
-    } catch {
-      return false;
-    }
-  };
-
-  const probeTcpUrl = async (
-    addr: string,
-    timeoutMs: number,
-  ): Promise<boolean> => {
-    let u: URL;
-    try {
-      u = new URL(addr);
-    } catch {
-      return false;
-    }
-
-    const host = (u.hostname || '').trim();
-    const portNum = u.port ? Number(u.port) : NaN;
-    const port = Number.isFinite(portNum) && portNum > 0 ? portNum : 0;
-    if (!host || !port) return false;
-
-    return new Promise<boolean>((resolve) => {
-      const sock = net.createConnection({ host, port });
-      let done = false;
-      const finish = (ok: boolean) => {
-        if (done) return;
-        done = true;
-        try {
-          sock.destroy();
-        } catch {
-          // ignore
-        }
-        resolve(ok);
-      };
-
-      const timer = setTimeout(() => finish(false), timeoutMs);
-      sock.once('connect', () => {
-        clearTimeout(timer);
-        finish(true);
-      });
-      sock.once('error', () => {
-        clearTimeout(timer);
-        finish(false);
-      });
-    });
-  };
-
-  const pickReachableFirst = async (
-    addrs: string[],
-    count: number,
-    options?: { timeoutMs?: number; concurrency?: number },
-  ): Promise<string[]> => {
-    const timeoutMs =
-      options?.timeoutMs && Number.isFinite(options.timeoutMs)
-        ? Math.max(200, Math.floor(options.timeoutMs))
-        : 1200;
-    const concurrency =
-      options?.concurrency && Number.isFinite(options.concurrency)
-        ? Math.max(1, Math.floor(options.concurrency))
-        : 6;
-
-    const out: string[] = [];
-    let idx = 0;
-
-    const worker = async () => {
-      while (idx < addrs.length && out.length < count) {
-        const cur = addrs[idx];
-        idx += 1;
-        if (!cur) {
-          // Defensive: ignore empty values.
-        } else if (!isTcpLikeUrl(cur)) {
-          // For non-TCP schemes (e.g. quic), skip probing but still allow selection.
-          out.push(cur);
-        } else {
-          // eslint-disable-next-line no-await-in-loop
-          const ok = await probeTcpUrl(cur, timeoutMs);
-          if (ok) out.push(cur);
-        }
-      }
-    };
-
-    await Promise.all(Array.from({ length: concurrency }).map(() => worker()));
-    return out;
-  };
-
-  try {
-    const baseDir = path.dirname(yggExe);
-    const publicPeers = loadBundledPublicPeers(baseDir);
-    if (!publicPeers.length) return;
-
-    // Pick more than needed, then probe quickly to prefer reachable ones.
-    const desired = 7;
-    const toTest = pickRandomPublicPeerAddresses(
-      publicPeers,
-      Math.min(24, publicPeers.length),
-    );
-    const reachable = await pickReachableFirst(toTest, desired, {
-      timeoutMs: 1200,
-      concurrency: 6,
-    });
-
-    const selected = reachable.length
-      ? reachable.slice(0, desired)
-      : pickRandomPublicPeerAddresses(publicPeers, desired);
-    updateYggdrasilConfPeers(confPath, selected);
-  } catch (error) {
-    log.warn('Failed to inject public peers into yggdrasil.conf', error);
-  }
+  setYggdrasilConfPeers(confPath, []);
 };
 
 const updateYggdrasilConfP2PDataDir = (
@@ -1782,8 +1864,8 @@ const startYggdrasil = async (): Promise<ServiceStatus> => {
   await generateYggdrasilConfIfMissing(yggExe, confPath);
   // Use forward slashes to keep HJSON path portable and avoid escape issues.
   updateYggdrasilConfP2PDataDir(confPath, p2pDataDir.replace(/\\/g, '/'));
-  // If user configured public peers in wtb.conf, apply them now.
-  applyConfiguredPublicPeersToYggdrasilConfBestEffort('before yggdrasil start');
+  // Startup peers are managed at runtime only; keep yggdrasil.conf Peers empty.
+  clearYggdrasilConfPeersBestEffort('before yggdrasil start');
 
   const script = [
     "$ErrorActionPreference = 'Stop'",
@@ -1994,16 +2076,8 @@ type YggdrasilCtlCommand =
   | 'getpeersjson'
   | 'getp2ppeersjson';
 
-type YggdrasilCtlResult = {
-  ok: boolean;
-  command: YggdrasilCtlCommand;
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-  durationMs: number;
-};
-
 const yggdrasilCtlAllowedCommands: ReadonlySet<string> = new Set<string>([
+  'addpeer',
   'getself',
   'getpeers',
   'getsessions',
@@ -2013,85 +2087,23 @@ const yggdrasilCtlAllowedCommands: ReadonlySet<string> = new Set<string>([
   'getp2ppeers',
   'getmulticastinterfaces',
   'list',
+  'removepeer',
   'getselfjson',
   'getpeersjson',
   'getp2ppeersjson',
+]);
+
+const yggdrasilCtlJsonCommandMap = new Map<string, string>([
+  ['getselfjson', 'getself'],
+  ['getpeersjson', 'getpeers'],
+  ['getp2ppeersjson', 'getp2ppeers'],
 ]);
 
 const runYggdrasilCtl = async (
   command: YggdrasilCtlCommand,
   timeoutMs: number = 5000,
 ): Promise<YggdrasilCtlResult> => {
-  ensureWindowsOrThrow();
-
-  if (!yggdrasilCtlAllowedCommands.has(command)) {
-    throw new Error(`Unsupported yggdrasilctl command: ${command}`);
-  }
-
-  const exePath = getYggdrasilCtlExePath();
-  if (!fs.existsSync(exePath)) {
-    throw new Error(`yggdrasilctl.exe not found at: ${exePath}`);
-  }
-
-  const start = Date.now();
-  // yggdrasilctl supports JSON output via `-json`, and options MUST come before the command.
-  // not all commands should be run with `-json`
-  let args: string[];
-  if (
-    command === 'getselfjson' ||
-    command === 'getpeersjson' ||
-    command === 'getp2ppeersjson'
-  ) {
-    args = ['-json', command.replace(/json$/, '')];
-  } else {
-    args = [command];
-  }
-  return await new Promise<YggdrasilCtlResult>((resolve, reject) => {
-    const child = spawn(exePath, args, {
-      windowsHide: true,
-      cwd: getYggdrasilBaseDir(),
-      env: process.env,
-    });
-
-    let stdout = '';
-    let stderr = '';
-
-    const timer = setTimeout(() => {
-      try {
-        child.kill();
-      } catch {
-        // ignore
-      }
-    }, timeoutMs);
-
-    child.stdout?.on('data', (buf) => {
-      stdout += buf.toString('utf8');
-    });
-    child.stderr?.on('data', (buf) => {
-      stderr += buf.toString('utf8');
-    });
-
-    child.on('error', (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      const durationMs = Date.now() - start;
-      const exitCode = typeof code === 'number' ? code : null;
-      const ok = exitCode === 0;
-
-      resolve({
-        ok,
-        command,
-        exitCode,
-        stdout: (stdout || '').toString(),
-        stderr: (stderr || '').toString(),
-        durationMs,
-      });
-    });
-  });
+  return runYggdrasilCtlCommand(command, [], { timeoutMs });
 };
 
 const getWebPort = (): number => {
@@ -2137,6 +2149,17 @@ const parseYggdrasilIPv6FromGetself = (stdout: string): string | null => {
   // Generic IPv6-like pattern: at least three colon-separated hex groups
   const match = text.match(/\b([0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){2,})\b/);
   return match?.[1] ?? null;
+};
+const removeYggPeerRuntime = async (
+  uri: string,
+  timeoutMs: number = 5000,
+): Promise<void> => {
+  const result = await runYggdrasilCtlCommand('removepeer', [`uri=${uri}`], {
+    timeoutMs,
+  });
+  if (!result.ok && !/not found|unknown/i.test(result.stderr || '')) {
+    throw new Error(result.stderr || `removepeer failed: ${uri}`);
+  }
 };
 
 export async function getYggdrasilIPv6AddressOrThrow(): Promise<string> {
@@ -2596,6 +2619,9 @@ const stopWebService = async (): Promise<ServiceStatus> => {
 
 ipcMain.handle('services:getAll', async () => {
   const all = getAllServiceStatuses();
+  scheduleAutoStartYggPeerManagerIfNeeded(
+    'yggdrasil already running (services:getAll)',
+  );
   // If yggdrasil is already running (e.g. started before app launch), auto-start announcements.
   // scheduleAutoStartAnnouncementsIfNeeded(
   //   'yggdrasil already running (services:getAll)',
@@ -2607,6 +2633,7 @@ ipcMain.handle('services:start', async (_event, serviceName: ServiceName) => {
   try {
     if (serviceName === 'yggdrasil') {
       const res = await startYggdrasil();
+      scheduleAutoStartYggPeerManagerIfNeeded('yggdrasil started');
       // Auto-start announcements when Yggdrasil becomes available.
       // setTimeout(() => {
       //   tryAutoStartAnnouncements('yggdrasil started').catch(() => {
@@ -2640,6 +2667,7 @@ ipcMain.handle('services:start', async (_event, serviceName: ServiceName) => {
 ipcMain.handle('services:stop', async (_event, serviceName: ServiceName) => {
   try {
     if (serviceName === 'yggdrasil') {
+      await yggPeerAutoManager.stop();
       const res = await stopYggdrasil();
       // Best-effort: stop announcements when Yggdrasil is stopped.
       announcementsManager.stop().catch(() => {
@@ -2954,6 +2982,10 @@ ipcMain.handle('ygg:publicPeers:getSelection', async () => {
   return (cfg?.yggdrasil?.publicPeers ?? []) as string[];
 });
 
+ipcMain.handle('ygg:autoPeer:getStatus', async () => {
+  return yggPeerAutoManager.getStatus();
+});
+
 ipcMain.handle(
   'ygg:publicPeers:setSelection',
   async (_event, peers: unknown) => {
@@ -2978,11 +3010,42 @@ ipcMain.handle(
     }
 
     const cfg = setWtbYggdrasilPublicPeers(normalized);
-    // Best-effort: update yggdrasil.conf on save so next start/service start uses it.
-    applyConfiguredPublicPeersToYggdrasilConfBestEffort('settings saved');
-    return { ok: true, publicPeers: cfg?.yggdrasil?.publicPeers ?? normalized };
+    clearYggdrasilConfPeersBestEffort('manual peer selection saved');
+    if (getYggdrasilStatus().state === 'running') {
+      await syncYggPeerModeBestEffort('manual peer selection updated');
+    }
+    return {
+      ok: true,
+      publicPeers: cfg?.yggdrasil?.publicPeers ?? normalized,
+      autoPeerStatus: yggPeerAutoManager.getStatus(),
+    };
   },
 );
+
+ipcMain.handle('ygg:autoPeer:updateConfig', async (_event, input: unknown) => {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error('参数无效：auto peer 配置必须是对象');
+  }
+
+  const cfg = setWtbYggdrasilAutoPeerManagerConfig(input as any);
+  clearYggdrasilConfPeersBestEffort('auto peer settings saved');
+  await syncYggPeerModeBestEffort('auto peer settings saved');
+  const status =
+    cfg.yggdrasil?.autoPeerManager?.enabled !== false &&
+    getYggdrasilStatus().state === 'running'
+      ? await yggPeerAutoManager.reconcileNow('auto peer settings saved')
+      : yggPeerAutoManager.getStatus();
+  return {
+    ok: true,
+    config: cfg.yggdrasil?.autoPeerManager,
+    status,
+  };
+});
+
+ipcMain.handle('ygg:autoPeer:reconcileNow', async () => {
+  await syncYggPeerAutoManagerBestEffort('manual reconcile requested');
+  return await yggPeerAutoManager.reconcileNow('manual reconcile requested');
+});
 
 ipcMain.handle('ygg:index:load', async () => {
   const ygg = getYggdrasilStatus();
@@ -3011,7 +3074,9 @@ ipcMain.handle('ygg:index:load', async () => {
   // 1) 旧：带签名信封（payload + sig），必须验签通过
   // 2) 新：直接返回索引 JSON（如 {version, generatedAt, rows: [...] }），不验签
   try {
-    const { payloadText, sigB64, alg, data } = parseSignedWebsiteIndex(res.body);
+    const { payloadText, sigB64, alg, data } = parseSignedWebsiteIndex(
+      res.body,
+    );
     verifyWebsiteIndexSignatureOrThrow(payloadText, sigB64, alg);
     return {
       ok: true,
@@ -3401,6 +3466,9 @@ app.on('before-quit', () => {
   }
 
   // Stop libp2p group chat and announcements best-effort on quit
+  yggPeerAutoManager.stop().catch(() => {
+    // ignore
+  });
   announcementsManager.stop().catch(() => {
     // ignore
   });
@@ -3432,8 +3500,9 @@ app
       // ignore
     }
 
-    // Load wtb.conf early and apply configured yggdrasil peers best-effort.
-    applyConfiguredPublicPeersToYggdrasilConfBestEffort('app startup');
+    // Runtime addpeer/removepeer is the only peer source; keep config peers empty.
+    clearYggdrasilConfPeersBestEffort('app startup');
+    scheduleAutoStartYggPeerManagerIfNeeded('app startup');
 
     createWindow();
     app.on('activate', () => {
