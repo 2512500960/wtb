@@ -20,7 +20,7 @@ const YGG_WEBSITE_INDEX_URL = 'http://[21e:a51c:885b:7db0:166e:927:98cd:d186]/';
 // const YGG_WEBSITE_INDEX_IN_APP_URL =
 //   'http://[200:5948:48e2:97e3:8afb:40aa:b3ac:4d94]/';
 const YGG_WEBSITE_INDEX_IN_APP_URL =
-  'http://[201:64b3:3da3:66c7:ad23:f29d:67a2:37bd]:5000';
+  'http://[200:5948:48e2:97e3:8afb:40aa:b3ac:4d94]';
 
 const YGG_MINI_WIKI_URL =
   'http://[200:85b:60c4:e7b5:c33b:959f:9b52:6783]/?lang=zh';
