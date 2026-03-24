@@ -12,7 +12,9 @@ import path from 'path';
 import {
   app,
   BrowserWindow,
+  BrowserView,
   Menu,
+  clipboard,
   session,
   shell,
   ipcMain,
@@ -79,6 +81,8 @@ class AppUpdater {
 }
 
 let mainWindow: BrowserWindow | null = null;
+
+const proxiedWindowViews = new Map<number, BrowserView>();
 
 const isWindows = process.platform === 'win32';
 
@@ -793,6 +797,17 @@ const createInAppWindow = (): BrowserWindow => {
   child.webContents.on('will-navigate', (e, navUrl) => {
     try {
       const parsed = new URL(navUrl);
+      // Allow http(s)/file, but intercept socks5: links to open a proxied window.
+      if (parsed.protocol === 'socks5:' || parsed.protocol === 'socks5h:') {
+        e.preventDefault();
+        // Open a new window that routes traffic through the specified SOCKS5 proxy.
+        // Use a safe default target (google.com) as requested.
+        // fire-and-forget; errors are logged inside openProxiedWindow.
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises
+        openProxiedWindow(parsed.toString(), 'https://www.google.com');
+        return;
+      }
+
       if (
         parsed.protocol !== 'http:' &&
         parsed.protocol !== 'https:' &&
@@ -809,6 +824,14 @@ const createInAppWindow = (): BrowserWindow => {
   child.webContents.setWindowOpenHandler((details) => {
     try {
       const parsed = new URL(details.url);
+
+      // If the popup request is a socks5: URL, open a proxied window instead.
+      if (parsed.protocol === 'socks5:' || parsed.protocol === 'socks5h:') {
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises
+        openProxiedWindow(parsed.toString(), 'https://www.google.com');
+        return { action: 'deny' };
+      }
+
       if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
         return { action: 'deny' };
       }
@@ -874,6 +897,415 @@ const makeInAppLoadingDataUrl = (targetUrl: string): string => {
 
   return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 };
+
+const PROXIED_TOOLBAR_HEIGHT = 60;
+
+type ProxiedToolbarState = {
+  url: string;
+  title: string;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  isLoading: boolean;
+};
+
+const normalizeProxiedTargetUrl = (value: string): string | null => {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const withScheme = /^[A-Za-z][A-Za-z\d+.-]*:/.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`;
+
+  try {
+    const parsed = new URL(withScheme);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+};
+
+const layoutProxiedBrowserView = (
+  win: BrowserWindow,
+  view: BrowserView,
+): void => {
+  if (win.isDestroyed()) return;
+
+  const [width, height] = win.getContentSize();
+  view.setBounds({
+    x: 0,
+    y: PROXIED_TOOLBAR_HEIGHT,
+    width,
+    height: Math.max(0, height - PROXIED_TOOLBAR_HEIGHT),
+  });
+  view.setAutoResize({ width: true, height: true });
+};
+
+const updateProxiedToolbarState = (
+  win: BrowserWindow,
+  state: ProxiedToolbarState,
+): void => {
+  if (win.isDestroyed()) return;
+
+  const serialized = JSON.stringify(state)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026')
+    .replace(/\\u2028/g, '\\u2028')
+    .replace(/\\u2029/g, '\\u2029');
+
+  win.webContents
+    .executeJavaScript(
+      `window.__setProxiedToolbarState && window.__setProxiedToolbarState(${serialized});`,
+      true,
+    )
+    .catch(() => {
+      // ignore
+    });
+};
+
+const makeProxiedToolbarDataUrl = (windowId: number, proxyUri: string): string => {
+  const safeProxy = escapeHtml(proxyUri);
+  const html = `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+
+      body {
+        margin: 0;
+        background: #10141b;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        color: rgba(255, 255, 255, 0.94);
+      }
+
+      .bar {
+        height: ${PROXIED_TOOLBAR_HEIGHT}px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 12px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        background: linear-gradient(180deg, #161b24 0%, #121720 100%);
+        box-sizing: border-box;
+      }
+
+      button {
+        height: 30px;
+        min-width: 30px;
+        padding: 0 10px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 9px;
+        background: rgba(255, 255, 255, 0.05);
+        color: inherit;
+        cursor: pointer;
+        font: inherit;
+      }
+
+      button:hover {
+        background: rgba(255, 255, 255, 0.1);
+      }
+
+      button:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+
+      input {
+        height: 32px;
+        flex: 1;
+        min-width: 120px;
+        padding: 0 12px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 9px;
+        background: rgba(255, 255, 255, 0.06);
+        color: inherit;
+        font: inherit;
+        outline: none;
+      }
+
+      input:focus {
+        border-color: rgba(98, 168, 255, 0.75);
+        box-shadow: 0 0 0 3px rgba(98, 168, 255, 0.15);
+      }
+
+      .spacer {
+        width: 4px;
+      }
+
+      .proxy {
+        max-width: 180px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 12px;
+        opacity: 0.82;
+      }
+
+      .title {
+        max-width: 180px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 12px;
+        color: rgba(255, 255, 255, 0.86);
+      }
+
+      .status {
+        font-size: 12px;
+        opacity: 0.7;
+        min-width: 70px;
+        color: rgba(255, 255, 255, 0.7);
+      }
+
+      .status.error {
+        color: #ff9d9d;
+        opacity: 1;
+      }
+    </style>
+  </head>
+  <body>
+    <form class="bar" id="toolbar-form">
+      <button id="back" type="button" title="后退">◀</button>
+      <button id="forward" type="button" title="前进">▶</button>
+      <button id="reload" type="button" title="刷新">刷新</button>
+      <input id="address" type="text" spellcheck="false" autocomplete="off" aria-label="地址栏" />
+      <button id="go" type="submit" title="前往">Go</button>
+      <button id="copy" type="button" title="复制当前地址">复制</button>
+      <button id="external" type="button" title="用系统浏览器打开当前页面">浏览器</button>
+      <div class="spacer"></div>
+      <div class="title" id="title"></div>
+      <div class="status" id="status"></div>
+      <div class="proxy" title="${safeProxy}">代理: ${safeProxy}</div>
+      <button id="close" type="button" title="关闭窗口">关闭</button>
+    </form>
+    <script>
+      const invoke = (cmd, value) =>
+        window.electron.ipcRenderer.invoke('proxied-window-command', ${windowId}, cmd, value);
+
+      const address = document.getElementById('address');
+      const back = document.getElementById('back');
+      const forward = document.getElementById('forward');
+      const reload = document.getElementById('reload');
+      const copy = document.getElementById('copy');
+      const external = document.getElementById('external');
+      const closeButton = document.getElementById('close');
+      const form = document.getElementById('toolbar-form');
+      const status = document.getElementById('status');
+      const title = document.getElementById('title');
+      let errorText = '';
+
+      const renderStatus = (state) => {
+        if (errorText) {
+          status.textContent = errorText;
+          status.classList.add('error');
+          return;
+        }
+
+        status.classList.remove('error');
+        status.textContent = state && state.isLoading ? '加载中…' : '';
+      };
+
+      const setError = (text) => {
+        errorText = text || '';
+        renderStatus(window.__proxiedToolbarState || null);
+      };
+
+      window.__setProxiedToolbarState = (state) => {
+        if (!state || typeof state !== 'object') return;
+        window.__proxiedToolbarState = state;
+        if (document.activeElement !== address) {
+          address.value = typeof state.url === 'string' ? state.url : '';
+        }
+        back.disabled = !state.canGoBack;
+        forward.disabled = !state.canGoForward;
+        title.textContent = typeof state.title === 'string' ? state.title : '';
+        if (!state.isLoading) {
+          errorText = '';
+        }
+        renderStatus(state);
+      };
+
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        setError('');
+        const result = await invoke('navigate', address.value);
+        if (!result || result.ok !== true) {
+          setError('地址无效，仅支持 http/https');
+        }
+      });
+
+      back.addEventListener('click', () => invoke('back'));
+      forward.addEventListener('click', () => invoke('forward'));
+      reload.addEventListener('click', () => invoke('reload'));
+      copy.addEventListener('click', () => invoke('copy-url'));
+      external.addEventListener('click', () => invoke('open-external'));
+      closeButton.addEventListener('click', () => invoke('close'));
+
+      address.addEventListener('focus', () => address.select());
+      address.addEventListener('input', () => {
+        if (errorText) setError('');
+      });
+    </script>
+  </body>
+</html>`;
+
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+};
+
+// Open a new BrowserWindow that routes traffic through the given SOCKS5 proxy.
+// `proxyUri` must be a socks5://... URL. `targetUrl` is the first page to load.
+const openProxiedWindow = async (
+  proxyUri: string,
+  targetUrl = 'https://www.google.com',
+): Promise<BrowserWindow | null> => {
+  try {
+    const parsed = new URL(proxyUri);
+    if (!(parsed.protocol === 'socks5:' || parsed.protocol === 'socks5h:')) {
+      return null;
+    }
+
+    // Use a non-persistent partition so state does not leak to other windows.
+    const partition = `proxy-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+    const s = session.fromPartition(partition);
+
+    // Configure proxy rules on the session. Bypass loopback so local services still work.
+    try {
+      await s.setProxy({ proxyRules: proxyUri, proxyBypassRules: '<-loopback>' });
+    } catch (err) {
+      log.warn('setProxy failed for', proxyUri, err);
+    }
+
+    const win = new BrowserWindow({
+      width: 1000,
+      height: 700,
+      show: false,
+      webPreferences: {
+        preload: app.isPackaged
+          ? path.join(__dirname, 'preload.js')
+          : path.join(__dirname, '../../.erb/dll/preload.js'),
+        nodeIntegration: false,
+        contextIsolation: true,
+      },
+    });
+
+    const view = new BrowserView({
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        partition,
+      },
+    });
+
+    proxiedWindowViews.set(win.id, view);
+    win.setBrowserView(view);
+    layoutProxiedBrowserView(win, view);
+
+    forceChineseAcceptLanguage(win.webContents.session);
+    forceChineseAcceptLanguage(view.webContents.session);
+
+    view.webContents.on('context-menu', (_event, params) => {
+      try {
+        const hasSelection = (params.selectionText || '').trim().length > 0;
+        const isEditable = !!params.isEditable;
+
+        const template = isEditable
+          ? [
+              { role: 'cut' as const, enabled: hasSelection },
+              { role: 'copy' as const, enabled: hasSelection },
+              { role: 'paste' as const },
+              { type: 'separator' as const },
+              { role: 'selectAll' as const },
+            ]
+          : [
+              { role: 'copy' as const, enabled: hasSelection },
+              { role: 'selectAll' as const },
+            ];
+
+        Menu.buildFromTemplate(template).popup({ window: win });
+      } catch {
+        // ignore
+      }
+    });
+
+    win.once('ready-to-show', () => win.show());
+
+    view.webContents.on('will-navigate', (e, navUrl) => {
+      try {
+        const p = new URL(navUrl);
+        if (p.protocol !== 'http:' && p.protocol !== 'https:' && p.protocol !== 'file:') {
+          e.preventDefault();
+        }
+      } catch {
+        e.preventDefault();
+      }
+    });
+
+    view.webContents.setWindowOpenHandler((details) => {
+      try {
+        const parsedUrl = new URL(details.url);
+        if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+          return { action: 'deny' };
+        }
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises
+        openProxiedWindow(proxyUri, parsedUrl.toString());
+        return { action: 'deny' };
+      } catch {
+        return { action: 'deny' };
+      }
+    });
+
+    const syncToolbarState = () => {
+      updateProxiedToolbarState(win, {
+        url: view.webContents.getURL() || targetUrl,
+        title: view.webContents.getTitle() || '',
+        canGoBack: view.webContents.canGoBack(),
+        canGoForward: view.webContents.canGoForward(),
+        isLoading: view.webContents.isLoading(),
+      });
+    };
+
+    view.webContents.on('did-start-loading', syncToolbarState);
+    view.webContents.on('did-stop-loading', syncToolbarState);
+    view.webContents.on('did-navigate', syncToolbarState);
+    view.webContents.on('did-navigate-in-page', syncToolbarState);
+    view.webContents.on('page-title-updated', syncToolbarState);
+
+    win.on('resize', () => layoutProxiedBrowserView(win, view));
+    win.on('maximize', () => layoutProxiedBrowserView(win, view));
+    win.on('unmaximize', () => layoutProxiedBrowserView(win, view));
+    win.on('enter-full-screen', () => layoutProxiedBrowserView(win, view));
+    win.on('leave-full-screen', () => layoutProxiedBrowserView(win, view));
+    win.on('closed', () => {
+      proxiedWindowViews.delete(win.id);
+    });
+
+    // Load the in-window toolbar shell, then navigate the proxied content view.
+    try {
+      await win.loadURL(makeProxiedToolbarDataUrl(win.id, proxyUri));
+    } catch {
+      // ignore
+    }
+    syncToolbarState();
+
+    const normalizedTarget = normalizeProxiedTargetUrl(targetUrl) || 'https://www.google.com';
+    view.webContents.loadURL(normalizedTarget).catch(() => {});
+
+    return win;
+  } catch (err) {
+    log.warn('openProxiedWindow failed', err);
+    return null;
+  }
+};
+
 
 const createCinnyWindow = (): BrowserWindow => {
   const child = new BrowserWindow({
@@ -3161,6 +3593,72 @@ ipcMain.handle('open-in-app', async (_event, url: string) => {
     });
   } catch (err) {
     log.warn('open-in-app failed', err);
+  }
+});
+
+// Allow renderer to request opening a proxied window via a socks5:// URL.
+ipcMain.handle('open-proxied-window', async (_event, proxyUri: string, targetUrl?: string) => {
+  try {
+    if (!proxyUri || typeof proxyUri !== 'string') return;
+    // fire-and-forget; openProxiedWindow logs errors internally.
+    // eslint-disable-next-line @typescript-eslint/no-floating-promises
+    openProxiedWindow(proxyUri, typeof targetUrl === 'string' ? targetUrl : 'https://www.google.com');
+  } catch (err) {
+    log.warn('open-proxied-window failed', err);
+  }
+});
+
+// Handle toolbar commands for proxied windows (back/forward/reload)
+ipcMain.handle('proxied-window-command', async (_event, windowId: number, cmd: string, value?: string) => {
+  try {
+    const w = BrowserWindow.fromId(windowId);
+    if (!w || w.isDestroyed()) return { ok: false };
+    const view = proxiedWindowViews.get(windowId);
+    const wc = view?.webContents;
+    if (!wc || wc.isDestroyed()) return { ok: false };
+    switch (cmd) {
+      case 'back':
+        if (wc.canGoBack()) wc.goBack();
+        break;
+      case 'forward':
+        if (wc.canGoForward()) wc.goForward();
+        break;
+      case 'reload':
+        wc.reload();
+        break;
+      case 'navigate': {
+        const normalized = normalizeProxiedTargetUrl(typeof value === 'string' ? value : '');
+        if (!normalized) return { ok: false, error: 'invalid-url' };
+        wc.loadURL(normalized).catch(() => {
+          // ignore
+        });
+        break;
+      }
+      case 'copy-url':
+        clipboard.writeText(wc.getURL() || '');
+        break;
+      case 'open-external': {
+        const currentUrl = wc.getURL() || '';
+        if (currentUrl) {
+          shell.openExternal(currentUrl).catch(() => {
+            // ignore
+          });
+        }
+        break;
+      }
+      case 'close':
+        w.close();
+        break;
+      default:
+        break;
+    }
+    if (!w.isDestroyed() && cmd !== 'close') {
+      w.focus();
+    }
+    return { ok: true };
+  } catch (err) {
+    log.debug('proxied-window-command failed', err);
+    return { ok: false };
   }
 });
 

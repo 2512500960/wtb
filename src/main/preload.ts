@@ -21,6 +21,7 @@ export type InvokeChannels =
   | 'element:open'
   | 'open-in-app'
   | 'open-external'
+  | 'open-proxied-window'
   | 'chat:status'
   | 'chat:start'
   | 'chat:stop'
