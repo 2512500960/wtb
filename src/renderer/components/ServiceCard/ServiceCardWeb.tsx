@@ -131,8 +131,8 @@ export default function ServiceCardWeb({
         </div>
         <div className="ServiceHint">
           Web 服务仅监听 Yggdrasil
-          网卡地址。点击“打开目录”后，将文件复制到该目录中；启动后可点击“查看”打开地址；其他加入YGGDRASIL网络的人可以访问这个地址（前提是他们也运行了相同的服务）。如果需要更复杂的配置或者服务，请自行搭建并将YGG网络接口的地址包含在自建服务的监听范围内
-          yggdrasilctl。
+          网卡地址。点击“打开目录”后，将文件复制到该目录中；启动后可点击“查看”打开地址；其他加入YGGDRASIL网络的人可以访问这个地址。如果需要更复杂的配置或者服务，请自行搭建并将YGG网络接口的地址包含在自建服务的监听范围内
+          yggdrasilctl。注意自己设置系统防火墙规则，注意隐私安全风险。
         </div>
       </div>
     );

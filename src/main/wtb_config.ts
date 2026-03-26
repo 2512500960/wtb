@@ -62,6 +62,12 @@ export type WtbConfigV1 = {
       >;
     };
   };
+
+  /** Optional: web/static files configuration */
+  web?: {
+    /** Optional: override base assets directory used for bundled web apps (cinny/element) */
+    assetsDir?: string;
+  };
 };
 
 export type YggdrasilAutoPeerManagerConfig = NonNullable<
@@ -95,6 +101,66 @@ const ensureDir = (dirPath: string): void => {
   fs.mkdirSync(dirPath, { recursive: true });
 };
 
+const mergeMissingDirContentsSync = (srcDir: string, dstDir: string): number => {
+  let copiedCount = 0;
+  ensureDir(dstDir);
+  const entries = fs.readdirSync(srcDir, { withFileTypes: true });
+  for (const entry of entries) {
+    const srcPath = path.join(srcDir, entry.name);
+    const dstPath = path.join(dstDir, entry.name);
+    if (entry.isDirectory()) {
+      copiedCount += mergeMissingDirContentsSync(srcPath, dstPath);
+      continue;
+    }
+    if (entry.isFile()) {
+      if (fs.existsSync(dstPath)) continue;
+      ensureDir(path.dirname(dstPath));
+      fs.copyFileSync(srcPath, dstPath);
+      copiedCount += 1;
+    }
+  }
+
+  return copiedCount;
+};
+
+const migrateLegacyDataIfNeeded = (
+  legacyDirs: string[],
+  targetDir: string,
+): void => {
+  try {
+    let copiedAny = false;
+    for (const legacyDir of legacyDirs) {
+      if (!legacyDir) continue;
+      if (path.resolve(legacyDir) === path.resolve(targetDir)) continue;
+      if (!fs.existsSync(legacyDir)) continue;
+
+      const copiedCount = mergeMissingDirContentsSync(legacyDir, targetDir);
+      if (copiedCount <= 0) continue;
+
+      log.info(
+        'Merged %d legacy files from %s into %s',
+        copiedCount,
+        legacyDir,
+        targetDir,
+      );
+      copiedAny = true;
+    }
+
+    if (!copiedAny) {
+      log.debug('No legacy packaged data needed migration into %s', targetDir);
+    }
+  } catch (error) {
+    log.warn('Failed to migrate legacy packaged data dir', error);
+  }
+};
+
+const getStablePackagedDataDir = (): string => {
+  const localAppData =
+    (process.env.LOCALAPPDATA || '').trim() ||
+    path.join(app.getPath('home'), 'AppData', 'Local');
+  return path.join(localAppData, 'Programs', 'wtb-data');
+};
+
 const sha256Hex = (input: string): string => {
   return crypto.createHash('sha256').update(input).digest('hex');
 };
@@ -114,10 +180,29 @@ export const getWtbDataDir = (): string => {
       (process.env.PORTABLE_EXECUTABLE_DIR || '').trim() || exeDir;
     const portableDataDir = path.join(portableBase, 'wtb-data');
 
+    // If explicit portable mode is requested, keep portable behaviour.
     if ((process.env.PORTABLE_EXECUTABLE_DIR || '').trim()) {
       return portableDataDir;
     }
 
+    // Prefer a stable directory under Local\Programs so upgrades don't wipe data.
+    try {
+      const persistentDataDir = getStablePackagedDataDir();
+      const roaming = app.getPath('appData');
+      const roamingDataDir =
+        roaming && roaming.trim() ? path.join(roaming, 'wtb') : '';
+
+      // Best-effort one-time migration from old packaged layouts.
+      migrateLegacyDataIfNeeded(
+        [portableDataDir, roamingDataDir],
+        persistentDataDir,
+      );
+      return persistentDataDir;
+    } catch {
+      // ignore
+    }
+
+    // If a portable data dir already exists next to the exe, respect it.
     try {
       if (fs.existsSync(portableDataDir)) {
         return portableDataDir;
@@ -126,35 +211,7 @@ export const getWtbDataDir = (): string => {
       // ignore
     }
 
-    const programFiles = (process.env.ProgramFiles || '').trim();
-    const programFilesX86 = (process.env['ProgramFiles(x86)'] || '').trim();
-    const isUnderDir = (childPath: string, parentPath: string): boolean => {
-      const child = path.resolve(childPath).toLowerCase();
-      const parent = path.resolve(parentPath).toLowerCase();
-      return child === parent || child.startsWith(parent + path.sep);
-    };
-    const looksInstalled =
-      (programFiles && isUnderDir(exeDir, programFiles)) ||
-      (programFilesX86 && isUnderDir(exeDir, programFilesX86));
-
-    if (!looksInstalled) {
-      try {
-        fs.accessSync(exeDir, fs.constants.W_OK);
-        return portableDataDir;
-      } catch {
-        // not writable
-      }
-    }
-
-    try {
-      const roaming = app.getPath('appData');
-      if (roaming && roaming.trim()) {
-        return path.join(roaming, 'wtb');
-      }
-    } catch {
-      // ignore
-    }
-
+    // Fallback to portable location.
     return portableDataDir;
   }
 
@@ -274,7 +331,7 @@ export const defaultYggdrasilAutoPeerManagerConfig = (): YggdrasilAutoPeerManage
     sampleSize: 12,
     probeAttempts: 3,
     probeIntervalMs: 1_500,
-    probeTimeoutMs: 5_000,
+    probeTimeoutMs: 1_000,
     lastSelectedPeers: [],
     probeState: {},
   };
@@ -383,6 +440,11 @@ const normalizeConfigV1 = (raw: unknown): WtbConfigV1 => {
       ...(publicPeers ? { publicPeers } : {}),
       autoPeerManager,
     },
+    web: (() => {
+      const webObj = obj?.web && typeof obj.web === 'object' ? obj.web : {};
+      const assetsRaw = typeof webObj.assetsDir === 'string' ? webObj.assetsDir.trim() : '';
+      return assetsRaw ? { assetsDir: assetsRaw } : undefined;
+    })(),
   };
 };
 
@@ -595,6 +657,33 @@ export const setWtbYggdrasilAutoPeerManagerRuntimeState = (
     parsed.yggdrasil.autoPeerManager.probeState = normalizedProbeState;
   } else {
     delete parsed.yggdrasil.autoPeerManager.probeState;
+  }
+
+  return persistMutableConfigObject(parsed);
+};
+
+export const setWtbWebAssetsDir = (assetsDir: string | null): WtbConfigV1 => {
+  const parsed = loadMutableConfigObject();
+
+  if (!parsed.web || typeof parsed.web !== 'object') parsed.web = {};
+
+  if (assetsDir == null || (typeof assetsDir === 'string' && !assetsDir.trim())) {
+    try {
+      log.info('Clearing web assetsDir override');
+      delete parsed.web.assetsDir;
+    } catch {
+      // ignore
+    }
+  } else if (typeof assetsDir === 'string') {
+    log.info('Setting web assetsDir override: %s', assetsDir.trim());
+    parsed.web.assetsDir = assetsDir.trim();
+  }
+
+  // Clean up if web is empty
+  try {
+    if (!parsed.web || Object.keys(parsed.web).length === 0) delete parsed.web;
+  } catch {
+    // ignore
   }
 
   return persistMutableConfigObject(parsed);

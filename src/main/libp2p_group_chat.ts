@@ -6,7 +6,7 @@ import log from 'electron-log';
 import { app } from 'electron';
 import { multiaddr } from '@multiformats/multiaddr';
 
-import { getWtbConfig } from './wtb_config';
+import { getWtbConfig, getWtbDataDir } from './wtb_config';
 import { webSockets } from '@libp2p/websockets';
 import { createWtbLibp2pNode, u8FromString, u8ToString } from './libp2p_node';
 import { getYggdrasilIPv6AddressOrThrow } from './main';
@@ -154,53 +154,6 @@ const isUnderDir = (childPath: string, parentPath: string): boolean => {
   const child = path.resolve(childPath).toLowerCase();
   const parent = path.resolve(parentPath).toLowerCase();
   return child === parent || child.startsWith(parent + path.sep);
-};
-
-const getWtbDataDir = (): string => {
-  const override = process.env.WTB_DATA_DIR;
-  if (override && override.trim()) return override;
-
-  if (app.isPackaged) {
-    const exeDir = path.dirname(app.getPath('exe'));
-    const portableBase =
-      (process.env.PORTABLE_EXECUTABLE_DIR || '').trim() || exeDir;
-    const portableDataDir = path.join(portableBase, 'wtb-data');
-
-    if ((process.env.PORTABLE_EXECUTABLE_DIR || '').trim()) {
-      return portableDataDir;
-    }
-
-    try {
-      if (fs.existsSync(portableDataDir)) {
-        return portableDataDir;
-      }
-    } catch {
-      // ignore
-    }
-
-    const programFiles = (process.env.ProgramFiles || '').trim();
-    const programFilesX86 = (process.env['ProgramFiles(x86)'] || '').trim();
-    const looksInstalled =
-      (programFiles && isUnderDir(exeDir, programFiles)) ||
-      (programFilesX86 && isUnderDir(exeDir, programFilesX86));
-
-    if (!looksInstalled && canWriteDir(exeDir)) {
-      return portableDataDir;
-    }
-
-    try {
-      const roaming = app.getPath('appData');
-      if (roaming && roaming.trim()) {
-        return path.join(roaming, 'wtb');
-      }
-    } catch {
-      // ignore
-    }
-
-    return portableDataDir;
-  }
-
-  return path.join(__dirname, '../../', 'wtb-data');
 };
 
 const getMsgStoreDir = (): string => path.join(getWtbDataDir(), 'msgstore');
@@ -594,11 +547,17 @@ export class Libp2pGroupChatService {
   private startBootstrapRetryTimer(node: Libp2p, pendingAddrs: string[]): void {
     this.stopBootstrapRetryTimer();
 
-    const pending = new Set((pendingAddrs ?? []).filter((a) => (a ?? '').trim().length > 0));
+    const pending = new Set(
+      (pendingAddrs ?? []).filter((a) => (a ?? '').trim().length > 0),
+    );
     if (pending.size === 0) return;
 
     const intervalMs = 10_000;
-    log.info('bootstrap dial retry enabled: %d pending, interval=%dms', pending.size, intervalMs);
+    log.info(
+      'bootstrap dial retry enabled: %d pending, interval=%dms',
+      pending.size,
+      intervalMs,
+    );
 
     const tick = async () => {
       // Stop if node was replaced/stopped.
@@ -612,7 +571,11 @@ export class Libp2pGroupChatService {
         const peers = node.getPeers?.() ?? [];
         const conns = (node as any).getConnections?.() ?? [];
         if ((peers?.length ?? 0) > 0 || (conns?.length ?? 0) > 0) {
-          log.info('bootstrap dial retry stopped: now connected (peers=%d conns=%d)', peers.length ?? 0, conns.length ?? 0);
+          log.info(
+            'bootstrap dial retry stopped: now connected (peers=%d conns=%d)',
+            peers.length ?? 0,
+            conns.length ?? 0,
+          );
           this.stopBootstrapRetryTimer();
           return;
         }
@@ -1061,7 +1024,9 @@ export class Libp2pGroupChatService {
       }
     }
 
-    const startedListenAddrs = node.getMultiaddrs().map((ma: any) => ma.toString());
+    const startedListenAddrs = node
+      .getMultiaddrs()
+      .map((ma: any) => ma.toString());
     log.info(
       'Libp2p node started with peerId %s, listening on %o',
       node.peerId.toString(),

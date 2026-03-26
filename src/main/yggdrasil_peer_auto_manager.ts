@@ -1,4 +1,7 @@
 import log from 'electron-log';
+import net from 'net';
+import tls from 'tls';
+import { URL } from 'url';
 import {
   listPreferredPublicPeerNodes,
   type PreferredPublicPeerNode,
@@ -119,6 +122,21 @@ type ResolvedAutoPeerConfig = Required<YggdrasilAutoPeerManagerConfig>;
 
 const MAX_RECENT_EVENTS = 40;
 const normalizeUri = (value: string): string => value.trim();
+const deriveUriHostKey = (value: string): string => {
+  try {
+    const u = new URL(value);
+    const scheme = (u.protocol || '').replace(':', '') || '';
+    let port = Number(u.port || 0) || undefined;
+    if (!port) {
+      if (scheme === 'tls' || scheme === 'wss' || scheme === 'quic') port = 443;
+      else if (scheme === 'ws' || scheme === 'tcp') port = 80;
+      else port = 443;
+    }
+    return `${scheme}://${u.hostname}:${port}`;
+  } catch {
+    return value.trim();
+  }
+};
 const normalizeRegion = (value: string | undefined): string =>
   (value || 'unknown').trim().toLowerCase() || 'unknown';
 
@@ -429,7 +447,7 @@ export class YggdrasilPeerAutoManager {
       reconcileIntervalMs:
         cfg.reconcileIntervalMs ?? defaults.reconcileIntervalMs ?? 900000,
       sampleSize: deriveProbePoolSize(targetPeerCount),
-      probeAttempts: deriveProbeAttempts(targetPeerCount),
+      probeAttempts: typeof cfg.probeAttempts === 'number' ? cfg.probeAttempts : defaults.probeAttempts ?? deriveProbeAttempts(targetPeerCount),
       probeIntervalMs: cfg.probeIntervalMs ?? defaults.probeIntervalMs ?? 1500,
       probeTimeoutMs: cfg.probeTimeoutMs ?? defaults.probeTimeoutMs ?? 5000,
       lastSelectedPeers: (cfg.lastSelectedPeers ?? []).map(normalizeUri),
@@ -665,20 +683,63 @@ export class YggdrasilPeerAutoManager {
       };
     }
 
-    const bundledCandidateByUri = new Map(
-      bundled.map((peer) => [normalizeUri(peer.address), peer]),
-    );
+    const bundledCandidateByUri = new Map<string, PreferredPublicPeerNode>();
+    const bundledCandidateByHostKey = new Map<string, PreferredPublicPeerNode>();
+    for (const peer of bundled) {
+      const uriKey = normalizeUri(peer.address);
+      bundledCandidateByUri.set(uriKey, peer);
+      try {
+        const hostKey = deriveUriHostKey(peer.address);
+        bundledCandidateByHostKey.set(hostKey, peer);
+      } catch {
+        // ignore
+      }
+    }
     const managedCandidates = bundled.filter((peer) => {
       const uri = normalizeUri(peer.address);
       return !pinnedPeers.has(uri) && !manualReservedPeers.has(uri);
     });
-    const managedCandidateByUri = new Map(
-      managedCandidates.map((peer) => [normalizeUri(peer.address), peer]),
-    );
+    const managedCandidateByUri = new Map<string, PreferredPublicPeerNode>();
+    const managedCandidateByHostKey = new Map<string, PreferredPublicPeerNode>();
+    for (const peer of managedCandidates) {
+      const uriKey = normalizeUri(peer.address);
+      managedCandidateByUri.set(uriKey, peer);
+      try {
+        const hostKey = deriveUriHostKey(peer.address);
+        managedCandidateByHostKey.set(hostKey, peer);
+      } catch {
+        // ignore
+      }
+    }
+    const findManagedCandidate = (uri: string): PreferredPublicPeerNode | undefined => {
+      const byUri = managedCandidateByUri.get(uri);
+      if (byUri) return byUri;
+      try {
+        const hk = deriveUriHostKey(uri);
+        return managedCandidateByHostKey.get(hk);
+      } catch {
+        return undefined;
+      }
+    };
+    const findBundledCandidate = (uri: string): PreferredPublicPeerNode | undefined => {
+      const byUri = bundledCandidateByUri.get(uri);
+      if (byUri) return byUri;
+      try {
+        const hk = deriveUriHostKey(uri);
+        return bundledCandidateByHostKey.get(hk);
+      } catch {
+        return undefined;
+      }
+    };
     const runtimePeers = await this.getRuntimePeers(cfg.probeTimeoutMs);
 
     const connectedPublicPeers = runtimePeers
-      .filter((peer) => bundledCandidateByUri.has(peer.uri) && peer.up)
+      .filter((peer) => {
+        if (!peer.up) return false;
+        if (bundledCandidateByUri.has(peer.uri)) return true;
+        const hostKey = deriveUriHostKey(peer.uri);
+        return bundledCandidateByHostKey.has(hostKey);
+      })
       .map((peer) => peer.uri)
       .sort();
 
@@ -691,7 +752,10 @@ export class YggdrasilPeerAutoManager {
     );
 
     const currentManagedPeers = runtimePeers.filter((peer) => {
-      if (!managedCandidateByUri.has(peer.uri)) return false;
+      const uriKey = peer.uri;
+      const hostKey = deriveUriHostKey(peer.uri);
+      const isManaged = managedCandidateByUri.has(uriKey) || managedCandidateByHostKey.has(hostKey);
+      if (!isManaged) return false;
       if (pinnedPeers.has(peer.uri)) return false;
       return true;
     });
@@ -700,8 +764,8 @@ export class YggdrasilPeerAutoManager {
       .filter((peer) => peer.up && !peer.inbound)
       .sort(
         (left, right) =>
-          scoreRuntimePeer(right, managedCandidateByUri.get(right.uri)) -
-          scoreRuntimePeer(left, managedCandidateByUri.get(left.uri)),
+          scoreRuntimePeer(right, findManagedCandidate(right.uri)) -
+          scoreRuntimePeer(left, findManagedCandidate(left.uri)),
       );
 
     const probeState = this.getProbeStateMap(cfg);
@@ -776,8 +840,8 @@ export class YggdrasilPeerAutoManager {
         .filter((peer) => desiredManagedUris.has(peer.uri))
         .sort(
           (left, right) =>
-            scoreRuntimePeer(left, managedCandidateByUri.get(left.uri)) -
-            scoreRuntimePeer(right, managedCandidateByUri.get(right.uri)),
+            scoreRuntimePeer(left, findManagedCandidate(left.uri)) -
+            scoreRuntimePeer(right, findManagedCandidate(right.uri)),
         );
 
       for (const attempt of maintenanceAttempts) {
@@ -800,7 +864,7 @@ export class YggdrasilPeerAutoManager {
 
         const currentWorst = selectedManagedPeers[0];
         const currentWorstScore = currentWorst
-          ? scoreRuntimePeer(currentWorst, managedCandidateByUri.get(currentWorst.uri))
+          ? scoreRuntimePeer(currentWorst, findManagedCandidate(currentWorst.uri))
           : Number.NEGATIVE_INFINITY;
         const latencyImprovement =
           currentWorst?.latencyMs != null && attempt.result.latencyMs != null
@@ -830,8 +894,8 @@ export class YggdrasilPeerAutoManager {
         selectedManagedPeers.push(attempt.result);
         selectedManagedPeers.sort(
           (left, right) =>
-            scoreRuntimePeer(left, managedCandidateByUri.get(left.uri)) -
-            scoreRuntimePeer(right, managedCandidateByUri.get(right.uri)),
+            scoreRuntimePeer(left, findManagedCandidate(left.uri)) -
+            scoreRuntimePeer(right, findManagedCandidate(right.uri)),
         );
 
         probeSnapshots.push({
@@ -850,17 +914,45 @@ export class YggdrasilPeerAutoManager {
       }
     }
 
-    const removableBundledPeers = runtimePeers.filter((peer) => {
-      if (!bundledCandidateByUri.has(peer.uri)) return false;
+    // 1) 先移除在 getpeers 中未连接成功的非本地（非 inbound）bundled peers
+    const unreachableBundled = runtimePeers.filter((peer) => {
+      if (!findBundledCandidate(peer.uri)) return false;
       if (pinnedPeers.has(peer.uri)) return false;
-      return !peer.inbound;
+      if (peer.inbound) return false; // 忽略局域网/本地入站连接
+      return !peer.up; // 未连接成功的 peer
     });
 
     const removedPeers: string[] = [];
-    for (const peer of removableBundledPeers) {
-      if (desiredManagedUris.has(peer.uri)) continue;
+    for (const peer of unreachableBundled) {
       await this.removePeer(peer.uri, cfg.probeTimeoutMs);
       removedPeers.push(peer.uri);
+    }
+
+    // 2) 如果剩余已连接成功的 managed peers 超过目标数量，按延迟从高到低移除多余的 peer
+    const connectedManaged = runtimePeers.filter((peer) => {
+      if (!findBundledCandidate(peer.uri)) return false;
+      if (pinnedPeers.has(peer.uri)) return false;
+      if (peer.inbound) return false; // 忽略局域网/本地入站连接
+      const isManaged = !!findManagedCandidate(peer.uri);
+      return peer.up && isManaged;
+    });
+
+    if (connectedManaged.length > desiredManagedCount) {
+      const toRemoveCount = connectedManaged.length - desiredManagedCount;
+      // 把 latency 为 null 的视作最大延迟，排在前面
+      const sortedByLatencyDesc = [...connectedManaged].sort((a, b) => {
+        const aLat = a.latencyMs == null ? Number.POSITIVE_INFINITY : a.latencyMs;
+        const bLat = b.latencyMs == null ? Number.POSITIVE_INFINITY : b.latencyMs;
+        return bLat - aLat;
+      });
+      for (let i = 0; i < toRemoveCount; i += 1) {
+        const peer = sortedByLatencyDesc[i];
+        if (!peer) break;
+        // 如果该 peer 是期望保留的，跳过
+        if (desiredManagedUris.has(peer.uri)) continue;
+        await this.removePeer(peer.uri, cfg.probeTimeoutMs);
+        removedPeers.push(peer.uri);
+      }
     }
 
     const currentUris = new Set(currentManagedPeers.map((peer) => peer.uri));
@@ -1039,18 +1131,47 @@ export class YggdrasilPeerAutoManager {
     probeState: Map<string, ProbeStateEntry>,
   ): Promise<ProbeAttempt[]> {
     const results: ProbeAttempt[] = [];
-    let selectedCount = 0;
-    for (const candidate of candidates) {
-      if (selectedCount >= neededCount) break;
-      const uri = normalizeUri(candidate.address);
-      if (alreadySelected.has(uri)) continue;
+    // 并发度：不超过候选数量，并受配置上限约束
+    const concurrency = Math.min(
+      candidates.length,
+      Math.max(2, Math.min(8, Math.floor(cfg.sampleSize / 2))),
+    );
 
-      // eslint-disable-next-line no-await-in-loop
+    const pool: Promise<void>[] = [];
+    let stopped = false;
+
+    const runProbe = async (candidate: PreferredPublicPeerNode) => {
+      if (stopped) return;
+      const uri = normalizeUri(candidate.address);
+      if (alreadySelected.has(uri)) return;
       const sampled = await this.probeCandidate(candidate, cfg, probeState);
       results.push(sampled);
-      if (!sampled.result) continue;
-      selectedCount += 1;
+      if (sampled.result) {
+        const selectedCount = results.filter((r) => !!r.result).length;
+        if (selectedCount >= neededCount) {
+          stopped = true;
+        }
+      }
+    };
+
+    for (let i = 0; i < candidates.length; i += 1) {
+      if (stopped) break;
+      const candidate = candidates[i];
+      // simple concurrency gate: 当并发达到上限时，等待任一任务完成后再继续
+      while (pool.length >= concurrency) {
+        // eslint-disable-next-line no-await-in-loop
+        await Promise.race(pool);
+      }
+      const p = runProbe(candidate).finally(() => {
+        const idx = pool.indexOf(p);
+        if (idx >= 0) pool.splice(idx, 1);
+      });
+      pool.push(p);
+      // 不在此处 await p，以便能并行启动更多探测任务
     }
+
+    // 等待所有并发任务完成
+    await Promise.allSettled(pool);
 
     return results.sort(
       (left, right) =>
@@ -1067,49 +1188,222 @@ export class YggdrasilPeerAutoManager {
     const uri = normalizeUri(candidate.address);
     const region = normalizeRegion(candidate.region);
     log.info(
-      `ygg-peer-auto-manager: probing candidate uri=${uri} region=${region} attempts=${cfg.probeAttempts}`,
+      `ygg-peer-auto-manager: probing candidate (direct network) uri=${uri} region=${region} attempts=${cfg.probeAttempts}`,
     );
-    await this.addPeer(uri, cfg.probeTimeoutMs);
-    // wait a moment for Yggdrasil to attempt connection and update peer status
-    await sleep(500);
+
     const samples: RuntimePeerEntry[] = [];
+
+    const testOnce = async (): Promise<RuntimePeerEntry | null> => {
+      try {
+        const start = Date.now();
+        let u: URL | null = null;
+        try {
+          u = new URL(candidate.address);
+        } catch {
+          u = null;
+        }
+        if (!u || !u.hostname) return null;
+        const scheme = (u.protocol || '').replace(':', '') || candidate.scheme || '';
+        let port = Number(u.port || 0) || undefined;
+        if (!port) {
+          if (scheme === 'tls' || scheme === 'wss') port = 443;
+          else if (scheme === 'quic') port = 443;
+          else if (scheme === 'ws' || scheme === 'tcp') port = 80;
+          else port = 443;
+        }
+
+        const host = u.hostname;
+
+        return await new Promise<RuntimePeerEntry | null>(async (resolve) => {
+          let settled = false;
+          const onSuccess = (latencyMs: number) => {
+            if (settled) return;
+            settled = true;
+            resolve({
+              uri,
+              up: true,
+              inbound: false,
+              latencyMs,
+              cost: null,
+              uptimeSec: null,
+              lastError: null,
+              lastErrorAgoMs: null,
+            });
+          };
+
+          const onFail = (errMsg: string) => {
+            if (settled) return;
+            settled = true;
+            resolve({
+              uri,
+              up: false,
+              inbound: false,
+              latencyMs: null,
+              cost: null,
+              uptimeSec: null,
+              lastError: errMsg,
+              lastErrorAgoMs: Date.now() - start,
+            });
+          };
+
+          const timeoutHandle = setTimeout(() => {
+            onFail('timeout');
+          }, cfg.probeTimeoutMs);
+
+          if (scheme === 'tls' || scheme === 'wss') {
+            const socket = tls.connect({ host, port, servername: host, rejectUnauthorized: false }, () => {
+              const latency = Date.now() - start;
+              clearTimeout(timeoutHandle);
+              socket.end();
+              onSuccess(latency);
+            });
+            // ensure socket won't hang forever
+            socket.setTimeout(cfg.probeTimeoutMs, () => {
+              try { socket.destroy(); } catch {}
+            });
+            socket.on('error', (err) => {
+              // If TLS handshake fails, treat as TCP-reachable fallback: try raw TCP connect
+              const msg = String(err && (err.message || err) || '');
+              const isHandshakeFailure = /handshake|SSLV3_ALERT_HANDSHAKE_FAILURE|SSL routines/i.test(msg);
+              if (isHandshakeFailure) {
+                try {
+                  const tcpStart = Date.now();
+                  const tcpSock = net.connect({ host, port, timeout: Math.max(250, cfg.probeTimeoutMs) }, () => {
+                    const latency = Date.now() - tcpStart;
+                    clearTimeout(timeoutHandle);
+                    try { tcpSock.end(); } catch {}
+                    onSuccess(latency);
+                  });
+                  tcpSock.on('error', (e) => {
+                    clearTimeout(timeoutHandle);
+                    onFail(String(e && (e.message || e) || msg));
+                  });
+                  tcpSock.setTimeout(Math.max(250, cfg.probeTimeoutMs), () => {
+                    try { tcpSock.destroy(); } catch {}
+                    clearTimeout(timeoutHandle);
+                    onFail(msg);
+                  });
+                } catch (e) {
+                  clearTimeout(timeoutHandle);
+                  onFail(msg);
+                }
+                return;
+              }
+              clearTimeout(timeoutHandle);
+              onFail(msg);
+            });
+          } else if (scheme === 'ws' || scheme === 'tcp') {
+            const socket = net.connect({ host, port, timeout: cfg.probeTimeoutMs }, () => {
+              const latency = Date.now() - start;
+              clearTimeout(timeoutHandle);
+              socket.end();
+              onSuccess(latency);
+            });
+            socket.on('error', (err) => {
+              clearTimeout(timeoutHandle);
+              onFail(String(err.message || err));
+            });
+          } else if (scheme === 'quic') {
+            // QUIC probing: prefer a native QUIC library when available for a proper handshake-based probe.
+            try {
+              let used = false;
+              try {
+                // try common node quic libs; this file uses dynamic require so missing module won't crash startup
+                // eslint-disable-next-line @typescript-eslint/no-var-requires
+                const nodeQuic = require('node-quic');
+                if (nodeQuic) {
+                  // attempt several common APIs
+                  if (typeof nodeQuic.connect === 'function') {
+                    await Promise.race([
+                      nodeQuic.connect({ address: host, port }).then(() => {
+                        clearTimeout(timeoutHandle);
+                        onSuccess(Date.now() - start);
+                      }),
+                      new Promise((res) => setTimeout(res, cfg.probeTimeoutMs)),
+                    ] as any);
+                    used = true;
+                  } else if (typeof nodeQuic.createSocket === 'function') {
+                    const sock = nodeQuic.createSocket({ endpoint: { address: '0.0.0.0' } });
+                    const session = await Promise.race([
+                      sock.connect({ address: host, port }),
+                      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), cfg.probeTimeoutMs)),
+                    ] as any);
+                    if (session) {
+                      try { session.close(); } catch {}
+                      clearTimeout(timeoutHandle);
+                      onSuccess(Date.now() - start);
+                      used = true;
+                    }
+                  }
+                }
+              } catch (e) {
+                // fall through to UDP fallback
+              }
+
+              if (!used) {
+                // UDP fallback: send a small packet and treat no immediate error as reachable (best-effort)
+                const dgram = require('dgram');
+                const sock = dgram.createSocket('udp4');
+                let sent = false;
+                sock.send(Buffer.from('ping'), port, host, (err: Error | null) => {
+                  if (err) {
+                    sent = false;
+                    clearTimeout(timeoutHandle);
+                    sock.close();
+                    onFail(String(err.message || err));
+                    return;
+                  }
+                  sent = true;
+                  clearTimeout(timeoutHandle);
+                  sock.close();
+                  onSuccess(Date.now() - start);
+                });
+                sock.on('error', (e: Error) => {
+                  clearTimeout(timeoutHandle);
+                  sock.close();
+                  onFail(String(e.message || e));
+                });
+                // if send didn't call back quickly, rely on timeoutHandle to fire
+              }
+            } catch (e) {
+              clearTimeout(timeoutHandle);
+              onFail(String(e || 'quic probe failed'));
+            }
+          } else {
+            // unknown scheme, fallback to TCP
+            const socket = net.connect({ host, port, timeout: cfg.probeTimeoutMs }, () => {
+              const latency = Date.now() - start;
+              clearTimeout(timeoutHandle);
+              socket.end();
+              onSuccess(latency);
+            });
+            socket.on('error', (err) => {
+              clearTimeout(timeoutHandle);
+              onFail(String(err.message || err));
+            });
+          }
+        });
+      } catch (err) {
+        return null;
+      }
+    };
+
     for (let attempt = 0; attempt < cfg.probeAttempts; attempt += 1) {
       if (attempt > 0) {
-        // Let Yggdrasil update RTT smoothing before next sample.
-        // eslint-disable-next-line no-await-in-loop
-        log.info(
-          `ygg-peer-auto-manager: probe attempt ${attempt + 1} uri=${uri} waiting=${cfg.probeIntervalMs}ms`,
-        );
         await sleep(cfg.probeIntervalMs);
       }
-
       // eslint-disable-next-line no-await-in-loop
-      const peers = await this.getRuntimePeers(cfg.probeTimeoutMs);
-      log.debug(
-        `ygg-peer-auto-manager: probe attempt ${attempt + 1} uri=${uri} got ${peers.length} peers from runtime`,
-      );
-
-      const entry = peers.find((peer) => peer.uri === uri);
-      if (!entry) {
+      const sample = await testOnce();
+      if (!sample) continue;
+      if (sample.up) {
+        samples.push(sample);
         log.info(
-          `ygg-peer-auto-manager: probe sample missing uri=${uri} attempt=${attempt + 1}/${cfg.probeAttempts}`,
-        );
-        for (const peer of peers) {
-          log.debug(
-            `ygg-peer-auto-manager: probe sample peer uri=${peer.uri} up=${peer.up} lastError=${peer.lastError || 'n/a'} lastErrorAgoMs=${peer.lastErrorAgoMs ?? 'n/a'}`,
-          );
-        }
-        continue;
-      }
-      if (entry?.up) {
-        samples.push(entry);
-        log.info(
-          `ygg-peer-auto-manager: probe sample success uri=${uri} attempt=${attempt + 1}/${cfg.probeAttempts} ${formatProbeMetric('latencyMs', entry.latencyMs)} ${formatProbeMetric('cost', entry.cost)} ${formatProbeMetric('uptimeSec', entry.uptimeSec)}`,
+          `ygg-peer-auto-manager: probe sample success uri=${uri} attempt=${attempt + 1}/${cfg.probeAttempts} ${formatProbeMetric('latencyMs', sample.latencyMs)}`,
         );
         continue;
       }
       log.info(
-        `ygg-peer-auto-manager: probe sample failed uri=${uri} attempt=${attempt + 1}/${cfg.probeAttempts} connected=no lastError=${entry?.lastError || 'n/a'} ${formatProbeMetric('lastErrorAgoMs', entry?.lastErrorAgoMs ?? null)}`,
+        `ygg-peer-auto-manager: probe sample failed uri=${uri} attempt=${attempt + 1}/${cfg.probeAttempts} lastError=${sample.lastError} configured timeout=${cfg.probeTimeoutMs}ms`,
       );
     }
 
@@ -1121,9 +1415,8 @@ export class YggdrasilPeerAutoManager {
         score: null,
       });
       log.warn(
-        `ygg-peer-auto-manager: probe candidate unreachable uri=${uri} region=${region}`,
+        `ygg-peer-auto-manager: probe candidate unreachable (direct) uri=${uri} region=${region}`,
       );
-      await this.removePeer(uri, cfg.probeTimeoutMs);
       return {
         candidate,
         result: null,
@@ -1139,7 +1432,7 @@ export class YggdrasilPeerAutoManager {
       score,
     });
     log.info(
-      `ygg-peer-auto-manager: probe candidate selected uri=${uri} region=${region} samples=${samples.length}/${cfg.probeAttempts} ${formatProbeMetric('avgLatencyMs', averaged.latencyMs)} ${formatProbeMetric('avgCost', averaged.cost)} ${formatProbeMetric('avgUptimeSec', averaged.uptimeSec)}`,
+      `ygg-peer-auto-manager: probe candidate selected (direct) uri=${uri} region=${region} samples=${samples.length}/${cfg.probeAttempts} ${formatProbeMetric('avgLatencyMs', averaged.latencyMs)}`,
     );
     return {
       candidate,

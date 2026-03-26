@@ -36,10 +36,13 @@ import MenuBuilder from './menu';
 import { resolveHtmlPath } from './util';
 import { WEBSITE_INDEX_ED25519_PUBLIC_KEY_PEM } from './website_index_pubkey';
 import { loadBundledPublicPeers } from './public_ygg_peers';
+import { startPublicNodesUpdater } from './public_nodes_updater';
 import {
   getWtbConfig,
+  getWtbDataDir,
   setWtbYggdrasilAutoPeerManagerConfig,
   setWtbYggdrasilPublicPeers,
+  setWtbWebAssetsDir,
 } from './wtb_config';
 import { YggdrasilPeerAutoManager } from './yggdrasil_peer_auto_manager';
 import {
@@ -653,12 +656,34 @@ const copyDirIfMissing = async (srcDir: string, dstDir: string) => {
 };
 
 const getBundledCinnyDir = (): string => {
+  try {
+    const cfg = getWtbConfig();
+    const override =
+      cfg?.web?.assetsDir && cfg.web.assetsDir.trim()
+        ? path.resolve(cfg.web.assetsDir)
+        : '';
+    if (override) return path.join(override, 'cinny');
+  } catch {
+    // ignore and fall back
+  }
+
   return app.isPackaged
     ? path.join(process.resourcesPath, 'assets', 'cinny')
     : path.join(__dirname, '../../assets', 'cinny');
 };
 
 const getBundledElementDir = (): string => {
+  try {
+    const cfg = getWtbConfig();
+    const override =
+      cfg?.web?.assetsDir && cfg.web.assetsDir.trim()
+        ? path.resolve(cfg.web.assetsDir)
+        : '';
+    if (override) return path.join(override, 'element');
+  } catch {
+    // ignore and fall back
+  }
+
   return app.isPackaged
     ? path.join(process.resourcesPath, 'assets', 'element')
     : path.join(__dirname, '../../assets', 'element');
@@ -966,7 +991,10 @@ const updateProxiedToolbarState = (
     });
 };
 
-const makeProxiedToolbarDataUrl = (windowId: number, proxyUri: string): string => {
+const makeProxiedToolbarDataUrl = (
+  windowId: number,
+  proxyUri: string,
+): string => {
   const safeProxy = escapeHtml(proxyUri);
   const html = `<!doctype html>
 <html lang="zh-CN">
@@ -1072,6 +1100,7 @@ const makeProxiedToolbarDataUrl = (windowId: number, proxyUri: string): string =
   </head>
   <body>
     <form class="bar" id="toolbar-form">
+      <tr>
       <button id="back" type="button" title="后退">◀</button>
       <button id="forward" type="button" title="前进">▶</button>
       <button id="reload" type="button" title="刷新">刷新</button>
@@ -1082,8 +1111,12 @@ const makeProxiedToolbarDataUrl = (windowId: number, proxyUri: string): string =
       <div class="spacer"></div>
       <div class="title" id="title"></div>
       <div class="status" id="status"></div>
-      <div class="proxy" title="${safeProxy}">代理: ${safeProxy}</div>
+      <!-- <div class="proxy" title="${safeProxy}">代理: ${safeProxy}</div> -->
       <button id="close" type="button" title="关闭窗口">关闭</button>
+      </tr>
+      <tr>
+      
+      </tr>
     </form>
     <script>
       const invoke = (cmd, value) =>
@@ -1179,7 +1212,10 @@ const openProxiedWindow = async (
 
     // Configure proxy rules on the session. Bypass loopback so local services still work.
     try {
-      await s.setProxy({ proxyRules: proxyUri, proxyBypassRules: '<-loopback>' });
+      await s.setProxy({
+        proxyRules: proxyUri,
+        proxyBypassRules: '<-loopback>',
+      });
     } catch (err) {
       log.warn('setProxy failed for', proxyUri, err);
     }
@@ -1241,7 +1277,11 @@ const openProxiedWindow = async (
     view.webContents.on('will-navigate', (e, navUrl) => {
       try {
         const p = new URL(navUrl);
-        if (p.protocol !== 'http:' && p.protocol !== 'https:' && p.protocol !== 'file:') {
+        if (
+          p.protocol !== 'http:' &&
+          p.protocol !== 'https:' &&
+          p.protocol !== 'file:'
+        ) {
           e.preventDefault();
         }
       } catch {
@@ -1296,7 +1336,8 @@ const openProxiedWindow = async (
     }
     syncToolbarState();
 
-    const normalizedTarget = normalizeProxiedTargetUrl(targetUrl) || 'https://www.google.com';
+    const normalizedTarget =
+      normalizeProxiedTargetUrl(targetUrl) || 'https://www.google.com';
     view.webContents.loadURL(normalizedTarget).catch(() => {});
 
     return win;
@@ -1305,7 +1346,6 @@ const openProxiedWindow = async (
     return null;
   }
 };
-
 
 const createCinnyWindow = (): BrowserWindow => {
   const child = new BrowserWindow({
@@ -1753,89 +1793,10 @@ const ensureWindowsOrThrow = (): void => {
   }
 };
 
-const getAppBaseDir = (): string => {
-  // Store runtime state in the app's own directory (portable-friendly).
-  // In packaged builds this is the folder containing the .exe.
-  if (app.isPackaged) {
-    return path.dirname(app.getPath('exe'));
-  }
-
-  // In dev, main bundle lives under .erb/dll, so ../../ points to repo root.
-  return path.join(__dirname, '../../');
-};
-
-const canWriteDir = (dirPath: string): boolean => {
-  try {
-    fs.accessSync(dirPath, fs.constants.W_OK);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
 const isUnderDir = (childPath: string, parentPath: string): boolean => {
   const child = path.resolve(childPath).toLowerCase();
   const parent = path.resolve(parentPath).toLowerCase();
   return child === parent || child.startsWith(parent + path.sep);
-};
-
-const getAppDataDir = (): string => {
-  // Optional override to help debugging / special packaging layouts.
-  const override = process.env.WTB_DATA_DIR;
-  if (override && override.trim()) return override;
-
-  // Packaged builds can be either "installed" (Program Files) or "portable"
-  // (unzipped to a user-writable folder). We want:
-  // - portable: keep runtime state next to the executable (self-contained)
-  // - installed: store runtime state in roaming AppData (no admin rights needed)
-  if (app.isPackaged) {
-    const exeDir = getAppBaseDir();
-    const portableBase =
-      (process.env.PORTABLE_EXECUTABLE_DIR || '').trim() || exeDir;
-    const portableDataDir = path.join(portableBase, 'wtb-data');
-
-    // electron-builder portable target sets PORTABLE_EXECUTABLE_DIR.
-    if ((process.env.PORTABLE_EXECUTABLE_DIR || '').trim()) {
-      return portableDataDir;
-    }
-
-    // If a wtb-data folder already exists next to the .exe, treat it as portable.
-    try {
-      if (fs.existsSync(portableDataDir)) {
-        return portableDataDir;
-      }
-    } catch {
-      // ignore
-    }
-
-    // Heuristic: if not running under Program Files and exe dir is writable,
-    // prefer portable behavior.
-    const programFiles = (process.env.ProgramFiles || '').trim();
-    const programFilesX86 = (process.env['ProgramFiles(x86)'] || '').trim();
-    const looksInstalled =
-      (programFiles && isUnderDir(exeDir, programFiles)) ||
-      (programFilesX86 && isUnderDir(exeDir, programFilesX86));
-
-    if (!looksInstalled && canWriteDir(exeDir)) {
-      return portableDataDir;
-    }
-
-    // Installed fallback: roaming AppData
-    try {
-      const roaming = app.getPath('appData'); // typically %APPDATA% on Windows
-      if (roaming && roaming.trim()) {
-        return path.join(roaming, 'wtb');
-      }
-    } catch {
-      // fallback to portableDataDir below
-    }
-
-    // Last resort: exe directory
-    return portableDataDir;
-  }
-
-  // Dev/unpackaged
-  return path.join(getAppBaseDir(), 'wtb-data');
 };
 
 const getYggdrasilBaseDir = (): string => {
@@ -1867,11 +1828,14 @@ const getYggdrasilCtlExePath = (): string => {
 };
 
 const getYggdrasilDataDir = (): string => {
-  return path.join(getAppDataDir(), 'yggdrasil');
+  return path.join(getWtbDataDir(), 'yggdrasil');
 };
 
 const getYggdrasilConfPath = (): string => {
-  log.debug('Yggdrasil config path:', path.join(getYggdrasilDataDir(), 'yggdrasil.conf'));
+  log.debug(
+    'Yggdrasil config path:',
+    path.join(getYggdrasilDataDir(), 'yggdrasil.conf'),
+  );
   return path.join(getYggdrasilDataDir(), 'yggdrasil.conf');
 };
 
@@ -2302,6 +2266,8 @@ const startYggdrasil = async (): Promise<ServiceStatus> => {
   const script = [
     "$ErrorActionPreference = 'Stop'",
     `New-Item -ItemType Directory -Force -Path ${psSingleQuote(dataDir)} | Out-Null`,
+    // Ensure GOMEMLIMIT is set for the yggdrasil process; allow existing env to override.
+    `if (-not $env:GOMEMLIMIT) { $env:GOMEMLIMIT = '256MiB' }`,
     `$p = Start-Process -FilePath ${psSingleQuote(yggExe)} -ArgumentList @('-useconffile',${psSingleQuote(
       confPath,
     )}) -WorkingDirectory ${psSingleQuote(baseDir)} -RedirectStandardOutput ${psSingleQuote(
@@ -2313,7 +2279,7 @@ const startYggdrasil = async (): Promise<ServiceStatus> => {
   ].join('; ');
 
   await runElevatedPowerShellAndWaitAsync(script);
-  log.info(getAppDataDir());
+  log.info(getWtbDataDir());
   log.info('yggdrasil start requested (elevated on-demand).');
 
   // Poll for the PID file to be created (may take time due to TUN adapter setup)
@@ -2648,7 +2614,22 @@ function getWebStatus(): ServiceStatus {
 }
 
 const getWebRootDir = (): string => {
-  return path.join(getAppDataDir(), 'web');
+  // 如果配置了 web.assetsDir，则使用该目录（允许绝对路径）；否则默认使用数据目录下的 web 子目录。
+  // 如果没有配置则走wtb-data/web
+
+  try {
+    const cfg = getWtbConfig();
+    const override =
+      cfg?.web?.assetsDir && cfg.web.assetsDir.trim()
+        ? cfg.web.assetsDir.trim()
+        : '';
+    if (override) return path.resolve(override);
+  } catch {
+    // ignore
+  }
+  log.debug('Using default web root directory under data dir');
+  log.debug('WTB data directory:', getWtbDataDir());
+  return path.join(getWtbDataDir(), 'web');
 };
 
 const escapeHtml = (input: string): string => {
@@ -3188,6 +3169,97 @@ ipcMain.handle('chat:dial', async (_event, ma: string) => {
   return await groupChat.dial(ma);
 });
 
+// Return current web root path (effective)
+ipcMain.handle('wtb:web:getDir', async () => {
+  try {
+    return { ok: true, path: getWebRootDir() };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+});
+
+// Update persisted web.assetsDir in wtb.conf
+ipcMain.handle('wtb:web:setDir', async (_event, dir: string | null) => {
+  try {
+    const result = setWtbWebAssetsDir(
+      dir && typeof dir === 'string' ? dir : null,
+    );
+    // restart web service to apply new config if it's running
+    const webStatus = getWebStatus();
+    if (webStatus.state === 'running') {
+      await stopWebService();
+      await startWebService();
+    }
+    // Return the normalized value
+    return { ok: true, path: result.web?.assetsDir ?? null };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+});
+
+// Open native directory picker and return selected path (main process dialog)
+ipcMain.handle('dialog:selectDirectory', async () => {
+  try {
+    const res = await dialog.showOpenDialog({
+      properties: ['openDirectory'],
+    });
+    if (res.canceled || !res.filePaths || res.filePaths.length === 0) {
+      return { ok: false, canceled: true };
+    }
+    return { ok: true, path: res.filePaths[0] };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+});
+
+// Return main process electron-log file path (if available)
+ipcMain.handle('logs:getMainLogPath', async () => {
+  try {
+    const file = log.transports.file.getFile();
+    const p = file && file.path ? file.path : null;
+    if (!p) {
+      return { ok: false, error: '日志文件路径不可用' };
+    }
+    return { ok: true, path: p };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+});
+
+// Open containing folder for the main log file
+ipcMain.handle('logs:openContainingFolder', async () => {
+  try {
+    const file = log.transports.file.getFile();
+    const p = file && file.path ? file.path : null;
+    if (!p) {
+      return { ok: false, error: '日志文件路径不可用' };
+    }
+    // showItemInFolder will open the file's folder and select it on supported platforms
+    try {
+      shell.showItemInFolder(p);
+    } catch (e) {
+      // best-effort: try opening parent folder
+      try {
+        await shell.openPath(path.dirname(p));
+      } catch (e2) {
+        // ignore
+      }
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+});
+
 ipcMain.handle('chat:subscribe', async (_event, topic: string) => {
   const ygg = getYggdrasilStatus();
   if (ygg.state !== 'running') {
@@ -3597,70 +3669,81 @@ ipcMain.handle('open-in-app', async (_event, url: string) => {
 });
 
 // Allow renderer to request opening a proxied window via a socks5:// URL.
-ipcMain.handle('open-proxied-window', async (_event, proxyUri: string, targetUrl?: string) => {
-  try {
-    if (!proxyUri || typeof proxyUri !== 'string') return;
-    // fire-and-forget; openProxiedWindow logs errors internally.
-    // eslint-disable-next-line @typescript-eslint/no-floating-promises
-    openProxiedWindow(proxyUri, typeof targetUrl === 'string' ? targetUrl : 'https://www.google.com');
-  } catch (err) {
-    log.warn('open-proxied-window failed', err);
-  }
-});
+ipcMain.handle(
+  'open-proxied-window',
+  async (_event, proxyUri: string, targetUrl?: string) => {
+    try {
+      if (!proxyUri || typeof proxyUri !== 'string') return;
+      // fire-and-forget; openProxiedWindow logs errors internally.
+      // eslint-disable-next-line @typescript-eslint/no-floating-promises
+      openProxiedWindow(
+        proxyUri,
+        typeof targetUrl === 'string' ? targetUrl : 'https://www.google.com',
+      );
+    } catch (err) {
+      log.warn('open-proxied-window failed', err);
+    }
+  },
+);
 
 // Handle toolbar commands for proxied windows (back/forward/reload)
-ipcMain.handle('proxied-window-command', async (_event, windowId: number, cmd: string, value?: string) => {
-  try {
-    const w = BrowserWindow.fromId(windowId);
-    if (!w || w.isDestroyed()) return { ok: false };
-    const view = proxiedWindowViews.get(windowId);
-    const wc = view?.webContents;
-    if (!wc || wc.isDestroyed()) return { ok: false };
-    switch (cmd) {
-      case 'back':
-        if (wc.canGoBack()) wc.goBack();
-        break;
-      case 'forward':
-        if (wc.canGoForward()) wc.goForward();
-        break;
-      case 'reload':
-        wc.reload();
-        break;
-      case 'navigate': {
-        const normalized = normalizeProxiedTargetUrl(typeof value === 'string' ? value : '');
-        if (!normalized) return { ok: false, error: 'invalid-url' };
-        wc.loadURL(normalized).catch(() => {
-          // ignore
-        });
-        break;
-      }
-      case 'copy-url':
-        clipboard.writeText(wc.getURL() || '');
-        break;
-      case 'open-external': {
-        const currentUrl = wc.getURL() || '';
-        if (currentUrl) {
-          shell.openExternal(currentUrl).catch(() => {
+ipcMain.handle(
+  'proxied-window-command',
+  async (_event, windowId: number, cmd: string, value?: string) => {
+    try {
+      const w = BrowserWindow.fromId(windowId);
+      if (!w || w.isDestroyed()) return { ok: false };
+      const view = proxiedWindowViews.get(windowId);
+      const wc = view?.webContents;
+      if (!wc || wc.isDestroyed()) return { ok: false };
+      switch (cmd) {
+        case 'back':
+          if (wc.canGoBack()) wc.goBack();
+          break;
+        case 'forward':
+          if (wc.canGoForward()) wc.goForward();
+          break;
+        case 'reload':
+          wc.reload();
+          break;
+        case 'navigate': {
+          const normalized = normalizeProxiedTargetUrl(
+            typeof value === 'string' ? value : '',
+          );
+          if (!normalized) return { ok: false, error: 'invalid-url' };
+          wc.loadURL(normalized).catch(() => {
             // ignore
           });
+          break;
         }
-        break;
+        case 'copy-url':
+          clipboard.writeText(wc.getURL() || '');
+          break;
+        case 'open-external': {
+          const currentUrl = wc.getURL() || '';
+          if (currentUrl) {
+            shell.openExternal(currentUrl).catch(() => {
+              // ignore
+            });
+          }
+          break;
+        }
+        case 'close':
+          w.close();
+          break;
+        default:
+          break;
       }
-      case 'close':
-        w.close();
-        break;
-      default:
-        break;
+      if (!w.isDestroyed() && cmd !== 'close') {
+        w.focus();
+      }
+      return { ok: true };
+    } catch (err) {
+      log.debug('proxied-window-command failed', err);
+      return { ok: false };
     }
-    if (!w.isDestroyed() && cmd !== 'close') {
-      w.focus();
-    }
-    return { ok: true };
-  } catch (err) {
-    log.debug('proxied-window-command failed', err);
-    return { ok: false };
-  }
-});
+  },
+);
 
 // Open embedded Cinny (offline static files bundled with the app)
 ipcMain.handle('cinny:open', async () => {
@@ -4001,6 +4084,13 @@ app
     // Runtime addpeer/removepeer is the only peer source; keep config peers empty.
     clearYggdrasilConfPeersBestEffort('app startup');
     scheduleAutoStartYggPeerManagerIfNeeded('app startup');
+
+    // Start background updater for public peers list (runs immediately and periodically)
+    try {
+      startPublicNodesUpdater();
+    } catch (e) {
+      log.warn('Failed to start public nodes updater', e);
+    }
 
     createWindow();
     app.on('activate', () => {

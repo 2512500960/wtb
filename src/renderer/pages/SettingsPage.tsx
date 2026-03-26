@@ -4,6 +4,8 @@ import { Link } from 'react-router-dom';
 import { FEATURES } from '../features/flags';
 import ChatSettingsSection from './settings/ChatSettingsSection';
 import YggdrasilPeersSettingsSection from './settings/YggdrasilPeersSettingsSection';
+import WebSettingsSection from './settings/WebSettingsSection';
+import LogsSettingsSection from './settings/LogsSettingsSection';
 
 export default function SettingsPage() {
   return (
@@ -17,7 +19,9 @@ export default function SettingsPage() {
 
       <div className="PageBody">
         <div className="StatusBlocks">
+          <LogsSettingsSection />
           <YggdrasilPeersSettingsSection />
+          <WebSettingsSection />
           {FEATURES.chat ? <ChatSettingsSection /> : null}
         </div>
       </div>
