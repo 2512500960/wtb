@@ -34,9 +34,11 @@ import * as crypto from 'crypto';
 import * as Hjson from 'hjson';
 import MenuBuilder from './menu';
 import { resolveHtmlPath } from './util';
+import { ensureMediaDirs } from './mediaServer';
 import { WEBSITE_INDEX_ED25519_PUBLIC_KEY_PEM } from './website_index_pubkey';
 import { loadBundledPublicPeers } from './public_ygg_peers';
 import { startPublicNodesUpdater } from './public_nodes_updater';
+import { yggdrasilBootstrapNodes } from './yggdrasil_bootstrap_nodes';
 import {
   getWtbConfig,
   getWtbDataDir,
@@ -122,6 +124,19 @@ type ServiceStatus = {
   name: ServiceName;
   state: 'running' | 'stopped';
   details?: string;
+};
+
+type FirewallPortDescriptor = {
+  name: string;
+  port: number;
+  protocol: 'TCP';
+};
+
+type FirewallPortStatus = FirewallPortDescriptor & {
+  allowed: boolean;
+  rules: string[];
+  checked: boolean;
+  error?: string;
 };
 
 let yggdrasilPid: number | null = null;
@@ -655,6 +670,35 @@ const copyDirIfMissing = async (srcDir: string, dstDir: string) => {
   );
 };
 
+const copyDirContentsIfMissing = async (
+  srcDir: string,
+  dstDir: string,
+): Promise<void> => {
+  if (!(await pathExists(srcDir))) return;
+
+  await ensureDirAsync(dstDir);
+  const entries = await fs.promises.readdir(srcDir, { withFileTypes: true });
+  await Promise.all(
+    entries.map(async (entry) => {
+      const src = path.join(srcDir, entry.name);
+      const dst = path.join(dstDir, entry.name);
+
+      if (entry.isDirectory()) {
+        if (await pathExists(dst)) {
+          await copyDirContentsIfMissing(src, dst);
+        } else {
+          await copyDirIfMissing(src, dst);
+        }
+        return;
+      }
+
+      if (!(await pathExists(dst))) {
+        await fs.promises.copyFile(src, dst);
+      }
+    }),
+  );
+};
+
 const getBundledCinnyDir = (): string => {
   try {
     const cfg = getWtbConfig();
@@ -689,12 +733,40 @@ const getBundledElementDir = (): string => {
     : path.join(__dirname, '../../assets', 'element');
 };
 
+const getBundledWebDir = (): string => {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'assets', 'web')
+    : path.join(__dirname, '../../wtb-data', 'web');
+};
+
 const getUserCinnyDir = (): string => {
   return path.join(app.getPath('userData'), 'cinny');
 };
 
 const getUserElementDir = (): string => {
   return path.join(app.getPath('userData'), 'element');
+};
+
+const ensureDefaultWebAssets = async (webRoot: string): Promise<void> => {
+  try {
+    const cfg = getWtbConfig();
+    const override =
+      cfg?.web?.assetsDir && cfg.web.assetsDir.trim()
+        ? cfg.web.assetsDir.trim()
+        : '';
+    if (override) return;
+  } catch {
+    // ignore
+  }
+
+  const bundledDir = getBundledWebDir();
+  if (!(await pathExists(path.join(bundledDir, 'index.html')))) return;
+
+  const bundledResolved = path.resolve(bundledDir).toLowerCase();
+  const webRootResolved = path.resolve(webRoot).toLowerCase();
+  if (bundledResolved === webRootResolved) return;
+
+  await copyDirContentsIfMissing(bundledDir, webRoot);
 };
 
 const ensureCinnyConfig = async (cinnyDir: string): Promise<void> => {
@@ -1916,13 +1988,23 @@ const stripUtf8Bom = (text: string): string => {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 };
 
+const normalizeYggdrasilConfStringList = (values: unknown): string[] => {
+  if (!Array.isArray(values)) return [];
+
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+  return normalized;
+};
+
 const setYggdrasilConfPeers = (confPath: string, peers: string[]): void => {
-  const list = Array.isArray(peers)
-    ? peers
-        .filter((x) => typeof x === 'string')
-        .map((x) => x.trim())
-        .filter((x) => !!x)
-    : [];
+  const list = normalizeYggdrasilConfStringList(peers);
 
   const raw = stripUtf8Bom(fs.readFileSync(confPath, { encoding: 'utf8' }));
   const doc: any = (Hjson as any).rt?.parse
@@ -1930,6 +2012,38 @@ const setYggdrasilConfPeers = (confPath: string, peers: string[]): void => {
     : Hjson.parse(raw);
 
   doc.Peers = list;
+
+  const out: string = (Hjson as any).rt?.stringify
+    ? (Hjson as any).rt.stringify(doc, {
+        quotes: 'all',
+        separator: true,
+        space: 2,
+      })
+    : Hjson.stringify(doc, { quotes: 'all', separator: true, space: 2 });
+
+  fs.writeFileSync(confPath, `${stripUtf8Bom(out)}\n`, { encoding: 'utf8' });
+};
+
+const mergeYggdrasilConfP2PBootstrapPeers = (
+  confPath: string,
+  peers: string[],
+): void => {
+  const additionalPeers = normalizeYggdrasilConfStringList(peers);
+  if (!additionalPeers.length) return;
+
+  const raw = stripUtf8Bom(fs.readFileSync(confPath, { encoding: 'utf8' }));
+  const doc: any = (Hjson as any).rt?.parse
+    ? (Hjson as any).rt.parse(raw)
+    : Hjson.parse(raw);
+
+  if (!doc.P2P || typeof doc.P2P !== 'object') {
+    doc.P2P = {};
+  }
+
+  doc.P2P.bootstrap_peers = normalizeYggdrasilConfStringList([
+    ...normalizeYggdrasilConfStringList(doc.P2P.bootstrap_peers),
+    ...additionalPeers,
+  ]);
 
   const out: string = (Hjson as any).rt?.stringify
     ? (Hjson as any).rt.stringify(doc, {
@@ -1953,6 +2067,9 @@ const clearYggdrasilConfPeersBestEffort = (reason: string): void => {
     log.warn(`Failed to clear yggdrasil.conf peers (${reason})`, error);
   }
 };
+
+// 生成yggdrasil.conf，如果已存在则不覆盖。生成后会清空 Peers 列表（如果有的话），避免自动连接到预设的公共节点（可能不可靠或被污染）。用户可以通过设置手动节点列表或启用自动节点管理来添加可信节点。
+// 生成之后，再把yggdrasilBootstrapNodes合并进去
 
 const generateYggdrasilConfIfMissing = async (
   yggExe: string,
@@ -1983,6 +2100,7 @@ const generateYggdrasilConfIfMissing = async (
   fs.writeFileSync(confPath, stripUtf8Bom(confText), { encoding: 'utf8' });
 
   setYggdrasilConfPeers(confPath, []);
+  mergeYggdrasilConfP2PBootstrapPeers(confPath, yggdrasilBootstrapNodes);
 };
 
 const updateYggdrasilConfP2PDataDir = (
@@ -2514,6 +2632,106 @@ const getWebPort = (): number => {
   return parsed;
 };
 
+const getRequiredFirewallPorts = (): FirewallPortDescriptor[] => {
+  return [{ name: 'web', port: getWebPort(), protocol: 'TCP' }];
+};
+
+const getWindowsFirewallPortStatuses = (
+  descriptors: FirewallPortDescriptor[],
+): FirewallPortStatus[] => {
+  const uniqueDescriptors = descriptors.filter(
+    (item, index, arr) =>
+      arr.findIndex(
+        (candidate) =>
+          candidate.port === item.port && candidate.protocol === item.protocol,
+      ) === index,
+  );
+
+  if (!isWindows) {
+    return uniqueDescriptors.map((item) => ({
+      ...item,
+      allowed: false,
+      rules: [],
+      checked: false,
+      error: 'unsupported platform',
+    }));
+  }
+
+  const ports = uniqueDescriptors.map((item) => item.port);
+  if (!ports.length) return [];
+
+  const script = [
+    `$ports = @(${ports.map((port) => psSingleQuote(String(port))).join(',')})`,
+    '$results = @()',
+    '$rules = Get-NetFirewallRule -Direction Inbound -Enabled True -Action Allow -ErrorAction SilentlyContinue',
+    'foreach ($rule in $rules) {',
+    '  $filters = Get-NetFirewallPortFilter -AssociatedNetFirewallRule $rule -ErrorAction SilentlyContinue',
+    '  foreach ($filter in $filters) {',
+    "    if (([string]$filter.Protocol) -ne 'TCP') { continue }",
+    '    $localPort = ([string]$filter.LocalPort).Trim()',
+    "    if (-not $localPort) { continue }",
+    "    if ($localPort -eq 'Any') { foreach ($requested in $ports) { $results += [pscustomobject]@{ Port = [int]$requested; Rule = $rule.DisplayName } }; continue }",
+    "    foreach ($segment in ($localPort -split ',')) {",
+    '      $item = $segment.Trim()',
+    "      if (-not $item) { continue }",
+    "      if ($item -match '^(\\d+)-(\\d+)$') {",
+    '        $start = [int]$matches[1]',
+    '        $end = [int]$matches[2]',
+    '        foreach ($requested in $ports) { $requestedInt = [int]$requested; if ($requestedInt -ge $start -and $requestedInt -le $end) { $results += [pscustomobject]@{ Port = $requestedInt; Rule = $rule.DisplayName } } }',
+    "      } elseif ($ports -contains $item) {",
+    '        $results += [pscustomobject]@{ Port = [int]$item; Rule = $rule.DisplayName }',
+    '      }',
+    '    }',
+    '  }',
+    '}',
+    '$out = foreach ($requested in $ports) {',
+    '  $requestedInt = [int]$requested',
+    '  $matched = @($results | Where-Object { $_.Port -eq $requestedInt } | Select-Object -ExpandProperty Rule -Unique)',
+    '  [pscustomobject]@{ port = $requestedInt; allowed = ($matched.Count -gt 0); rules = @($matched) }',
+    '}',
+    '$out | ConvertTo-Json -Compress -Depth 4',
+  ].join(' ');
+
+  try {
+    const { stdout } = runPowerShell(script);
+    const raw = (stdout || '').trim();
+    const parsed = raw ? (JSON.parse(raw) as any) : [];
+    const items = Array.isArray(parsed) ? parsed : [parsed];
+    const byPort = new Map<number, { allowed: boolean; rules: string[] }>();
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue;
+      const port = Number(item.port);
+      if (!Number.isFinite(port)) continue;
+      const rules = Array.isArray(item.rules)
+        ? item.rules.filter((rule: unknown): rule is string => typeof rule === 'string')
+        : [];
+      byPort.set(port, {
+        allowed: item.allowed === true,
+        rules,
+      });
+    }
+
+    return uniqueDescriptors.map((descriptor) => {
+      const matched = byPort.get(descriptor.port);
+      return {
+        ...descriptor,
+        allowed: matched?.allowed === true,
+        rules: matched?.rules ?? [],
+        checked: true,
+      };
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return uniqueDescriptors.map((item) => ({
+      ...item,
+      allowed: false,
+      rules: [],
+      checked: false,
+      error: message,
+    }));
+  }
+};
+
 const parseYggdrasilIPv6FromGetself = (stdout: string): string | null => {
   const text = (stdout || '').trim();
   // console.log('parseYggdrasilIPv6FromGetself raw output:', text);
@@ -2692,9 +2910,14 @@ const guessContentType = (filePath: string): string => {
     case '.ico':
       return 'image/x-icon';
     case '.mp4':
+    case '.m4v':
       return 'video/mp4';
+    case '.mov':
+      return 'video/quicktime';
     case '.webm':
       return 'video/webm';
+    case '.ogv':
+      return 'video/ogg';
     case '.mp3':
       return 'audio/mpeg';
     case '.wav':
@@ -2744,6 +2967,68 @@ const urlPathToFsPath = (rootDir: string, urlPath: string): string => {
   // Convert URL path segments to platform path safely.
   const segments = rel.split('/').filter(Boolean);
   return path.join(rootDir, ...segments);
+};
+
+const sendJson = (
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  statusCode: number,
+  body: unknown,
+): void => {
+  const text = JSON.stringify(body);
+  res.statusCode = statusCode;
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Content-Length', String(Buffer.byteLength(text)));
+  if ((req.method || 'GET').toUpperCase() === 'HEAD') {
+    res.end();
+    return;
+  }
+  res.end(text);
+};
+
+const parseByteRange = (
+  rangeHeader: string | string[] | undefined,
+  size: number,
+): { start: number; end: number } | null | 'invalid' => {
+  const headerValue = Array.isArray(rangeHeader) ? rangeHeader[0] : rangeHeader;
+  if (!headerValue) {
+    return null;
+  }
+
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(headerValue.trim());
+  if (!match) {
+    return 'invalid';
+  }
+
+  const [, startText, endText] = match;
+  if (!startText && !endText) {
+    return 'invalid';
+  }
+
+  if (!startText) {
+    const suffixLength = Number.parseInt(endText, 10);
+    if (!Number.isFinite(suffixLength) || suffixLength <= 0 || size <= 0) {
+      return 'invalid';
+    }
+    const start = Math.max(size - suffixLength, 0);
+    return { start, end: size - 1 };
+  }
+
+  const start = Number.parseInt(startText, 10);
+  if (!Number.isFinite(start) || start < 0 || start >= size) {
+    return 'invalid';
+  }
+
+  if (!endText) {
+    return { start, end: size - 1 };
+  }
+
+  const end = Number.parseInt(endText, 10);
+  if (!Number.isFinite(end) || end < start) {
+    return 'invalid';
+  }
+
+  return { start, end: Math.min(end, size - 1) };
 };
 
 const ensureDirExists = (dirPath: string): void => {
@@ -2850,6 +3135,8 @@ const startWebService = async (): Promise<ServiceStatus> => {
 
   const webRoot = getWebRootDir();
   ensureDirExists(webRoot);
+  await ensureDefaultWebAssets(webRoot);
+  ensureMediaDirs(webRoot);
 
   const server = http.createServer((req, res) => {
     try {
@@ -2863,6 +3150,7 @@ const startWebService = async (): Promise<ServiceStatus> => {
       }
 
       const urlPath = parseAndNormalizeUrlPath(req.url);
+      const requestUrl = new URL(req.url || '/', 'http://localhost');
 
       if (urlPath === '/health') {
         const body = JSON.stringify({
@@ -2874,6 +3162,74 @@ const startWebService = async (): Promise<ServiceStatus> => {
         res.statusCode = 200;
         res.setHeader('Content-Type', 'application/json; charset=utf-8');
         res.end(method === 'HEAD' ? undefined : body);
+        return;
+      }
+
+      if (urlPath === '/api/list') {
+        const requestedPath = requestUrl.searchParams.get('path') || '/';
+        const normalizedPath = parseAndNormalizeUrlPath(requestedPath);
+        const targetPath = urlPathToFsPath(webRoot, normalizedPath);
+
+        if (!isUnderDir(targetPath, webRoot)) {
+          sendJson(req, res, 403, { success: false, error: 'Forbidden' });
+          return;
+        }
+
+        if (!fs.existsSync(targetPath) || !fs.statSync(targetPath).isDirectory()) {
+          sendJson(req, res, 404, { success: false, error: 'Not Found' });
+          return;
+        }
+
+        let entries = fs
+          .readdirSync(targetPath, { withFileTypes: true })
+          .map((entry) => {
+            const childPath = path.join(targetPath, entry.name);
+            const childStat = fs.statSync(childPath);
+            const childUrlPath = path.posix.join(
+              normalizedPath === '/' ? '' : normalizedPath,
+              entry.name,
+            );
+            return {
+              name: entry.name,
+              path: `/${childUrlPath.replace(/^\/+/, '')}`,
+              isDirectory: entry.isDirectory(),
+              size: childStat.isFile() ? childStat.size : 0,
+              mtimeMs: childStat.mtimeMs,
+            };
+          })
+          .sort((a, b) => {
+            if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+            return a.name.localeCompare(b.name, 'zh-CN', {
+              numeric: true,
+              sensitivity: 'base',
+            });
+          });
+
+        // Filter out index files so front-end directory listing doesn't expose them
+        // need to filter out /index.html and /index.json and /vendor
+        entries = entries.filter((e) => {
+          const lower = e.name.toLowerCase();
+          return lower !== 'index.html' && lower !== 'index.json' && lower !== 'vendor' && lower !== 'hls';
+        });
+
+        sendJson(req, res, 200, {
+          success: true,
+          data: {
+            path: normalizedPath,
+            entries,
+          },
+        });
+        return;
+      }
+
+      if (urlPath === '/api/firewall/ports') {
+        sendJson(req, res, 200, {
+          success: true,
+          data: {
+            checkedAt: new Date().toISOString(),
+            items: getWindowsFirewallPortStatuses(getRequiredFirewallPorts()),
+          },
+        });
         return;
       }
 
@@ -2902,6 +3258,40 @@ const startWebService = async (): Promise<ServiceStatus> => {
           res.setHeader('Location', `${urlPath}/`);
           res.end();
           return;
+        }
+        // If an index file exists, serve it before rendering the directory index
+        try {
+          const indexCandidates = ['index.html', 'index.htm'];
+          for (const idx of indexCandidates) {
+            const idxPath = path.join(fsPath, idx);
+            if (fs.existsSync(idxPath)) {
+              const idxStat = fs.statSync(idxPath);
+              if (idxStat.isFile()) {
+                res.statusCode = 200;
+                res.setHeader('Content-Type', guessContentType(idxPath));
+                res.setHeader('Content-Length', String(idxStat.size));
+                res.setHeader('Last-Modified', idxStat.mtime.toUTCString());
+                if (method === 'HEAD') {
+                  res.end();
+                  return;
+                }
+                const stream = fs.createReadStream(idxPath);
+                stream.on('error', () => {
+                  try {
+                    res.statusCode = 500;
+                    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+                    res.end('Internal Server Error');
+                  } catch {
+                    // ignore
+                  }
+                });
+                stream.pipe(res);
+                return;
+              }
+            }
+          }
+        } catch {
+          // ignore index check errors and fall back to directory listing
         }
 
         const dirents = fs.readdirSync(fsPath, { withFileTypes: true });
@@ -2937,10 +3327,50 @@ const startWebService = async (): Promise<ServiceStatus> => {
       }
 
       if (st.isFile()) {
-        res.statusCode = 200;
+        const range = parseByteRange(req.headers.range, st.size);
         res.setHeader('Content-Type', guessContentType(fsPath));
-        res.setHeader('Content-Length', String(st.size));
         res.setHeader('Last-Modified', st.mtime.toUTCString());
+        res.setHeader('Accept-Ranges', 'bytes');
+
+        if (range === 'invalid') {
+          res.statusCode = 416;
+          res.setHeader('Content-Range', `bytes */${st.size}`);
+          res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+          res.end(method === 'HEAD' ? undefined : 'Requested Range Not Satisfiable');
+          return;
+        }
+
+        if (range) {
+          const chunkSize = range.end - range.start + 1;
+          res.statusCode = 206;
+          res.setHeader('Content-Length', String(chunkSize));
+          res.setHeader(
+            'Content-Range',
+            `bytes ${range.start}-${range.end}/${st.size}`,
+          );
+          if (method === 'HEAD') {
+            res.end();
+            return;
+          }
+          const stream = fs.createReadStream(fsPath, {
+            start: range.start,
+            end: range.end,
+          });
+          stream.on('error', () => {
+            try {
+              res.statusCode = 500;
+              res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+              res.end('Internal Server Error');
+            } catch {
+              // ignore
+            }
+          });
+          stream.pipe(res);
+          return;
+        }
+
+        res.statusCode = 200;
+        res.setHeader('Content-Length', String(st.size));
         if (method === 'HEAD') {
           res.end();
           return;
@@ -2986,6 +3416,19 @@ const startWebService = async (): Promise<ServiceStatus> => {
   webServer = server;
   webListenAddress = host;
   webListenPort = port;
+  try {
+    const firewallPorts = getWindowsFirewallPortStatuses(getRequiredFirewallPorts());
+    const blocked = firewallPorts.filter((item) => item.checked && !item.allowed);
+    if (blocked.length) {
+      log.warn(
+        `Windows 防火墙可能未放行端口: ${blocked
+          .map((item) => `${item.name}:${item.port}`)
+          .join(', ')}`,
+      );
+    }
+  } catch (error) {
+    log.debug('Failed to inspect Windows firewall port status', error);
+  }
   log.info(`web service listening on http://[${host}]:${port}`);
   return getWebStatus();
 };
