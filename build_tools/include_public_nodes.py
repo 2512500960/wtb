@@ -14,7 +14,7 @@ import re
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 DEFAULT_URL = "https://publicpeers.neilalexander.dev/"
-
+YGGDRASIL_URL= "http://[200:2688:699a:ce30:5897:cd3d:f999:8782]/"
 
 DEFAULT_PREFER_SCHEMES = ["tls", "quic", "wss", "ws", "tcp"]
 DEFAULT_MAX_PER_COUNTRY = 5

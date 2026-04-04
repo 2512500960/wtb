@@ -1,0 +1,595 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WTB Media</title>
+    <link rel="stylesheet" href="/vendor/plyr.css" />
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f3f1ea;
+        --panel: rgba(255, 252, 245, 0.95);
+        --line: #d8d0c1;
+        --text: #1d1a16;
+        --muted: #6c6458;
+        --accent: #8c3b2a;
+        --accent-2: #315c52;
+        --shadow: 0 18px 50px rgba(70, 46, 24, 0.12);
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        background:
+          radial-gradient(circle at top left, rgba(201, 152, 95, 0.22), transparent 28%),
+          linear-gradient(180deg, #f6f2e8 0%, #ebe3d2 100%);
+        color: var(--text);
+      }
+
+      .page {
+        width: min(1200px, calc(100vw - 24px));
+        margin: 24px auto;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 18px;
+      }
+
+      .page.with-player {
+        grid-template-columns: minmax(0, 1.2fr) minmax(360px, 0.9fr);
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid rgba(120, 101, 76, 0.18);
+        border-radius: 20px;
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(12px);
+      }
+
+      .browser {
+        padding: 22px;
+      }
+
+      .player-panel {
+        display: none;
+        padding: 22px;
+        position: sticky;
+        top: 24px;
+        align-self: start;
+      }
+
+      .page.with-player .player-panel {
+        display: block;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 28px;
+        line-height: 1.15;
+      }
+
+      .subtitle {
+        margin-top: 10px;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
+      .toolbar {
+        margin-top: 18px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        font-size: 13px;
+        background: rgba(49, 92, 82, 0.08);
+        color: var(--accent-2);
+      }
+
+      .badge.warn {
+        background: rgba(140, 59, 42, 0.1);
+        color: var(--accent);
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      button,
+      .link-button,
+      a.file-link {
+        border: 0;
+        border-radius: 12px;
+        padding: 9px 14px;
+        font-size: 14px;
+        cursor: pointer;
+        text-decoration: none;
+        transition: transform 0.15s ease, opacity 0.15s ease, background 0.15s ease;
+      }
+
+      button:hover,
+      .link-button:hover,
+      a.file-link:hover {
+        transform: translateY(-1px);
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+        transform: none;
+      }
+
+      .primary {
+        background: var(--accent);
+        color: #fff9f2;
+      }
+
+      .secondary {
+        background: rgba(49, 92, 82, 0.12);
+        color: var(--accent-2);
+      }
+
+      .ghost {
+        background: rgba(117, 101, 80, 0.09);
+        color: var(--text);
+      }
+
+      .pathbar {
+        margin-top: 18px;
+        padding: 14px 16px;
+        border-radius: 16px;
+        background: rgba(117, 101, 80, 0.08);
+      }
+
+      .pathbar-title {
+        font-size: 12px;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .breadcrumbs {
+        margin-top: 10px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+      }
+
+      .crumb {
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: #fff;
+        color: var(--text);
+      }
+
+      .listing {
+        margin-top: 18px;
+        display: grid;
+        gap: 10px;
+      }
+
+      .entry {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: center;
+        padding: 14px 16px;
+        border-radius: 16px;
+        border: 1px solid rgba(120, 101, 76, 0.16);
+        background: rgba(255, 255, 255, 0.84);
+      }
+
+      .entry-main {
+        min-width: 0;
+      }
+
+      .entry-title {
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .entry-meta {
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 13px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .entry-actions {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+
+      .empty {
+        padding: 22px;
+        text-align: center;
+        color: var(--muted);
+        border: 1px dashed rgba(120, 101, 76, 0.26);
+        border-radius: 16px;
+      }
+
+      .hint {
+        margin-top: 12px;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
+      video {
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        border-radius: 18px;
+        background: #111;
+      }
+
+      .player-meta {
+        margin-top: 14px;
+        display: grid;
+        gap: 10px;
+      }
+
+      .status {
+        padding: 12px 14px;
+        border-radius: 14px;
+        background: rgba(49, 92, 82, 0.08);
+        color: var(--accent-2);
+        line-height: 1.5;
+      }
+
+      .status.warn {
+        background: rgba(140, 59, 42, 0.1);
+        color: var(--accent);
+      }
+
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        word-break: break-all;
+      }
+
+      @media (max-width: 960px) {
+        .page {
+          grid-template-columns: 1fr;
+        }
+
+        .player-panel {
+          position: static;
+        }
+
+        .entry {
+          grid-template-columns: 1fr;
+        }
+
+        .entry-actions {
+          justify-content: flex-start;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="pageLayout" class="page">
+      <section class="panel browser">
+        <h1>WTB Web 浏览</h1>
+        <div class="subtitle">
+          这里展示 `wtb-data/web` 下的目录结构。你可以浏览 `video`、`files` 及其子目录，并直接点播浏览器支持的视频格式。
+        </div>
+
+        <div class="toolbar">
+          <div class="actions">
+            <button id="rootBtn" class="ghost">根目录</button>
+            <button id="videoBtn" class="ghost">video</button>
+            <button id="filesBtn" class="ghost">files</button>
+            <button id="upBtn" class="ghost">上一级</button>
+            <button id="refreshBtn" class="secondary">刷新</button>
+          </div>
+        </div>
+
+        <div class="pathbar">
+          <div class="pathbar-title">当前路径</div>
+          <div id="breadcrumbs" class="breadcrumbs"></div>
+        </div>
+
+        <div id="listing" class="listing"></div>
+      </section>
+
+      <aside id="playerPanel" class="panel player-panel">
+        <h1>在线播放</h1>
+        <div class="subtitle">
+          视频直接按文件点播。支持的格式会显示“播放”按钮，并且可以拖动进度条。
+        </div>
+        <video id="player" controls></video>
+        <div class="player-meta">
+          <div id="playStatus" class="status">还没有开始播放。</div>
+          <div class="actions">
+            <button id="stopPlaybackBtn" class="primary">停止当前播放</button>
+          </div>
+          <div id="currentFile" class="hint"></div>
+          <div id="currentUrl" class="hint mono"></div>
+        </div>
+      </aside>
+    </div>
+
+    <script src="/vendor/plyr.min.js"></script>
+    <script>
+      const listingEl = document.getElementById('listing');
+      const pageLayoutEl = document.getElementById('pageLayout');
+      const player = document.getElementById('player');
+      const playerPanelEl = document.getElementById('playerPanel');
+      const breadcrumbsEl = document.getElementById('breadcrumbs');
+      const playStatusEl = document.getElementById('playStatus');
+      const currentFileEl = document.getElementById('currentFile');
+      const currentUrlEl = document.getElementById('currentUrl');
+      const rootBtn = document.getElementById('rootBtn');
+      const videoBtn = document.getElementById('videoBtn');
+      const filesBtn = document.getElementById('filesBtn');
+      const upBtn = document.getElementById('upBtn');
+      const refreshBtn = document.getElementById('refreshBtn');
+      const stopPlaybackBtn = document.getElementById('stopPlaybackBtn');
+
+      let playerUi = null;
+      let currentPath = '/';
+      let currentPlayingFile = '';
+
+      function escapeHtml(value) {
+        return String(value)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      function formatBytes(bytes) {
+        if (!Number.isFinite(bytes) || bytes < 0) return '-';
+        if (bytes < 1024) return bytes + ' B';
+        const units = ['KiB', 'MiB', 'GiB', 'TiB'];
+        let value = bytes;
+        let idx = -1;
+        while (value >= 1024 && idx < units.length - 1) {
+          value /= 1024;
+          idx += 1;
+        }
+        return value.toFixed(value >= 10 || idx === 0 ? 1 : 2) + ' ' + units[idx];
+      }
+
+      function toDisplayPath(value) {
+        return value === '/' ? '/' : value.replace(/\/+/g, '/');
+      }
+
+      function isPlayableVideo(entry) {
+        if (entry.isDirectory) return false;
+        if (!entry.path.startsWith('/video')) return false;
+        return /\.(mp4|m4v|mov|webm|ogv)$/i.test(entry.name);
+      }
+
+      function getVideoMime(filePath) {
+        const lower = String(filePath || '').toLowerCase();
+        if (lower.endsWith('.mp4') || lower.endsWith('.m4v')) return 'video/mp4';
+        if (lower.endsWith('.mov')) return 'video/quicktime';
+        if (lower.endsWith('.webm')) return 'video/webm';
+        if (lower.endsWith('.ogv')) return 'video/ogg';
+        return 'application/octet-stream';
+      }
+
+      function setStatus(message, isWarn) {
+        playStatusEl.textContent = message;
+        playStatusEl.className = isWarn ? 'status warn' : 'status';
+      }
+
+      function shouldShowPlayerPanel() {
+        return currentPath === '/video' || currentPath.startsWith('/video/') || !!currentPlayingFile;
+      }
+
+      function updatePlayerPanelVisibility() {
+        const visible = shouldShowPlayerPanel();
+        pageLayoutEl.classList.toggle('with-player', visible);
+        playerPanelEl.hidden = !visible;
+      }
+
+      function ensurePlayerUi() {
+        if (playerUi || !window.Plyr) {
+          return;
+        }
+
+        playerUi = new window.Plyr(player, {
+          iconUrl: '/vendor/plyr.svg',
+          controls: [
+            'play-large',
+            'play',
+            'progress',
+            'current-time',
+            'mute',
+            'volume',
+            'settings',
+            'pip',
+            'fullscreen',
+          ],
+        });
+
+        player.addEventListener('loadedmetadata', () => {
+          if (currentPlayingFile) {
+            setStatus('已加载媒体信息，可以拖动进度条。', false);
+          }
+        });
+
+        player.addEventListener('playing', () => {
+          if (currentPlayingFile) {
+            setStatus('正在播放。', false);
+          }
+        });
+
+        player.addEventListener('error', () => {
+          if (currentPlayingFile) {
+            setStatus('浏览器无法播放该文件，可能是编码或封装格式不受支持。', true);
+          }
+        });
+      }
+
+      function renderBreadcrumbs(pathValue) {
+        const parts = pathValue.split('/').filter(Boolean);
+        const items = ['<button class="crumb" data-path="/">/</button>'];
+        let acc = '';
+        for (const part of parts) {
+          acc += '/' + part;
+          items.push('<span>/</span>');
+          items.push(
+            '<button class="crumb" data-path="' + escapeHtml(acc) + '">' + escapeHtml(part) + '</button>'
+          );
+        }
+        breadcrumbsEl.innerHTML = items.join('');
+        breadcrumbsEl.querySelectorAll('[data-path]').forEach((node) => {
+          node.addEventListener('click', () => loadPath(node.getAttribute('data-path') || '/'));
+        });
+      }
+
+      function renderListing(entries) {
+        if (!entries.length) {
+          listingEl.innerHTML = '<div class="empty">这个目录还是空的。</div>';
+          return;
+        }
+
+        listingEl.innerHTML = entries.map((entry) => {
+          const openLabel = entry.isDirectory ? '进入目录' : '打开/下载';
+          const playButton = isPlayableVideo(entry)
+            ? '<button class="primary js-play" data-path="' + escapeHtml(entry.path) + '">播放</button>'
+            : '';
+
+          return [
+            '<div class="entry">',
+              '<div class="entry-main">',
+                '<div class="entry-title">',
+                  '<span>' + (entry.isDirectory ? '📁' : '📄') + '</span>',
+                  '<span>' + escapeHtml(entry.name) + '</span>',
+                '</div>',
+                '<div class="entry-meta">',
+                  '<span>' + (entry.isDirectory ? '目录' : '文件') + '</span>',
+                  '<span>' + (entry.isDirectory ? '-' : formatBytes(entry.size)) + '</span>',
+                  '<span>' + new Date(entry.mtimeMs).toLocaleString() + '</span>',
+                '</div>',
+              '</div>',
+              '<div class="entry-actions">',
+                entry.isDirectory
+                  ? '<button class="secondary js-open-dir" data-path="' + escapeHtml(entry.path) + '">进入目录</button>'
+                  : '<a class="file-link ghost" href="' + encodeURI(entry.path) + '">' + openLabel + '</a>',
+                playButton,
+              '</div>',
+            '</div>'
+          ].join('');
+        }).join('');
+
+        listingEl.querySelectorAll('.js-open-dir').forEach((node) => {
+          node.addEventListener('click', () => loadPath(node.getAttribute('data-path') || '/'));
+        });
+
+        listingEl.querySelectorAll('.js-play').forEach((node) => {
+          node.addEventListener('click', () => playFile(node.getAttribute('data-path') || ''));
+        });
+      }
+
+      async function loadPath(pathValue) {
+        try {
+          const normalizedPath = pathValue || '/';
+          const res = await fetch('/api/list?path=' + encodeURIComponent(normalizedPath));
+          const j = await res.json();
+          if (!j.success) {
+            listingEl.innerHTML = '<div class="empty">读取目录失败：' + escapeHtml(j.error || 'unknown') + '</div>';
+            return;
+          }
+
+          currentPath = j.data.path || normalizedPath;
+          renderBreadcrumbs(currentPath);
+          renderListing(j.data.entries || []);
+          upBtn.disabled = currentPath === '/';
+          updatePlayerPanelVisibility();
+        } catch (e) {
+          console.error(e);
+          listingEl.innerHTML = '<div class="empty">读取目录失败，请稍后重试。</div>';
+        }
+      }
+
+      function stopCurrentPlayback() {
+        try {
+          if (playerUi) {
+            playerUi.pause();
+          }
+        } catch (e) {
+          console.warn(e);
+        }
+
+        player.removeAttribute('src');
+        player.load();
+        currentPlayingFile = '';
+        currentFileEl.textContent = '';
+        currentUrlEl.textContent = '';
+        setStatus('播放已停止。', false);
+        updatePlayerPanelVisibility();
+      }
+
+      async function playFile(filePath) {
+        ensurePlayerUi();
+        stopCurrentPlayback();
+
+        const sourceUrl = encodeURI(filePath);
+        const sourceType = getVideoMime(filePath);
+        if (playerUi) {
+          playerUi.source = {
+            type: 'video',
+            title: toDisplayPath(filePath),
+            sources: [
+              {
+                src: sourceUrl,
+                type: sourceType,
+              },
+            ],
+          };
+        } else {
+          player.src = sourceUrl;
+        }
+
+        currentPlayingFile = filePath;
+        currentFileEl.textContent = '当前文件：' + toDisplayPath(filePath);
+        currentUrlEl.textContent = sourceUrl;
+        setStatus('正在请求媒体数据...', false);
+        updatePlayerPanelVisibility();
+
+        try {
+          await player.play();
+        } catch {
+          setStatus('媒体已加载，点击播放器中的播放按钮开始播放。', false);
+        }
+      }
+
+      rootBtn.addEventListener('click', () => loadPath('/'));
+      videoBtn.addEventListener('click', () => loadPath('/video'));
+      filesBtn.addEventListener('click', () => loadPath('/files'));
+      refreshBtn.addEventListener('click', () => loadPath(currentPath));
+      stopPlaybackBtn.addEventListener('click', () => stopCurrentPlayback());
+      upBtn.addEventListener('click', () => {
+        if (currentPath === '/') return;
+        const parent = currentPath.split('/').slice(0, -1).join('/') || '/';
+        loadPath(parent);
+      });
+
+      ensurePlayerUi();
+      updatePlayerPanelVisibility();
+      loadPath('/');
+    </script>
+  </body>
+</html>

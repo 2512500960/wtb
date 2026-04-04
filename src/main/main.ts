@@ -34,12 +34,17 @@ import * as crypto from 'crypto';
 import * as Hjson from 'hjson';
 import MenuBuilder from './menu';
 import { resolveHtmlPath } from './util';
+import { ensureMediaDirs } from './mediaServer';
 import { WEBSITE_INDEX_ED25519_PUBLIC_KEY_PEM } from './website_index_pubkey';
 import { loadBundledPublicPeers } from './public_ygg_peers';
+import { startPublicNodesUpdater } from './public_nodes_updater';
+import { yggdrasilBootstrapNodes } from './yggdrasil_bootstrap_nodes';
 import {
   getWtbConfig,
+  getWtbDataDir,
   setWtbYggdrasilAutoPeerManagerConfig,
   setWtbYggdrasilPublicPeers,
+  setWtbWebAssetsDir,
 } from './wtb_config';
 import { YggdrasilPeerAutoManager } from './yggdrasil_peer_auto_manager';
 import {
@@ -119,6 +124,19 @@ type ServiceStatus = {
   name: ServiceName;
   state: 'running' | 'stopped';
   details?: string;
+};
+
+type FirewallPortDescriptor = {
+  name: string;
+  port: number;
+  protocol: 'TCP';
+};
+
+type FirewallPortStatus = FirewallPortDescriptor & {
+  allowed: boolean;
+  rules: string[];
+  checked: boolean;
+  error?: string;
 };
 
 let yggdrasilPid: number | null = null;
@@ -652,16 +670,73 @@ const copyDirIfMissing = async (srcDir: string, dstDir: string) => {
   );
 };
 
+const copyDirContentsIfMissing = async (
+  srcDir: string,
+  dstDir: string,
+): Promise<void> => {
+  if (!(await pathExists(srcDir))) return;
+
+  await ensureDirAsync(dstDir);
+  const entries = await fs.promises.readdir(srcDir, { withFileTypes: true });
+  await Promise.all(
+    entries.map(async (entry) => {
+      const src = path.join(srcDir, entry.name);
+      const dst = path.join(dstDir, entry.name);
+
+      if (entry.isDirectory()) {
+        if (await pathExists(dst)) {
+          await copyDirContentsIfMissing(src, dst);
+        } else {
+          await copyDirIfMissing(src, dst);
+        }
+        return;
+      }
+
+      if (!(await pathExists(dst))) {
+        await fs.promises.copyFile(src, dst);
+      }
+    }),
+  );
+};
+
 const getBundledCinnyDir = (): string => {
+  try {
+    const cfg = getWtbConfig();
+    const override =
+      cfg?.web?.assetsDir && cfg.web.assetsDir.trim()
+        ? path.resolve(cfg.web.assetsDir)
+        : '';
+    if (override) return path.join(override, 'cinny');
+  } catch {
+    // ignore and fall back
+  }
+
   return app.isPackaged
     ? path.join(process.resourcesPath, 'assets', 'cinny')
     : path.join(__dirname, '../../assets', 'cinny');
 };
 
 const getBundledElementDir = (): string => {
+  try {
+    const cfg = getWtbConfig();
+    const override =
+      cfg?.web?.assetsDir && cfg.web.assetsDir.trim()
+        ? path.resolve(cfg.web.assetsDir)
+        : '';
+    if (override) return path.join(override, 'element');
+  } catch {
+    // ignore and fall back
+  }
+
   return app.isPackaged
     ? path.join(process.resourcesPath, 'assets', 'element')
     : path.join(__dirname, '../../assets', 'element');
+};
+
+const getBundledWebDir = (): string => {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'assets', 'web')
+    : path.join(__dirname, '../../wtb-data', 'web');
 };
 
 const getUserCinnyDir = (): string => {
@@ -670,6 +745,28 @@ const getUserCinnyDir = (): string => {
 
 const getUserElementDir = (): string => {
   return path.join(app.getPath('userData'), 'element');
+};
+
+const ensureDefaultWebAssets = async (webRoot: string): Promise<void> => {
+  try {
+    const cfg = getWtbConfig();
+    const override =
+      cfg?.web?.assetsDir && cfg.web.assetsDir.trim()
+        ? cfg.web.assetsDir.trim()
+        : '';
+    if (override) return;
+  } catch {
+    // ignore
+  }
+
+  const bundledDir = getBundledWebDir();
+  if (!(await pathExists(path.join(bundledDir, 'index.html')))) return;
+
+  const bundledResolved = path.resolve(bundledDir).toLowerCase();
+  const webRootResolved = path.resolve(webRoot).toLowerCase();
+  if (bundledResolved === webRootResolved) return;
+
+  await copyDirContentsIfMissing(bundledDir, webRoot);
 };
 
 const ensureCinnyConfig = async (cinnyDir: string): Promise<void> => {
@@ -966,7 +1063,10 @@ const updateProxiedToolbarState = (
     });
 };
 
-const makeProxiedToolbarDataUrl = (windowId: number, proxyUri: string): string => {
+const makeProxiedToolbarDataUrl = (
+  windowId: number,
+  proxyUri: string,
+): string => {
   const safeProxy = escapeHtml(proxyUri);
   const html = `<!doctype html>
 <html lang="zh-CN">
@@ -1072,6 +1172,7 @@ const makeProxiedToolbarDataUrl = (windowId: number, proxyUri: string): string =
   </head>
   <body>
     <form class="bar" id="toolbar-form">
+      <tr>
       <button id="back" type="button" title="后退">◀</button>
       <button id="forward" type="button" title="前进">▶</button>
       <button id="reload" type="button" title="刷新">刷新</button>
@@ -1082,8 +1183,12 @@ const makeProxiedToolbarDataUrl = (windowId: number, proxyUri: string): string =
       <div class="spacer"></div>
       <div class="title" id="title"></div>
       <div class="status" id="status"></div>
-      <div class="proxy" title="${safeProxy}">代理: ${safeProxy}</div>
+      <!-- <div class="proxy" title="${safeProxy}">代理: ${safeProxy}</div> -->
       <button id="close" type="button" title="关闭窗口">关闭</button>
+      </tr>
+      <tr>
+      
+      </tr>
     </form>
     <script>
       const invoke = (cmd, value) =>
@@ -1179,7 +1284,10 @@ const openProxiedWindow = async (
 
     // Configure proxy rules on the session. Bypass loopback so local services still work.
     try {
-      await s.setProxy({ proxyRules: proxyUri, proxyBypassRules: '<-loopback>' });
+      await s.setProxy({
+        proxyRules: proxyUri,
+        proxyBypassRules: '<-loopback>',
+      });
     } catch (err) {
       log.warn('setProxy failed for', proxyUri, err);
     }
@@ -1241,7 +1349,11 @@ const openProxiedWindow = async (
     view.webContents.on('will-navigate', (e, navUrl) => {
       try {
         const p = new URL(navUrl);
-        if (p.protocol !== 'http:' && p.protocol !== 'https:' && p.protocol !== 'file:') {
+        if (
+          p.protocol !== 'http:' &&
+          p.protocol !== 'https:' &&
+          p.protocol !== 'file:'
+        ) {
           e.preventDefault();
         }
       } catch {
@@ -1296,7 +1408,8 @@ const openProxiedWindow = async (
     }
     syncToolbarState();
 
-    const normalizedTarget = normalizeProxiedTargetUrl(targetUrl) || 'https://www.google.com';
+    const normalizedTarget =
+      normalizeProxiedTargetUrl(targetUrl) || 'https://www.google.com';
     view.webContents.loadURL(normalizedTarget).catch(() => {});
 
     return win;
@@ -1305,7 +1418,6 @@ const openProxiedWindow = async (
     return null;
   }
 };
-
 
 const createCinnyWindow = (): BrowserWindow => {
   const child = new BrowserWindow({
@@ -1753,89 +1865,10 @@ const ensureWindowsOrThrow = (): void => {
   }
 };
 
-const getAppBaseDir = (): string => {
-  // Store runtime state in the app's own directory (portable-friendly).
-  // In packaged builds this is the folder containing the .exe.
-  if (app.isPackaged) {
-    return path.dirname(app.getPath('exe'));
-  }
-
-  // In dev, main bundle lives under .erb/dll, so ../../ points to repo root.
-  return path.join(__dirname, '../../');
-};
-
-const canWriteDir = (dirPath: string): boolean => {
-  try {
-    fs.accessSync(dirPath, fs.constants.W_OK);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
 const isUnderDir = (childPath: string, parentPath: string): boolean => {
   const child = path.resolve(childPath).toLowerCase();
   const parent = path.resolve(parentPath).toLowerCase();
   return child === parent || child.startsWith(parent + path.sep);
-};
-
-const getAppDataDir = (): string => {
-  // Optional override to help debugging / special packaging layouts.
-  const override = process.env.WTB_DATA_DIR;
-  if (override && override.trim()) return override;
-
-  // Packaged builds can be either "installed" (Program Files) or "portable"
-  // (unzipped to a user-writable folder). We want:
-  // - portable: keep runtime state next to the executable (self-contained)
-  // - installed: store runtime state in roaming AppData (no admin rights needed)
-  if (app.isPackaged) {
-    const exeDir = getAppBaseDir();
-    const portableBase =
-      (process.env.PORTABLE_EXECUTABLE_DIR || '').trim() || exeDir;
-    const portableDataDir = path.join(portableBase, 'wtb-data');
-
-    // electron-builder portable target sets PORTABLE_EXECUTABLE_DIR.
-    if ((process.env.PORTABLE_EXECUTABLE_DIR || '').trim()) {
-      return portableDataDir;
-    }
-
-    // If a wtb-data folder already exists next to the .exe, treat it as portable.
-    try {
-      if (fs.existsSync(portableDataDir)) {
-        return portableDataDir;
-      }
-    } catch {
-      // ignore
-    }
-
-    // Heuristic: if not running under Program Files and exe dir is writable,
-    // prefer portable behavior.
-    const programFiles = (process.env.ProgramFiles || '').trim();
-    const programFilesX86 = (process.env['ProgramFiles(x86)'] || '').trim();
-    const looksInstalled =
-      (programFiles && isUnderDir(exeDir, programFiles)) ||
-      (programFilesX86 && isUnderDir(exeDir, programFilesX86));
-
-    if (!looksInstalled && canWriteDir(exeDir)) {
-      return portableDataDir;
-    }
-
-    // Installed fallback: roaming AppData
-    try {
-      const roaming = app.getPath('appData'); // typically %APPDATA% on Windows
-      if (roaming && roaming.trim()) {
-        return path.join(roaming, 'wtb');
-      }
-    } catch {
-      // fallback to portableDataDir below
-    }
-
-    // Last resort: exe directory
-    return portableDataDir;
-  }
-
-  // Dev/unpackaged
-  return path.join(getAppBaseDir(), 'wtb-data');
 };
 
 const getYggdrasilBaseDir = (): string => {
@@ -1867,11 +1900,14 @@ const getYggdrasilCtlExePath = (): string => {
 };
 
 const getYggdrasilDataDir = (): string => {
-  return path.join(getAppDataDir(), 'yggdrasil');
+  return path.join(getWtbDataDir(), 'yggdrasil');
 };
 
 const getYggdrasilConfPath = (): string => {
-  log.debug('Yggdrasil config path:', path.join(getYggdrasilDataDir(), 'yggdrasil.conf'));
+  log.debug(
+    'Yggdrasil config path:',
+    path.join(getYggdrasilDataDir(), 'yggdrasil.conf'),
+  );
   return path.join(getYggdrasilDataDir(), 'yggdrasil.conf');
 };
 
@@ -1952,13 +1988,23 @@ const stripUtf8Bom = (text: string): string => {
   return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 };
 
+const normalizeYggdrasilConfStringList = (values: unknown): string[] => {
+  if (!Array.isArray(values)) return [];
+
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+  return normalized;
+};
+
 const setYggdrasilConfPeers = (confPath: string, peers: string[]): void => {
-  const list = Array.isArray(peers)
-    ? peers
-        .filter((x) => typeof x === 'string')
-        .map((x) => x.trim())
-        .filter((x) => !!x)
-    : [];
+  const list = normalizeYggdrasilConfStringList(peers);
 
   const raw = stripUtf8Bom(fs.readFileSync(confPath, { encoding: 'utf8' }));
   const doc: any = (Hjson as any).rt?.parse
@@ -1966,6 +2012,38 @@ const setYggdrasilConfPeers = (confPath: string, peers: string[]): void => {
     : Hjson.parse(raw);
 
   doc.Peers = list;
+
+  const out: string = (Hjson as any).rt?.stringify
+    ? (Hjson as any).rt.stringify(doc, {
+        quotes: 'all',
+        separator: true,
+        space: 2,
+      })
+    : Hjson.stringify(doc, { quotes: 'all', separator: true, space: 2 });
+
+  fs.writeFileSync(confPath, `${stripUtf8Bom(out)}\n`, { encoding: 'utf8' });
+};
+
+const mergeYggdrasilConfP2PBootstrapPeers = (
+  confPath: string,
+  peers: string[],
+): void => {
+  const additionalPeers = normalizeYggdrasilConfStringList(peers);
+  if (!additionalPeers.length) return;
+
+  const raw = stripUtf8Bom(fs.readFileSync(confPath, { encoding: 'utf8' }));
+  const doc: any = (Hjson as any).rt?.parse
+    ? (Hjson as any).rt.parse(raw)
+    : Hjson.parse(raw);
+
+  if (!doc.P2P || typeof doc.P2P !== 'object') {
+    doc.P2P = {};
+  }
+
+  doc.P2P.bootstrap_peers = normalizeYggdrasilConfStringList([
+    ...normalizeYggdrasilConfStringList(doc.P2P.bootstrap_peers),
+    ...additionalPeers,
+  ]);
 
   const out: string = (Hjson as any).rt?.stringify
     ? (Hjson as any).rt.stringify(doc, {
@@ -1989,6 +2067,9 @@ const clearYggdrasilConfPeersBestEffort = (reason: string): void => {
     log.warn(`Failed to clear yggdrasil.conf peers (${reason})`, error);
   }
 };
+
+// 生成yggdrasil.conf，如果已存在则不覆盖。生成后会清空 Peers 列表（如果有的话），避免自动连接到预设的公共节点（可能不可靠或被污染）。用户可以通过设置手动节点列表或启用自动节点管理来添加可信节点。
+// 生成之后，再把yggdrasilBootstrapNodes合并进去
 
 const generateYggdrasilConfIfMissing = async (
   yggExe: string,
@@ -2019,6 +2100,7 @@ const generateYggdrasilConfIfMissing = async (
   fs.writeFileSync(confPath, stripUtf8Bom(confText), { encoding: 'utf8' });
 
   setYggdrasilConfPeers(confPath, []);
+  mergeYggdrasilConfP2PBootstrapPeers(confPath, yggdrasilBootstrapNodes);
 };
 
 const updateYggdrasilConfP2PDataDir = (
@@ -2302,6 +2384,8 @@ const startYggdrasil = async (): Promise<ServiceStatus> => {
   const script = [
     "$ErrorActionPreference = 'Stop'",
     `New-Item -ItemType Directory -Force -Path ${psSingleQuote(dataDir)} | Out-Null`,
+    // Ensure GOMEMLIMIT is set for the yggdrasil process; allow existing env to override.
+    `if (-not $env:GOMEMLIMIT) { $env:GOMEMLIMIT = '256MiB' }`,
     `$p = Start-Process -FilePath ${psSingleQuote(yggExe)} -ArgumentList @('-useconffile',${psSingleQuote(
       confPath,
     )}) -WorkingDirectory ${psSingleQuote(baseDir)} -RedirectStandardOutput ${psSingleQuote(
@@ -2313,7 +2397,7 @@ const startYggdrasil = async (): Promise<ServiceStatus> => {
   ].join('; ');
 
   await runElevatedPowerShellAndWaitAsync(script);
-  log.info(getAppDataDir());
+  log.info(getWtbDataDir());
   log.info('yggdrasil start requested (elevated on-demand).');
 
   // Poll for the PID file to be created (may take time due to TUN adapter setup)
@@ -2548,6 +2632,106 @@ const getWebPort = (): number => {
   return parsed;
 };
 
+const getRequiredFirewallPorts = (): FirewallPortDescriptor[] => {
+  return [{ name: 'web', port: getWebPort(), protocol: 'TCP' }];
+};
+
+const getWindowsFirewallPortStatuses = (
+  descriptors: FirewallPortDescriptor[],
+): FirewallPortStatus[] => {
+  const uniqueDescriptors = descriptors.filter(
+    (item, index, arr) =>
+      arr.findIndex(
+        (candidate) =>
+          candidate.port === item.port && candidate.protocol === item.protocol,
+      ) === index,
+  );
+
+  if (!isWindows) {
+    return uniqueDescriptors.map((item) => ({
+      ...item,
+      allowed: false,
+      rules: [],
+      checked: false,
+      error: 'unsupported platform',
+    }));
+  }
+
+  const ports = uniqueDescriptors.map((item) => item.port);
+  if (!ports.length) return [];
+
+  const script = [
+    `$ports = @(${ports.map((port) => psSingleQuote(String(port))).join(',')})`,
+    '$results = @()',
+    '$rules = Get-NetFirewallRule -Direction Inbound -Enabled True -Action Allow -ErrorAction SilentlyContinue',
+    'foreach ($rule in $rules) {',
+    '  $filters = Get-NetFirewallPortFilter -AssociatedNetFirewallRule $rule -ErrorAction SilentlyContinue',
+    '  foreach ($filter in $filters) {',
+    "    if (([string]$filter.Protocol) -ne 'TCP') { continue }",
+    '    $localPort = ([string]$filter.LocalPort).Trim()',
+    "    if (-not $localPort) { continue }",
+    "    if ($localPort -eq 'Any') { foreach ($requested in $ports) { $results += [pscustomobject]@{ Port = [int]$requested; Rule = $rule.DisplayName } }; continue }",
+    "    foreach ($segment in ($localPort -split ',')) {",
+    '      $item = $segment.Trim()',
+    "      if (-not $item) { continue }",
+    "      if ($item -match '^(\\d+)-(\\d+)$') {",
+    '        $start = [int]$matches[1]',
+    '        $end = [int]$matches[2]',
+    '        foreach ($requested in $ports) { $requestedInt = [int]$requested; if ($requestedInt -ge $start -and $requestedInt -le $end) { $results += [pscustomobject]@{ Port = $requestedInt; Rule = $rule.DisplayName } } }',
+    "      } elseif ($ports -contains $item) {",
+    '        $results += [pscustomobject]@{ Port = [int]$item; Rule = $rule.DisplayName }',
+    '      }',
+    '    }',
+    '  }',
+    '}',
+    '$out = foreach ($requested in $ports) {',
+    '  $requestedInt = [int]$requested',
+    '  $matched = @($results | Where-Object { $_.Port -eq $requestedInt } | Select-Object -ExpandProperty Rule -Unique)',
+    '  [pscustomobject]@{ port = $requestedInt; allowed = ($matched.Count -gt 0); rules = @($matched) }',
+    '}',
+    '$out | ConvertTo-Json -Compress -Depth 4',
+  ].join(' ');
+
+  try {
+    const { stdout } = runPowerShell(script);
+    const raw = (stdout || '').trim();
+    const parsed = raw ? (JSON.parse(raw) as any) : [];
+    const items = Array.isArray(parsed) ? parsed : [parsed];
+    const byPort = new Map<number, { allowed: boolean; rules: string[] }>();
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue;
+      const port = Number(item.port);
+      if (!Number.isFinite(port)) continue;
+      const rules = Array.isArray(item.rules)
+        ? item.rules.filter((rule: unknown): rule is string => typeof rule === 'string')
+        : [];
+      byPort.set(port, {
+        allowed: item.allowed === true,
+        rules,
+      });
+    }
+
+    return uniqueDescriptors.map((descriptor) => {
+      const matched = byPort.get(descriptor.port);
+      return {
+        ...descriptor,
+        allowed: matched?.allowed === true,
+        rules: matched?.rules ?? [],
+        checked: true,
+      };
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return uniqueDescriptors.map((item) => ({
+      ...item,
+      allowed: false,
+      rules: [],
+      checked: false,
+      error: message,
+    }));
+  }
+};
+
 const parseYggdrasilIPv6FromGetself = (stdout: string): string | null => {
   const text = (stdout || '').trim();
   // console.log('parseYggdrasilIPv6FromGetself raw output:', text);
@@ -2648,7 +2832,22 @@ function getWebStatus(): ServiceStatus {
 }
 
 const getWebRootDir = (): string => {
-  return path.join(getAppDataDir(), 'web');
+  // 如果配置了 web.assetsDir，则使用该目录（允许绝对路径）；否则默认使用数据目录下的 web 子目录。
+  // 如果没有配置则走wtb-data/web
+
+  try {
+    const cfg = getWtbConfig();
+    const override =
+      cfg?.web?.assetsDir && cfg.web.assetsDir.trim()
+        ? cfg.web.assetsDir.trim()
+        : '';
+    if (override) return path.resolve(override);
+  } catch {
+    // ignore
+  }
+  log.debug('Using default web root directory under data dir');
+  log.debug('WTB data directory:', getWtbDataDir());
+  return path.join(getWtbDataDir(), 'web');
 };
 
 const escapeHtml = (input: string): string => {
@@ -2711,9 +2910,14 @@ const guessContentType = (filePath: string): string => {
     case '.ico':
       return 'image/x-icon';
     case '.mp4':
+    case '.m4v':
       return 'video/mp4';
+    case '.mov':
+      return 'video/quicktime';
     case '.webm':
       return 'video/webm';
+    case '.ogv':
+      return 'video/ogg';
     case '.mp3':
       return 'audio/mpeg';
     case '.wav':
@@ -2763,6 +2967,68 @@ const urlPathToFsPath = (rootDir: string, urlPath: string): string => {
   // Convert URL path segments to platform path safely.
   const segments = rel.split('/').filter(Boolean);
   return path.join(rootDir, ...segments);
+};
+
+const sendJson = (
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  statusCode: number,
+  body: unknown,
+): void => {
+  const text = JSON.stringify(body);
+  res.statusCode = statusCode;
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Content-Length', String(Buffer.byteLength(text)));
+  if ((req.method || 'GET').toUpperCase() === 'HEAD') {
+    res.end();
+    return;
+  }
+  res.end(text);
+};
+
+const parseByteRange = (
+  rangeHeader: string | string[] | undefined,
+  size: number,
+): { start: number; end: number } | null | 'invalid' => {
+  const headerValue = Array.isArray(rangeHeader) ? rangeHeader[0] : rangeHeader;
+  if (!headerValue) {
+    return null;
+  }
+
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(headerValue.trim());
+  if (!match) {
+    return 'invalid';
+  }
+
+  const [, startText, endText] = match;
+  if (!startText && !endText) {
+    return 'invalid';
+  }
+
+  if (!startText) {
+    const suffixLength = Number.parseInt(endText, 10);
+    if (!Number.isFinite(suffixLength) || suffixLength <= 0 || size <= 0) {
+      return 'invalid';
+    }
+    const start = Math.max(size - suffixLength, 0);
+    return { start, end: size - 1 };
+  }
+
+  const start = Number.parseInt(startText, 10);
+  if (!Number.isFinite(start) || start < 0 || start >= size) {
+    return 'invalid';
+  }
+
+  if (!endText) {
+    return { start, end: size - 1 };
+  }
+
+  const end = Number.parseInt(endText, 10);
+  if (!Number.isFinite(end) || end < start) {
+    return 'invalid';
+  }
+
+  return { start, end: Math.min(end, size - 1) };
 };
 
 const ensureDirExists = (dirPath: string): void => {
@@ -2869,6 +3135,8 @@ const startWebService = async (): Promise<ServiceStatus> => {
 
   const webRoot = getWebRootDir();
   ensureDirExists(webRoot);
+  await ensureDefaultWebAssets(webRoot);
+  ensureMediaDirs(webRoot);
 
   const server = http.createServer((req, res) => {
     try {
@@ -2882,6 +3150,7 @@ const startWebService = async (): Promise<ServiceStatus> => {
       }
 
       const urlPath = parseAndNormalizeUrlPath(req.url);
+      const requestUrl = new URL(req.url || '/', 'http://localhost');
 
       if (urlPath === '/health') {
         const body = JSON.stringify({
@@ -2893,6 +3162,74 @@ const startWebService = async (): Promise<ServiceStatus> => {
         res.statusCode = 200;
         res.setHeader('Content-Type', 'application/json; charset=utf-8');
         res.end(method === 'HEAD' ? undefined : body);
+        return;
+      }
+
+      if (urlPath === '/api/list') {
+        const requestedPath = requestUrl.searchParams.get('path') || '/';
+        const normalizedPath = parseAndNormalizeUrlPath(requestedPath);
+        const targetPath = urlPathToFsPath(webRoot, normalizedPath);
+
+        if (!isUnderDir(targetPath, webRoot)) {
+          sendJson(req, res, 403, { success: false, error: 'Forbidden' });
+          return;
+        }
+
+        if (!fs.existsSync(targetPath) || !fs.statSync(targetPath).isDirectory()) {
+          sendJson(req, res, 404, { success: false, error: 'Not Found' });
+          return;
+        }
+
+        let entries = fs
+          .readdirSync(targetPath, { withFileTypes: true })
+          .map((entry) => {
+            const childPath = path.join(targetPath, entry.name);
+            const childStat = fs.statSync(childPath);
+            const childUrlPath = path.posix.join(
+              normalizedPath === '/' ? '' : normalizedPath,
+              entry.name,
+            );
+            return {
+              name: entry.name,
+              path: `/${childUrlPath.replace(/^\/+/, '')}`,
+              isDirectory: entry.isDirectory(),
+              size: childStat.isFile() ? childStat.size : 0,
+              mtimeMs: childStat.mtimeMs,
+            };
+          })
+          .sort((a, b) => {
+            if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+            return a.name.localeCompare(b.name, 'zh-CN', {
+              numeric: true,
+              sensitivity: 'base',
+            });
+          });
+
+        // Filter out index files so front-end directory listing doesn't expose them
+        // need to filter out /index.html and /index.json and /vendor
+        entries = entries.filter((e) => {
+          const lower = e.name.toLowerCase();
+          return lower !== 'index.html' && lower !== 'index.json' && lower !== 'vendor' && lower !== 'hls';
+        });
+
+        sendJson(req, res, 200, {
+          success: true,
+          data: {
+            path: normalizedPath,
+            entries,
+          },
+        });
+        return;
+      }
+
+      if (urlPath === '/api/firewall/ports') {
+        sendJson(req, res, 200, {
+          success: true,
+          data: {
+            checkedAt: new Date().toISOString(),
+            items: getWindowsFirewallPortStatuses(getRequiredFirewallPorts()),
+          },
+        });
         return;
       }
 
@@ -2921,6 +3258,40 @@ const startWebService = async (): Promise<ServiceStatus> => {
           res.setHeader('Location', `${urlPath}/`);
           res.end();
           return;
+        }
+        // If an index file exists, serve it before rendering the directory index
+        try {
+          const indexCandidates = ['index.html', 'index.htm'];
+          for (const idx of indexCandidates) {
+            const idxPath = path.join(fsPath, idx);
+            if (fs.existsSync(idxPath)) {
+              const idxStat = fs.statSync(idxPath);
+              if (idxStat.isFile()) {
+                res.statusCode = 200;
+                res.setHeader('Content-Type', guessContentType(idxPath));
+                res.setHeader('Content-Length', String(idxStat.size));
+                res.setHeader('Last-Modified', idxStat.mtime.toUTCString());
+                if (method === 'HEAD') {
+                  res.end();
+                  return;
+                }
+                const stream = fs.createReadStream(idxPath);
+                stream.on('error', () => {
+                  try {
+                    res.statusCode = 500;
+                    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+                    res.end('Internal Server Error');
+                  } catch {
+                    // ignore
+                  }
+                });
+                stream.pipe(res);
+                return;
+              }
+            }
+          }
+        } catch {
+          // ignore index check errors and fall back to directory listing
         }
 
         const dirents = fs.readdirSync(fsPath, { withFileTypes: true });
@@ -2956,10 +3327,50 @@ const startWebService = async (): Promise<ServiceStatus> => {
       }
 
       if (st.isFile()) {
-        res.statusCode = 200;
+        const range = parseByteRange(req.headers.range, st.size);
         res.setHeader('Content-Type', guessContentType(fsPath));
-        res.setHeader('Content-Length', String(st.size));
         res.setHeader('Last-Modified', st.mtime.toUTCString());
+        res.setHeader('Accept-Ranges', 'bytes');
+
+        if (range === 'invalid') {
+          res.statusCode = 416;
+          res.setHeader('Content-Range', `bytes */${st.size}`);
+          res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+          res.end(method === 'HEAD' ? undefined : 'Requested Range Not Satisfiable');
+          return;
+        }
+
+        if (range) {
+          const chunkSize = range.end - range.start + 1;
+          res.statusCode = 206;
+          res.setHeader('Content-Length', String(chunkSize));
+          res.setHeader(
+            'Content-Range',
+            `bytes ${range.start}-${range.end}/${st.size}`,
+          );
+          if (method === 'HEAD') {
+            res.end();
+            return;
+          }
+          const stream = fs.createReadStream(fsPath, {
+            start: range.start,
+            end: range.end,
+          });
+          stream.on('error', () => {
+            try {
+              res.statusCode = 500;
+              res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+              res.end('Internal Server Error');
+            } catch {
+              // ignore
+            }
+          });
+          stream.pipe(res);
+          return;
+        }
+
+        res.statusCode = 200;
+        res.setHeader('Content-Length', String(st.size));
         if (method === 'HEAD') {
           res.end();
           return;
@@ -3005,6 +3416,19 @@ const startWebService = async (): Promise<ServiceStatus> => {
   webServer = server;
   webListenAddress = host;
   webListenPort = port;
+  try {
+    const firewallPorts = getWindowsFirewallPortStatuses(getRequiredFirewallPorts());
+    const blocked = firewallPorts.filter((item) => item.checked && !item.allowed);
+    if (blocked.length) {
+      log.warn(
+        `Windows 防火墙可能未放行端口: ${blocked
+          .map((item) => `${item.name}:${item.port}`)
+          .join(', ')}`,
+      );
+    }
+  } catch (error) {
+    log.debug('Failed to inspect Windows firewall port status', error);
+  }
   log.info(`web service listening on http://[${host}]:${port}`);
   return getWebStatus();
 };
@@ -3186,6 +3610,97 @@ ipcMain.handle('chat:dial', async (_event, ma: string) => {
   }
 
   return await groupChat.dial(ma);
+});
+
+// Return current web root path (effective)
+ipcMain.handle('wtb:web:getDir', async () => {
+  try {
+    return { ok: true, path: getWebRootDir() };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+});
+
+// Update persisted web.assetsDir in wtb.conf
+ipcMain.handle('wtb:web:setDir', async (_event, dir: string | null) => {
+  try {
+    const result = setWtbWebAssetsDir(
+      dir && typeof dir === 'string' ? dir : null,
+    );
+    // restart web service to apply new config if it's running
+    const webStatus = getWebStatus();
+    if (webStatus.state === 'running') {
+      await stopWebService();
+      await startWebService();
+    }
+    // Return the normalized value
+    return { ok: true, path: result.web?.assetsDir ?? null };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+});
+
+// Open native directory picker and return selected path (main process dialog)
+ipcMain.handle('dialog:selectDirectory', async () => {
+  try {
+    const res = await dialog.showOpenDialog({
+      properties: ['openDirectory'],
+    });
+    if (res.canceled || !res.filePaths || res.filePaths.length === 0) {
+      return { ok: false, canceled: true };
+    }
+    return { ok: true, path: res.filePaths[0] };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+});
+
+// Return main process electron-log file path (if available)
+ipcMain.handle('logs:getMainLogPath', async () => {
+  try {
+    const file = log.transports.file.getFile();
+    const p = file && file.path ? file.path : null;
+    if (!p) {
+      return { ok: false, error: '日志文件路径不可用' };
+    }
+    return { ok: true, path: p };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+});
+
+// Open containing folder for the main log file
+ipcMain.handle('logs:openContainingFolder', async () => {
+  try {
+    const file = log.transports.file.getFile();
+    const p = file && file.path ? file.path : null;
+    if (!p) {
+      return { ok: false, error: '日志文件路径不可用' };
+    }
+    // showItemInFolder will open the file's folder and select it on supported platforms
+    try {
+      shell.showItemInFolder(p);
+    } catch (e) {
+      // best-effort: try opening parent folder
+      try {
+        await shell.openPath(path.dirname(p));
+      } catch (e2) {
+        // ignore
+      }
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 });
 
 ipcMain.handle('chat:subscribe', async (_event, topic: string) => {
@@ -3597,70 +4112,81 @@ ipcMain.handle('open-in-app', async (_event, url: string) => {
 });
 
 // Allow renderer to request opening a proxied window via a socks5:// URL.
-ipcMain.handle('open-proxied-window', async (_event, proxyUri: string, targetUrl?: string) => {
-  try {
-    if (!proxyUri || typeof proxyUri !== 'string') return;
-    // fire-and-forget; openProxiedWindow logs errors internally.
-    // eslint-disable-next-line @typescript-eslint/no-floating-promises
-    openProxiedWindow(proxyUri, typeof targetUrl === 'string' ? targetUrl : 'https://www.google.com');
-  } catch (err) {
-    log.warn('open-proxied-window failed', err);
-  }
-});
+ipcMain.handle(
+  'open-proxied-window',
+  async (_event, proxyUri: string, targetUrl?: string) => {
+    try {
+      if (!proxyUri || typeof proxyUri !== 'string') return;
+      // fire-and-forget; openProxiedWindow logs errors internally.
+      // eslint-disable-next-line @typescript-eslint/no-floating-promises
+      openProxiedWindow(
+        proxyUri,
+        typeof targetUrl === 'string' ? targetUrl : 'https://www.google.com',
+      );
+    } catch (err) {
+      log.warn('open-proxied-window failed', err);
+    }
+  },
+);
 
 // Handle toolbar commands for proxied windows (back/forward/reload)
-ipcMain.handle('proxied-window-command', async (_event, windowId: number, cmd: string, value?: string) => {
-  try {
-    const w = BrowserWindow.fromId(windowId);
-    if (!w || w.isDestroyed()) return { ok: false };
-    const view = proxiedWindowViews.get(windowId);
-    const wc = view?.webContents;
-    if (!wc || wc.isDestroyed()) return { ok: false };
-    switch (cmd) {
-      case 'back':
-        if (wc.canGoBack()) wc.goBack();
-        break;
-      case 'forward':
-        if (wc.canGoForward()) wc.goForward();
-        break;
-      case 'reload':
-        wc.reload();
-        break;
-      case 'navigate': {
-        const normalized = normalizeProxiedTargetUrl(typeof value === 'string' ? value : '');
-        if (!normalized) return { ok: false, error: 'invalid-url' };
-        wc.loadURL(normalized).catch(() => {
-          // ignore
-        });
-        break;
-      }
-      case 'copy-url':
-        clipboard.writeText(wc.getURL() || '');
-        break;
-      case 'open-external': {
-        const currentUrl = wc.getURL() || '';
-        if (currentUrl) {
-          shell.openExternal(currentUrl).catch(() => {
+ipcMain.handle(
+  'proxied-window-command',
+  async (_event, windowId: number, cmd: string, value?: string) => {
+    try {
+      const w = BrowserWindow.fromId(windowId);
+      if (!w || w.isDestroyed()) return { ok: false };
+      const view = proxiedWindowViews.get(windowId);
+      const wc = view?.webContents;
+      if (!wc || wc.isDestroyed()) return { ok: false };
+      switch (cmd) {
+        case 'back':
+          if (wc.canGoBack()) wc.goBack();
+          break;
+        case 'forward':
+          if (wc.canGoForward()) wc.goForward();
+          break;
+        case 'reload':
+          wc.reload();
+          break;
+        case 'navigate': {
+          const normalized = normalizeProxiedTargetUrl(
+            typeof value === 'string' ? value : '',
+          );
+          if (!normalized) return { ok: false, error: 'invalid-url' };
+          wc.loadURL(normalized).catch(() => {
             // ignore
           });
+          break;
         }
-        break;
+        case 'copy-url':
+          clipboard.writeText(wc.getURL() || '');
+          break;
+        case 'open-external': {
+          const currentUrl = wc.getURL() || '';
+          if (currentUrl) {
+            shell.openExternal(currentUrl).catch(() => {
+              // ignore
+            });
+          }
+          break;
+        }
+        case 'close':
+          w.close();
+          break;
+        default:
+          break;
       }
-      case 'close':
-        w.close();
-        break;
-      default:
-        break;
+      if (!w.isDestroyed() && cmd !== 'close') {
+        w.focus();
+      }
+      return { ok: true };
+    } catch (err) {
+      log.debug('proxied-window-command failed', err);
+      return { ok: false };
     }
-    if (!w.isDestroyed() && cmd !== 'close') {
-      w.focus();
-    }
-    return { ok: true };
-  } catch (err) {
-    log.debug('proxied-window-command failed', err);
-    return { ok: false };
-  }
-});
+  },
+);
 
 // Open embedded Cinny (offline static files bundled with the app)
 ipcMain.handle('cinny:open', async () => {
@@ -4001,6 +4527,13 @@ app
     // Runtime addpeer/removepeer is the only peer source; keep config peers empty.
     clearYggdrasilConfPeersBestEffort('app startup');
     scheduleAutoStartYggPeerManagerIfNeeded('app startup');
+
+    // Start background updater for public peers list (runs immediately and periodically)
+    try {
+      startPublicNodesUpdater();
+    } catch (e) {
+      log.warn('Failed to start public nodes updater', e);
+    }
 
     createWindow();
     app.on('activate', () => {
