@@ -276,7 +276,8 @@
     },
     "extraResources": [
       "./assets/**",
-      "./yggdrasil/**"
+      "./yggdrasil/**",
+      "./ipfs/**"
     ],
     "publish": {
       "provider": "github",
