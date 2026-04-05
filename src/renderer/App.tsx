@@ -10,6 +10,7 @@ import SettingsPage from './pages/SettingsPage';
 // import ServiceAnnouncementsPage from './pages/ServiceAnnouncementsPage';
 // import ServiceSyncPage from './pages/ServiceSyncPage';
 import PeersPage from './pages/PeersPage';
+import RemoteResourcesPage from './pages/RemoteResourcesPage';
 import StatusPage from './pages/StatusPage';
 import { FEATURES } from './features/flags';
 import type { YggdrasilCtlResult } from './types/yggdrasilctl';
@@ -435,6 +436,13 @@ function Home() {
             disabled={!yggRunning}
           />
         ) : null}
+        <LauncherTileLink
+          to="/resources"
+          label="远程资源"
+          icon="🎞️"
+          disabled={false}
+          disabledHint=""
+        />
         {/* <LauncherTileLink
           to="/announcements"
           label="服务公告"
@@ -490,6 +498,7 @@ export default function App() {
         {/* 临时弃用：保留文件但不再挂载路由 */}
         {/* <Route path="/ygg" element={<YggWebsiteIndexPage />} /> */}
         {FEATURES.chat && <Route path="/irc" element={<ChatPage />} />}
+        <Route path="/resources" element={<RemoteResourcesPage />} />
         {/* <Route path="/announcements" element={<ServiceAnnouncementsPage />} /> */}
         {/* <Route path="/announcements" element={<ServiceSyncPage />} /> */}
         <Route path="/settings" element={<SettingsPage />} />

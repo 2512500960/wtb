@@ -16,7 +16,7 @@ export default function ServiceCardGeneric({
 }) {
   const isBusy = busyName === svc.name;
   const running = svc.state === 'running';
-  const locked = svc.name !== 'yggdrasil' && !yggRunning;
+  const locked = svc.name === 'web' && !yggRunning;
   const notImplemented =
     svc.name !== 'yggdrasil' && (svc.details ?? '').includes('not implemented');
   const disableActions = locked || notImplemented;
@@ -26,6 +26,9 @@ export default function ServiceCardGeneric({
     hintMessage = '需要先启动 Yggdrasil 服务后才能操作。';
   } else if (notImplemented) {
     hintMessage = '该服务暂未接入（后续实现）。';
+  } else if (svc.name === 'ipfs') {
+    hintMessage =
+      'IPFS 服务用于内容寻址缓存与大文件分发，可独立于 Yggdrasil 启动。';
   } else {
     hintMessage = '该服务逻辑后续接入。';
   }
