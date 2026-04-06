@@ -6,7 +6,7 @@ import path from 'path';
 import { URL } from 'url';
 import type { App } from 'electron';
 
-import { ensureDirExists, isUnderDir } from './fs_utils';
+import { ensureDirExists } from './fs_utils';
 import type { IpfsSidecarManager } from './ipfs_manager';
 import { ensureMediaDirs } from './mediaServer';
 import type {
@@ -15,6 +15,10 @@ import type {
   ServiceStatus,
 } from './service_types';
 import { ensureDefaultWebAssets } from './web_assets';
+import {
+  listWebContentDirectoryEntries,
+  resolveWebContentPath,
+} from './web_content_sources';
 import { buildWebResourceManifest } from './web_resource_manifest';
 import {
   guessContentType,
@@ -22,7 +26,6 @@ import {
   parseByteRange,
   renderDirectoryIndexHtml,
   sendJson,
-  urlPathToFsPath,
 } from './web_service_utils';
 import { getWtbConfig } from './wtb_config';
 
@@ -135,60 +138,46 @@ export class WebServiceManager {
         if (urlPath === '/api/list') {
           const requestedPath = requestUrl.searchParams.get('path') || '/';
           const normalizedPath = parseAndNormalizeUrlPath(requestedPath);
-          const targetPath = urlPathToFsPath(webRoot, normalizedPath);
+          try {
+            let entries = listWebContentDirectoryEntries({
+              webRoot,
+              requestedPath: normalizedPath,
+            }).map((entry) => ({
+              name: entry.name,
+              path: entry.path,
+              isDirectory: entry.isDirectory,
+              size: entry.isDirectory ? 0 : entry.size,
+              mtimeMs: entry.mtimeMs,
+              cid: entry.cid,
+              sourceMode: entry.sourceMode,
+            }));
 
-          if (!isUnderDir(targetPath, webRoot)) {
-            sendJson(req, res, 403, { success: false, error: 'Forbidden' });
-            return;
-          }
-
-          if (!fs.existsSync(targetPath) || !fs.statSync(targetPath).isDirectory()) {
-            sendJson(req, res, 404, { success: false, error: 'Not Found' });
-            return;
-          }
-
-          let entries = fs
-            .readdirSync(targetPath, { withFileTypes: true })
-            .map((entry) => {
-              const childPath = path.join(targetPath, entry.name);
-              const childStat = fs.statSync(childPath);
-              const childUrlPath = path.posix.join(
-                normalizedPath === '/' ? '' : normalizedPath,
-                entry.name,
+            entries = entries.filter((entry) => {
+              const lower = entry.name.toLowerCase();
+              return (
+                lower !== 'index.html' &&
+                lower !== 'index.json' &&
+                lower !== 'vendor' &&
+                lower !== 'hls'
               );
-              return {
-                name: entry.name,
-                path: `/${childUrlPath.replace(/^\/+/, '')}`,
-                isDirectory: entry.isDirectory(),
-                size: childStat.isFile() ? childStat.size : 0,
-                mtimeMs: childStat.mtimeMs,
-              };
-            })
-            .sort((a, b) => {
-              if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
-              return a.name.localeCompare(b.name, 'zh-CN', {
-                numeric: true,
-                sensitivity: 'base',
-              });
             });
 
-          entries = entries.filter((entry) => {
-            const lower = entry.name.toLowerCase();
-            return (
-              lower !== 'index.html' &&
-              lower !== 'index.json' &&
-              lower !== 'vendor' &&
-              lower !== 'hls'
-            );
-          });
-
-          sendJson(req, res, 200, {
-            success: true,
-            data: {
-              path: normalizedPath,
-              entries,
-            },
-          });
+            sendJson(req, res, 200, {
+              success: true,
+              data: {
+                path: normalizedPath,
+                entries,
+              },
+            });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            const statusCode =
+              message === 'Forbidden' ? 403 : message === 'Not Found' ? 404 : 500;
+            sendJson(req, res, statusCode, {
+              success: false,
+              error: message,
+            });
+          }
           return;
         }
 
@@ -229,25 +218,22 @@ export class WebServiceManager {
           return;
         }
 
-        const fsPath = urlPathToFsPath(webRoot, urlPath);
-        if (!isUnderDir(fsPath, webRoot)) {
-          res.statusCode = 403;
-          res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-          res.end('Forbidden');
-          return;
-        }
-
-        let stat: fs.Stats;
+        let resolvedPath;
         try {
-          stat = fs.statSync(fsPath);
-        } catch {
-          res.statusCode = 404;
+          resolvedPath = resolveWebContentPath({
+            webRoot,
+            requestedPath: urlPath,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          res.statusCode =
+            message === 'Forbidden' ? 403 : message === 'Not Found' ? 404 : 500;
           res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-          res.end('Not Found');
+          res.end(message);
           return;
         }
 
-        if (stat.isDirectory()) {
+        if (resolvedPath.kind === 'directory') {
           if (!urlPath.endsWith('/')) {
             res.statusCode = 301;
             res.setHeader('Location', `${urlPath}/`);
@@ -255,64 +241,27 @@ export class WebServiceManager {
             return;
           }
 
-          try {
+          if (resolvedPath.physical && resolvedPath.entry.fsPath) {
             const indexCandidates = ['index.html', 'index.htm'];
             for (const candidate of indexCandidates) {
-              const idxPath = path.join(fsPath, candidate);
+              const idxPath = path.join(resolvedPath.entry.fsPath, candidate);
               if (!fs.existsSync(idxPath)) continue;
               const idxStat = fs.statSync(idxPath);
               if (!idxStat.isFile()) continue;
-
-              res.statusCode = 200;
-              res.setHeader('Content-Type', guessContentType(idxPath));
-              res.setHeader('Content-Length', String(idxStat.size));
-              res.setHeader('Last-Modified', idxStat.mtime.toUTCString());
-              if (method === 'HEAD') {
-                res.end();
-                return;
-              }
-
-              const stream = fs.createReadStream(idxPath);
-              stream.on('error', () => {
-                try {
-                  res.statusCode = 500;
-                  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-                  res.end('Internal Server Error');
-                } catch {
-                  // ignore
-                }
-              });
-              stream.pipe(res);
+              this.respondWithLocalFile(req, res, method, idxPath, idxStat);
               return;
             }
-          } catch {
-            // ignore and fall back to directory listing
           }
 
-          const dirents = fs.readdirSync(fsPath, { withFileTypes: true });
-          const entries = dirents
-            .map((entry) => {
-              const childPath = path.join(fsPath, entry.name);
-              let childStat: fs.Stats | null = null;
-              try {
-                childStat = fs.statSync(childPath);
-              } catch {
-                childStat = null;
-              }
-              return {
-                name: entry.name,
-                isDir: entry.isDirectory(),
-                size: childStat?.isFile() ? childStat.size : 0,
-                mtimeMs: childStat?.mtimeMs ?? 0,
-              };
-            })
-            .sort((a, b) => {
-              if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
-              return a.name.localeCompare(b.name, 'zh-CN', {
-                numeric: true,
-                sensitivity: 'base',
-              });
-            });
+          const entries = listWebContentDirectoryEntries({
+            webRoot,
+            requestedPath: urlPath,
+          }).map((entry) => ({
+            name: entry.name,
+            isDir: entry.isDirectory,
+            size: entry.isDirectory ? 0 : entry.size,
+            mtimeMs: entry.mtimeMs,
+          }));
 
           const html = renderDirectoryIndexHtml({ urlPath, entries });
           res.statusCode = 200;
@@ -321,67 +270,19 @@ export class WebServiceManager {
           return;
         }
 
-        if (stat.isFile()) {
-          const range = parseByteRange(req.headers.range, stat.size);
-          res.setHeader('Content-Type', guessContentType(fsPath));
-          res.setHeader('Last-Modified', stat.mtime.toUTCString());
-          res.setHeader('Accept-Ranges', 'bytes');
+        if (resolvedPath.kind === 'ipfs-file') {
+          await this.respondWithIpfsBackedFile(req, res, method, resolvedPath.cid);
+          return;
+        }
 
-          if (range === 'invalid') {
-            res.statusCode = 416;
-            res.setHeader('Content-Range', `bytes */${stat.size}`);
-            res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-            res.end(method === 'HEAD' ? undefined : 'Requested Range Not Satisfiable');
-            return;
-          }
-
-          if (range) {
-            const chunkSize = range.end - range.start + 1;
-            res.statusCode = 206;
-            res.setHeader('Content-Length', String(chunkSize));
-            res.setHeader(
-              'Content-Range',
-              `bytes ${range.start}-${range.end}/${stat.size}`,
-            );
-            if (method === 'HEAD') {
-              res.end();
-              return;
-            }
-
-            const stream = fs.createReadStream(fsPath, {
-              start: range.start,
-              end: range.end,
-            });
-            stream.on('error', () => {
-              try {
-                res.statusCode = 500;
-                res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-                res.end('Internal Server Error');
-              } catch {
-                // ignore
-              }
-            });
-            stream.pipe(res);
-            return;
-          }
-
-          res.statusCode = 200;
-          res.setHeader('Content-Length', String(stat.size));
-          if (method === 'HEAD') {
-            res.end();
-            return;
-          }
-          const stream = fs.createReadStream(fsPath);
-          stream.on('error', () => {
-            try {
-              res.statusCode = 500;
-              res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-              res.end('Internal Server Error');
-            } catch {
-              // ignore
-            }
-          });
-          stream.pipe(res);
+        if (resolvedPath.kind === 'local-file') {
+          this.respondWithLocalFile(
+            req,
+            res,
+            method,
+            resolvedPath.fsPath,
+            resolvedPath.stat,
+          );
           return;
         }
 
@@ -477,6 +378,165 @@ export class WebServiceManager {
       this.listenAddress = null;
       this.listenPort = null;
     }
+  }
+
+  private respondWithLocalFile(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    method: string,
+    filePath: string,
+    stat: fs.Stats,
+  ): void {
+    const range = parseByteRange(req.headers.range, stat.size);
+    res.setHeader('Content-Type', guessContentType(filePath));
+    res.setHeader('Last-Modified', stat.mtime.toUTCString());
+    res.setHeader('Accept-Ranges', 'bytes');
+
+    if (range === 'invalid') {
+      res.statusCode = 416;
+      res.setHeader('Content-Range', `bytes */${stat.size}`);
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.end(method === 'HEAD' ? undefined : 'Requested Range Not Satisfiable');
+      return;
+    }
+
+    if (range) {
+      const chunkSize = range.end - range.start + 1;
+      res.statusCode = 206;
+      res.setHeader('Content-Length', String(chunkSize));
+      res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${stat.size}`);
+      if (method === 'HEAD') {
+        res.end();
+        return;
+      }
+
+      const stream = fs.createReadStream(filePath, {
+        start: range.start,
+        end: range.end,
+      });
+      stream.on('error', () => {
+        try {
+          res.statusCode = 500;
+          res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+          res.end('Internal Server Error');
+        } catch {
+          // ignore
+        }
+      });
+      stream.pipe(res);
+      return;
+    }
+
+    res.statusCode = 200;
+    res.setHeader('Content-Length', String(stat.size));
+    if (method === 'HEAD') {
+      res.end();
+      return;
+    }
+
+    const stream = fs.createReadStream(filePath);
+    stream.on('error', () => {
+      try {
+        res.statusCode = 500;
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.end('Internal Server Error');
+      } catch {
+        // ignore
+      }
+    });
+    stream.pipe(res);
+  }
+
+  private async respondWithIpfsBackedFile(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    method: string,
+    cid: string,
+  ): Promise<void> {
+    if (this.options.ipfsManager.getServiceStatus().state !== 'running') {
+      res.statusCode = 503;
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.end('IPFS service is not running');
+      return;
+    }
+
+    const gatewayUrl = new URL(`/ipfs/${encodeURIComponent(cid)}`, this.options.ipfsManager.getGatewayBaseUrl());
+
+    await new Promise<void>((resolve) => {
+      const upstream = http.request(
+        {
+          method,
+          host: gatewayUrl.hostname,
+          port: gatewayUrl.port ? Number(gatewayUrl.port) : 80,
+          path: `${gatewayUrl.pathname}${gatewayUrl.search}`,
+          headers: {
+            ...(req.headers.range ? { range: req.headers.range } : {}),
+            ...(req.headers.accept ? { accept: req.headers.accept } : {}),
+          },
+          timeout: 5_000,
+        },
+        (upstreamRes) => {
+          this.copyProxyHeaders(upstreamRes, res);
+          res.statusCode = upstreamRes.statusCode || 502;
+
+          if (method === 'HEAD') {
+            upstreamRes.resume();
+            res.end();
+            resolve();
+            return;
+          }
+
+          upstreamRes.on('error', () => {
+            try {
+              if (!res.headersSent) {
+                res.statusCode = 502;
+                res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+              }
+              res.end('Bad Gateway');
+            } catch {
+              // ignore
+            }
+            resolve();
+          });
+
+          upstreamRes.pipe(res);
+          upstreamRes.on('end', () => resolve());
+        },
+      );
+
+      upstream.on('timeout', () => {
+        upstream.destroy(new Error('ipfs gateway request timed out'));
+      });
+
+      upstream.on('error', () => {
+        try {
+          if (!res.headersSent) {
+            res.statusCode = 502;
+            res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+          }
+          res.end('Bad Gateway');
+        } catch {
+          // ignore
+        }
+        resolve();
+      });
+
+      upstream.end();
+    });
+  }
+
+  private copyProxyHeaders(
+    upstreamRes: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): void {
+    Object.entries(upstreamRes.headers).forEach(([key, value]) => {
+      if (value == null) return;
+      const lower = key.toLowerCase();
+      if (lower === 'connection' || lower === 'transfer-encoding' || lower === 'keep-alive') {
+        return;
+      }
+      res.setHeader(key, value);
+    });
   }
 
   private getWebPort(): number {

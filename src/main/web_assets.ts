@@ -4,6 +4,7 @@ import path from 'path';
 
 import { ensureDirAsync, pathExists } from './fs_utils';
 import { getWtbConfig } from './wtb_config';
+import { log } from 'console';
 
 export const copyDirIfMissing = async (
   srcDir: string,
@@ -19,7 +20,8 @@ export const copyDirIfMissing = async (
     await cp(srcDir, dstDir, { recursive: true });
     return;
   }
-
+  // 日志输出srcDir和dstDir，帮助调试 --- IGNORE ---
+  log(`copyDirIfMissing: copying from ${srcDir} to ${dstDir}`);
   const entries = await fs.promises.readdir(srcDir, { withFileTypes: true });
   await ensureDirAsync(dstDir);
   await Promise.all(

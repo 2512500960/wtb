@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import type {
   RemoteResourceFetchResult,
   RemoteResourcePreparedEntry,
+  RemoteResourceSource,
 } from '../../types/remote_resources';
 
 function isVideo(mime?: string): boolean {
@@ -31,6 +32,22 @@ async function copyText(text: string): Promise<boolean> {
   }
 }
 
+function isLargeFile(entry: RemoteResourcePreparedEntry): boolean {
+  return entry.size >= 5 * 1024 * 1024;
+}
+
+function getEntrySourceBucket(entry: RemoteResourcePreparedEntry): string {
+  if (isVideo(entry.mime) || isAudio(entry.mime)) return 'media';
+  if (isImage(entry.mime)) return 'image';
+  if (isPdf(entry.mime)) return 'document';
+  if (isLargeFile(entry)) return 'large';
+  return 'generic';
+}
+
+function getSourceLabel(source: RemoteResourceSource): string {
+  return source === 'ipfs' ? 'IPFS' : 'HTTP';
+}
+
 export default function RemoteResourcesPage() {
   const [baseUrlInput, setBaseUrlInput] = React.useState('');
   const [currentPath, setCurrentPath] = React.useState('/');
@@ -44,6 +61,59 @@ export default function RemoteResourcesPage() {
   const [previewSource, setPreviewSource] = React.useState<'http' | 'ipfs' | null>(null);
   const [previewNotice, setPreviewNotice] = React.useState<string | null>(null);
   const [copyHint, setCopyHint] = React.useState<string | null>(null);
+  const [sessionSourcePreferences, setSessionSourcePreferences] = React.useState<
+    Record<string, RemoteResourceSource>
+  >({});
+
+  const getSourcePreferenceKey = React.useCallback(
+    (entry: RemoteResourcePreparedEntry, baseUrl: string) => {
+      return `${baseUrl}|${getEntrySourceBucket(entry)}`;
+    },
+    [],
+  );
+
+  const chooseSourceForEntry = React.useCallback(
+    (entry: RemoteResourcePreparedEntry, baseUrl: string) => {
+      const preferenceKey = getSourcePreferenceKey(entry, baseUrl);
+      const preferred = sessionSourcePreferences[preferenceKey];
+      if (preferred === 'ipfs' && entry.ipfsUrl) {
+        return {
+          source: 'ipfs' as const,
+          url: entry.ipfsUrl,
+          notice: '本次会话已提升同类资源的 IPFS 优先级。',
+        };
+      }
+
+      if (preferred === 'http') {
+        return {
+          source: 'http' as const,
+          url: entry.httpUrl,
+          notice: '本次会话检测到同类资源更适合先走 HTTP。',
+        };
+      }
+
+      return {
+        source: entry.preferredSource,
+        url: entry.preferredUrl,
+        notice: entry.recommendedReason,
+      };
+    },
+    [getSourcePreferenceKey, sessionSourcePreferences],
+  );
+
+  const updateSessionSourcePreference = React.useCallback(
+    (entry: RemoteResourcePreparedEntry, baseUrl: string, source: RemoteResourceSource) => {
+      const preferenceKey = getSourcePreferenceKey(entry, baseUrl);
+      setSessionSourcePreferences((current) => {
+        if (current[preferenceKey] === source) return current;
+        return {
+          ...current,
+          [preferenceKey]: source,
+        };
+      });
+    },
+    [getSourcePreferenceKey],
+  );
 
   const loadManifest = React.useCallback(
     async (baseUrl: string, requestedPath: string) => {
@@ -71,26 +141,44 @@ export default function RemoteResourcesPage() {
   );
 
   const openPreview = React.useCallback((entry: RemoteResourcePreparedEntry) => {
+    if (!result) return;
+    const next = chooseSourceForEntry(entry, result.baseUrl);
     setSelectedEntry(entry);
-    setPreviewNotice(null);
-    setPreviewUrl(entry.preferredUrl);
-    setPreviewSource(entry.preferredSource);
-  }, []);
+    setPreviewNotice(next.notice);
+    setPreviewUrl(next.url);
+    setPreviewSource(next.source);
+  }, [chooseSourceForEntry, result]);
+
+  const handlePreviewSuccess = React.useCallback(() => {
+    if (!selectedEntry || !result || !previewSource) return;
+
+    if (previewSource === 'ipfs' && selectedEntry.ipfsUrl) {
+      updateSessionSourcePreference(selectedEntry, result.baseUrl, 'ipfs');
+      setPreviewNotice('IPFS 可用，当前会话后续同类资源将优先尝试 IPFS。');
+      return;
+    }
+
+    if (previewSource === 'http' && selectedEntry.ipfsUrl) {
+      updateSessionSourcePreference(selectedEntry, result.baseUrl, 'http');
+    }
+  }, [previewSource, result, selectedEntry, updateSessionSourcePreference]);
 
   const handlePreviewError = React.useCallback(() => {
     if (
       selectedEntry &&
+      result &&
       previewSource === 'ipfs' &&
       selectedEntry.fallbackUrl &&
       previewUrl !== selectedEntry.fallbackUrl
     ) {
+      updateSessionSourcePreference(selectedEntry, result.baseUrl, 'http');
       setPreviewUrl(selectedEntry.fallbackUrl);
       setPreviewSource('http');
-      setPreviewNotice('IPFS 访问失败，已自动回退到 HTTP。');
+      setPreviewNotice('IPFS 访问失败，已自动回退到 HTTP，并降低当前会话同类资源的 IPFS 优先级。');
       return;
     }
     setPreviewNotice('资源加载失败。');
-  }, [previewSource, previewUrl, selectedEntry]);
+  }, [previewSource, previewUrl, result, selectedEntry, updateSessionSourcePreference]);
 
   const copyCid = React.useCallback(async (cid: string) => {
     const ok = await copyText(cid);
@@ -107,14 +195,14 @@ export default function RemoteResourcesPage() {
   return (
     <div className="LauncherRoot">
       <div className="ServiceHeader">
-        <div className="ServiceTitle">远程资源</div>
+        <div className="ServiceTitle">WTB 远程内容</div>
         <Link className="ServiceGhostButton" to="/">
           返回首页
         </Link>
       </div>
 
       <div className="ServiceHint">
-        输入远端 WTB Web 服务地址，优先尝试本地 IPFS gateway 加载资源，失败时自动回退到 HTTP。
+        输入远端 WTB 服务地址。目录清单始终通过 HTTP 获取；媒体和大文件会优先尝试本地 IPFS gateway，失败后自动回退到 HTTP。
       </div>
 
       <div className="ResourceToolbar">
@@ -159,6 +247,12 @@ export default function RemoteResourcesPage() {
                 已尝试连接远端 IPFS 地址：{result.localIpfs.connected.length} 条成功
               </>
             ) : null}
+            {result.localIpfs.failed.length > 0 ? (
+              <>
+                <br />
+                远端 IPFS 地址连接失败：{result.localIpfs.failed.length} 条
+              </>
+            ) : null}
           </div>
 
           <div className="ResourceLayout">
@@ -189,7 +283,17 @@ export default function RemoteResourcesPage() {
                           ? ''
                           : ` · ${entry.mime || '未知类型'} · ${entry.size} bytes`}
                         {entry.cid ? ' · CID 可用' : ''}
+                        {!entry.isDirectory
+                          ? ` · 推荐源：${getSourceLabel(entry.recommendedSource)}`
+                          : ''}
                       </div>
+                      {!entry.isDirectory ? (
+                        <div className="ServiceHint">
+                          可用源：{entry.availableSources.map(getSourceLabel).join(' / ')}
+                          {' · '}
+                          {entry.recommendedReason}
+                        </div>
+                      ) : null}
                     </div>
                     <div className="ResourceActions">
                       {entry.isDirectory ? (
@@ -268,6 +372,8 @@ export default function RemoteResourcesPage() {
                     当前资源：{selectedEntry.name}
                     <br />
                     当前来源：{previewSource === 'ipfs' ? 'IPFS' : 'HTTP'}
+                    <br />
+                    推荐来源：{getSourceLabel(selectedEntry.recommendedSource)}
                     {previewNotice ? (
                       <>
                         <br />
@@ -281,6 +387,7 @@ export default function RemoteResourcesPage() {
                       className="ResourceVideo"
                       controls
                       src={previewUrl}
+                      onLoadedData={handlePreviewSuccess}
                       onError={handlePreviewError}
                     />
                   ) : null}
@@ -289,6 +396,7 @@ export default function RemoteResourcesPage() {
                       key={previewUrl}
                       controls
                       src={previewUrl}
+                      onLoadedData={handlePreviewSuccess}
                       onError={handlePreviewError}
                       style={{ width: '100%' }}
                     />
@@ -299,6 +407,7 @@ export default function RemoteResourcesPage() {
                       className="ResourceImage"
                       src={previewUrl}
                       alt={selectedEntry.name}
+                      onLoad={handlePreviewSuccess}
                       onError={handlePreviewError}
                     />
                   ) : null}
@@ -308,6 +417,7 @@ export default function RemoteResourcesPage() {
                       className="ResourceFrame"
                       src={previewUrl}
                       title={selectedEntry.name}
+                      onLoad={handlePreviewSuccess}
                     />
                   ) : null}
                   {!isVideo(selectedEntry.mime) &&

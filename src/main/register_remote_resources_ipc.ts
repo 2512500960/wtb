@@ -4,7 +4,19 @@ import type { IpfsSidecarManager } from './ipfs_manager';
 import type {
   RemoteResourceFetchResult,
   RemoteResourceManifest,
+  RemoteResourceManifestEntry,
+  RemoteResourceSource,
 } from '../types/remote_resources';
+
+const REMOTE_IPFS_SIZE_THRESHOLD_BYTES = 5 * 1024 * 1024;
+
+const shouldPreferIpfs = (entry: RemoteResourceManifestEntry): boolean => {
+  if (entry.isDirectory || !entry.cid) return false;
+  const mime = entry.mime || '';
+  if (mime.startsWith('video/')) return true;
+  if (mime.startsWith('audio/')) return true;
+  return entry.size >= REMOTE_IPFS_SIZE_THRESHOLD_BYTES;
+};
 
 const normalizeBaseUrl = (input: string): URL => {
   const text = (input || '').trim();
@@ -59,12 +71,28 @@ export const registerRemoteResourcesIpc = (opts: {
           localIpfs.running && entry.cid
             ? `${localIpfs.gatewayUrl}/ipfs/${entry.cid}`
             : undefined;
+        const availableSources = ipfsUrl ? (['http', 'ipfs'] as const) : (['http'] as const);
+        const recommendedSource: RemoteResourceSource =
+          shouldPreferIpfs(entry) && ipfsUrl ? 'ipfs' : 'http';
+        const recommendedReason = !ipfsUrl
+          ? '本地 IPFS 不可用或远端条目未提供 CID，使用 HTTP。'
+          : recommendedSource === 'ipfs'
+            ? '媒体或大文件优先尝试 IPFS，失败时回退到 HTTP。'
+            : '当前条目更适合先走 HTTP，IPFS 可作为补充来源。';
+
+        const preferredUrl = recommendedSource === 'ipfs' && ipfsUrl ? ipfsUrl : entry.httpUrl;
+        const fallbackUrl =
+          preferredUrl === entry.httpUrl ? ipfsUrl : entry.httpUrl;
+
         return {
           ...entry,
           ipfsUrl,
-          preferredUrl: ipfsUrl || entry.httpUrl,
-          fallbackUrl: ipfsUrl ? entry.httpUrl : undefined,
-          preferredSource: ipfsUrl ? ('ipfs' as const) : ('http' as const),
+          availableSources: [...availableSources],
+          recommendedSource,
+          recommendedReason,
+          preferredUrl,
+          fallbackUrl,
+          preferredSource: recommendedSource,
         };
       });
 

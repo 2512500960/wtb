@@ -193,7 +193,7 @@ export default function ServiceCardIpfs({
       </div>
 
       <div className="ServiceHint">
-        IPFS 服务用于内容寻址缓存与大文件分发，可独立于 Yggdrasil 启动。
+        IPFS 服务用于内容寻址缓存与大文件分发；当前默认随应用自动启动，也可独立于 Yggdrasil 运行。
         {loadingDetails ? ' 正在刷新状态…' : ''}
       </div>
 

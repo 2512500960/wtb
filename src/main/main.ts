@@ -35,6 +35,10 @@ import { registerMiscIpc } from './register_misc_ipc';
 import { registerRemoteResourcesIpc } from './register_remote_resources_ipc';
 import { registerServiceIpc } from './register_service_ipc';
 import { registerYggIpc } from './register_ygg_ipc';
+import {
+  convertLocalFileToIpfsSource,
+  listWebContentDirectoryEntries,
+} from './web_content_sources';
 import type {
   YggdrasilCtlCommand,
   YggdrasilCtlResult,
@@ -138,29 +142,31 @@ const websiteIndexService = new WebsiteIndexService({
   publicKeyPem: WEBSITE_INDEX_ED25519_PUBLIC_KEY_PEM,
 });
 
-const groupChat = new Libp2pGroupChatService((msg: ChatMessage) => {
-  try {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('chat:message', msg);
-    }
-  } catch {
-    // ignore
-  }
-});
+// libp2p for groupchat is deprecated
+// const groupChat = new Libp2pGroupChatService((msg: ChatMessage) => {
+//   try {
+//     if (mainWindow && !mainWindow.isDestroyed()) {
+//       mainWindow.webContents.send('chat:message', msg);
+//     }
+//   } catch {
+//     // ignore
+//   }
+// });
 
+// 停用，ServiceAnnoucementsManager 所有自建服务需要用户自己去网页上登记和发现
 // 服务同步管理器（HTTP pull 模式，替代原 pubsub 方案）
 // const announcementsManager = new ServiceAnnouncementsManager(); // 旧 pubsub 实现
-const announcementsManager = new ServiceSyncHttpManager();
-const announcementsCoordinator = new AnnouncementsCoordinator({
-  announcementsManager,
-  groupChat,
-  getGroupChatSignPrivateKey: () =>
-    ((groupChat as any).master?.client?.signPrivateKeyDerB64 as string | undefined) ||
-    null,
-  getGroupChatNode: () => (groupChat as any).node,
-  getYggdrasilStatus: () => getYggdrasilStatus(),
-  logger: log,
-});
+// const announcementsManager = new ServiceSyncHttpManager();
+// const announcementsCoordinator = new AnnouncementsCoordinator({
+//   announcementsManager,
+//   groupChat,
+//   getGroupChatSignPrivateKey: () =>
+//     ((groupChat as any).master?.client?.signPrivateKeyDerB64 as string | undefined) ||
+//     null,
+//   getGroupChatNode: () => (groupChat as any).node,
+//   getYggdrasilStatus: () => getYggdrasilStatus(),
+//   logger: log,
+// });
 const yggPeerAutoManager = new YggdrasilPeerAutoManager({
   isYggdrasilRunning: () => getYggdrasilStatus().state === 'running',
   loadBundledPeers: () => loadBundledPublicPeers(yggdrasilManager.getBaseDir()),
@@ -200,27 +206,27 @@ const runYggdrasilCtlCommand = async (
   return await yggdrasilManager.runCtlCommand(command, extraArgs, options);
 };
 
-const scheduleAutoStartAnnouncementsIfNeeded = (reason: string): void => {
-  announcementsCoordinator.scheduleAutoStartIfNeeded(reason);
-};
+// const scheduleAutoStartAnnouncementsIfNeeded = (reason: string): void => {
+//   announcementsCoordinator.scheduleAutoStartIfNeeded(reason);
+// };
 
-const startAnnouncementsOrThrow = async (): Promise<void> => {
-  await announcementsCoordinator.startOrThrow();
-};
+// const startAnnouncementsOrThrow = async (): Promise<void> => {
+//   await announcementsCoordinator.startOrThrow();
+// };
 
-const tryAutoStartAnnouncements = async (reason: string): Promise<void> => {
-  await announcementsCoordinator.tryAutoStart(reason);
-};
+// const tryAutoStartAnnouncements = async (reason: string): Promise<void> => {
+//   await announcementsCoordinator.tryAutoStart(reason);
+// };
 
 const scheduleAutoStartYggPeerManagerIfNeeded = (reason: string): void => {
   yggPeerCoordinator.scheduleAutoStartIfNeeded(reason);
 };
 
-const requireChatRunning = (): void => {
-  if (!groupChat.isRunning()) {
-    throw new Error('聊天未启动（请先启动群聊服务）');
-  }
-};
+// const requireChatRunning = (): void => {
+//   if (!groupChat.isRunning()) {
+//     throw new Error('聊天未启动（请先启动群聊服务）');
+//   }
+// };
 
 const getYggdrasilBaseDir = (): string => {
   return yggdrasilManager.getBaseDir();
@@ -277,6 +283,18 @@ const getIpfsRepoDir = (): string => {
   return ipfsManager.getRepoDir();
 };
 
+let ipfsAutoStartAttempted = false;
+
+const scheduleAutoStartIpfsIfNeeded = (reason: string): void => {
+  if (ipfsAutoStartAttempted) return;
+  ipfsAutoStartAttempted = true;
+
+  ipfsManager.start().catch((error) => {
+    ipfsAutoStartAttempted = false;
+    log.warn(`Failed to auto-start IPFS (${reason})`, error);
+  });
+};
+
 const runYggdrasilCtl = async (
   command: YggdrasilCtlCommand,
   timeoutMs: number = 5000,
@@ -320,10 +338,10 @@ registerServiceIpc({
     await yggPeerCoordinator.stopAutoPeerManager();
   },
   onAfterStopYggdrasil: () => {
-    announcementsCoordinator.stop().catch(() => {
-      // ignore
-    });
-    announcementsCoordinator.resetAutoStart();
+    // announcementsCoordinator.stop().catch(() => {
+    //   // ignore
+    // });
+    // announcementsCoordinator.resetAutoStart();
   },
 });
 
@@ -356,35 +374,50 @@ registerMiscIpc({
   getWebStatus,
   stopWebService,
   startWebService,
+  listWebEntries: (requestedPath: string) =>
+    listWebContentDirectoryEntries({
+      webRoot: getWebRootDir(),
+      requestedPath,
+    }),
+  convertWebFileToIpfsSource: async (
+    requestedPath: string,
+    options?: { removeLocalFile?: boolean },
+  ) =>
+    await convertLocalFileToIpfsSource({
+      webRoot: getWebRootDir(),
+      requestedPath,
+      ipfsManager,
+      removeLocalFile: options?.removeLocalFile,
+    }),
 });
 
-registerChatIpc({
-  groupChat,
-  getYggdrasilStatus,
-  requireChatRunning,
-});
+// registerChatIpc({
+//   groupChat,
+//   getYggdrasilStatus,
+//   requireChatRunning,
+// });
 
-registerAnnouncementsIpc({
-  getStatus: async () => await announcementsCoordinator.getStatus(),
-  getYggdrasilStatus,
-  tryAutoStartAnnouncements,
-  startAnnouncementsOrThrow,
-  stopAnnouncements: async () => {
-    await announcementsCoordinator.stop();
-  },
-  addLocalService: async (url: string, desc: string) =>
-    await announcementsCoordinator.addLocalService(url, desc),
-  removeLocalService: async (id: string) => {
-    await announcementsCoordinator.removeLocalService(id);
-  },
-  listLocalServices: async () =>
-    await announcementsCoordinator.listLocalServices(),
-  republishNow: async () => {
-    await announcementsCoordinator.republishNow();
-  },
-  listDiscoveredServices: async () =>
-    await announcementsCoordinator.listDiscoveredServices(),
-});
+// registerAnnouncementsIpc({
+//   getStatus: async () => await announcementsCoordinator.getStatus(),
+//   getYggdrasilStatus,
+//   tryAutoStartAnnouncements,
+//   startAnnouncementsOrThrow,
+//   stopAnnouncements: async () => {
+//     await announcementsCoordinator.stop();
+//   },
+//   addLocalService: async (url: string, desc: string) =>
+//     await announcementsCoordinator.addLocalService(url, desc),
+//   removeLocalService: async (id: string) => {
+//     await announcementsCoordinator.removeLocalService(id);
+//   },
+//   listLocalServices: async () =>
+//     await announcementsCoordinator.listLocalServices(),
+//   republishNow: async () => {
+//     await announcementsCoordinator.republishNow();
+//   },
+//   listDiscoveredServices: async () =>
+//     await announcementsCoordinator.listDiscoveredServices(),
+// });
 
 registerYggIpc({
   logger: log,
@@ -416,7 +449,8 @@ const initializeDefaultSession = (): void => {
 
 const prepareStartup = (reason: string): void => {
   yggPeerCoordinator.prepareRuntimeConfigOnStartup(reason);
-  scheduleAutoStartAnnouncementsIfNeeded(reason);
+  // scheduleAutoStartAnnouncementsIfNeeded(reason);
+  scheduleAutoStartIpfsIfNeeded(reason);
 };
 
 const createAndTrackMainWindow = async (): Promise<void> => {
@@ -452,13 +486,13 @@ registerAppLifecycle({
     await yggPeerCoordinator.stopAutoPeerManager();
   },
   stopAnnouncementsOnQuit: async () => {
-    await announcementsCoordinator.stop();
+    // await announcementsCoordinator.stop();
   },
   stopIpfsSilentlyOnQuit: async () => {
     await ipfsManager.stopSilently();
   },
   stopGroupChatOnQuit: async () => {
-    await groupChat.stop();
+    // await groupChat.stop();
   },
   stopYggdrasilSilentlyOnQuit: async () => {
     await stopYggdrasilSilent();

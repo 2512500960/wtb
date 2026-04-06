@@ -10,6 +10,7 @@ import {
 
 import { ensureDirExists } from './fs_utils';
 import type { ServiceStatus } from './service_types';
+import { debug, log } from 'console';
 
 type LoggerLike = {
   info: (...args: unknown[]) => void;
@@ -54,6 +55,14 @@ export class IpfsSidecarManager {
 
   getRepoDir(): string {
     return path.join(this.options.getWtbDataDir(), 'ipfs');
+  }
+
+  getApiBaseUrl(): string {
+    return this.getApiUrl();
+  }
+
+  getGatewayBaseUrl(): string {
+    return this.getGatewayUrl();
   }
 
   getServiceStatus(): ServiceStatus {
@@ -529,7 +538,9 @@ export class IpfsSidecarManager {
     if (this.options.getYggdrasilAddress) {
       try {
         const yggAddr = await this.options.getYggdrasilAddress();
+        debug("Got Yggdrasil address for IPFS config: %s", yggAddr);
         const yggMultiaddr = `/ip6/${yggAddr}/tcp/4001`;
+        debug("Constructed Yggdrasil multiaddr for IPFS config: %s", yggMultiaddr);
         if (!announce.includes(yggMultiaddr)) {
           announce.push(yggMultiaddr);
         }

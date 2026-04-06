@@ -14,6 +14,8 @@ export type InvokeChannels =
   | 'remote-resources:fetchManifest'
   | 'wtb:web:getDir'
   | 'wtb:web:setDir'
+  | 'wtb:web:listEntries'
+  | 'wtb:web:convertFileToIpfsSource'
   | 'dialog:selectDirectory'
   | 'logs:getMainLogPath'
   | 'logs:openContainingFolder'

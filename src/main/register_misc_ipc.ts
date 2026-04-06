@@ -4,10 +4,17 @@ import path from 'path';
 
 export const registerMiscIpc = (options: {
   getWebRootDir: () => string;
-  setWebAssetsDir: (dir: string | null) => { web?: { assetsDir?: string | null } };
+  setWebAssetsDir: (dir: string | null) => {
+    web?: { assetsDir?: string | null };
+  };
   getWebStatus: () => { state: 'running' | 'stopped'; details?: string };
   stopWebService: () => Promise<unknown>;
   startWebService: () => Promise<unknown>;
+  listWebEntries: (requestedPath: string) => Array<unknown>;
+  convertWebFileToIpfsSource: (
+    requestedPath: string,
+    options?: { removeLocalFile?: boolean },
+  ) => Promise<unknown>;
 }): void => {
   ipcMain.handle('wtb:web:getDir', async () => {
     try {
@@ -39,12 +46,61 @@ export const registerMiscIpc = (options: {
     }
   });
 
+  ipcMain.handle(
+    'wtb:web:listEntries',
+    async (_event, requestedPath: string = '/') => {
+      try {
+        return {
+          ok: true,
+          path: requestedPath || '/',
+          entries: options.listWebEntries(requestedPath || '/'),
+        };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'wtb:web:convertFileToIpfsSource',
+    async (
+      _event,
+      requestedPath: string,
+      conversionOptions?: { removeLocalFile?: boolean },
+    ) => {
+      try {
+        const result = await options.convertWebFileToIpfsSource(
+          requestedPath,
+          conversionOptions,
+        );
+        const webStatus = options.getWebStatus();
+        if (webStatus.state === 'running') {
+          await options.stopWebService();
+          await options.startWebService();
+        }
+        return { ok: true, result };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  );
+
   ipcMain.handle('dialog:selectDirectory', async () => {
     try {
       const result = await dialog.showOpenDialog({
         properties: ['openDirectory'],
       });
-      if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+      if (
+        result.canceled ||
+        !result.filePaths ||
+        result.filePaths.length === 0
+      ) {
         return { ok: false, canceled: true };
       }
       return { ok: true, path: result.filePaths[0] };
@@ -98,3 +154,5 @@ export const registerMiscIpc = (options: {
     }
   });
 };
+
+export default registerMiscIpc;

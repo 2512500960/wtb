@@ -7,7 +7,10 @@ export type RemoteResourceManifestEntry = {
   mime?: string;
   httpUrl: string;
   cid?: string;
+  sourceMode?: 'local' | 'dual' | 'ipfs-backed';
 };
+
+export type RemoteResourceSource = 'http' | 'ipfs';
 
 export type RemoteResourceManifest = {
   path: string;
@@ -22,9 +25,12 @@ export type RemoteResourceManifest = {
 
 export type RemoteResourcePreparedEntry = RemoteResourceManifestEntry & {
   ipfsUrl?: string;
+  availableSources: RemoteResourceSource[];
+  recommendedSource: RemoteResourceSource;
+  recommendedReason: string;
   preferredUrl: string;
   fallbackUrl?: string;
-  preferredSource: 'http' | 'ipfs';
+  preferredSource: RemoteResourceSource;
 };
 
 export type RemoteResourceFetchResult = {

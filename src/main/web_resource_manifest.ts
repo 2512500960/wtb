@@ -1,13 +1,6 @@
-import fs from 'fs';
-import path from 'path';
-
-import { isUnderDir } from './fs_utils';
 import type { IpfsSidecarManager } from './ipfs_manager';
-import {
-  guessContentType,
-  parseAndNormalizeUrlPath,
-  urlPathToFsPath,
-} from './web_service_utils';
+import { listWebContentDirectoryEntries } from './web_content_sources';
+import { parseAndNormalizeUrlPath } from './web_service_utils';
 import type { RemoteResourceManifest } from '../types/remote_resources';
 
 const IPFS_SIZE_THRESHOLD_BYTES = 5 * 1024 * 1024;
@@ -33,46 +26,34 @@ export const buildWebResourceManifest = async (opts: {
   ipfsManager: IpfsSidecarManager;
 }): Promise<RemoteResourceManifest> => {
   const normalizedPath = parseAndNormalizeUrlPath(opts.requestedPath || '/');
-  const targetPath = urlPathToFsPath(opts.webRoot, normalizedPath);
-
-  if (!isUnderDir(targetPath, opts.webRoot)) {
-    throw new Error('Forbidden');
-  }
-
-  if (!fs.existsSync(targetPath) || !fs.statSync(targetPath).isDirectory()) {
-    throw new Error('Not Found');
-  }
 
   const ipfsStatus = await opts.ipfsManager.getDetailedStatus();
   const origin = opts.hostHeader ? `http://${opts.hostHeader}` : '';
 
-  const dirEntries = fs.readdirSync(targetPath, { withFileTypes: true });
   const entries = await Promise.all(
-    dirEntries.map(async (entry) => {
-      const childFsPath = path.join(targetPath, entry.name);
-      const childStat = fs.statSync(childFsPath);
-      const childUrlPath = path.posix.join(
-        normalizedPath === '/' ? '' : normalizedPath,
-        entry.name,
-      );
-      const normalizedChildPath = `/${childUrlPath.replace(/^\/+/, '')}`;
+    listWebContentDirectoryEntries({
+      webRoot: opts.webRoot,
+      requestedPath: normalizedPath,
+    }).map(async (entry) => {
+      const normalizedChildPath = entry.path;
       const httpUrl = origin
         ? new URL(normalizedChildPath, `${origin}/`).toString()
         : normalizedChildPath;
-      const mime = childStat.isFile() ? guessContentType(childFsPath) : undefined;
+      const mime = entry.isDirectory ? undefined : entry.mime;
 
-      let cid: string | undefined;
+      let cid: string | undefined = entry.cid;
       if (
         ipfsStatus.running &&
-        childStat.isFile() &&
+        !entry.isDirectory &&
+        entry.fsPath &&
         shouldExposeViaIpfs({
           relativeUrlPath: normalizedChildPath,
-          size: childStat.size,
+          size: entry.size,
           mime,
         })
       ) {
         try {
-          const result = await opts.ipfsManager.ensurePathCached(childFsPath, {
+          const result = await opts.ipfsManager.ensurePathCached(entry.fsPath, {
             wrapWithDirectory: false,
           });
           cid = result.cid;
@@ -84,12 +65,13 @@ export const buildWebResourceManifest = async (opts: {
       return {
         name: entry.name,
         path: normalizedChildPath,
-        isDirectory: entry.isDirectory(),
-        size: childStat.isFile() ? childStat.size : 0,
-        mtimeMs: childStat.mtimeMs,
+        isDirectory: entry.isDirectory,
+        size: entry.isDirectory ? 0 : entry.size,
+        mtimeMs: entry.mtimeMs,
         mime,
         httpUrl,
         cid,
+        sourceMode: entry.sourceMode,
       };
     }),
   );
