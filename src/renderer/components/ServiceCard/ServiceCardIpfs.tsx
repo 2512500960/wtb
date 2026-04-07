@@ -144,8 +144,12 @@ export default function ServiceCardIpfs({
               className={running ? 'ServiceDot DotGreen' : 'ServiceDot DotGray'}
               aria-hidden
             />
-            <span className="ServiceState">{running ? '运行中' : '未运行'}</span>
-            {svc.details ? <span className="ServiceDetails">{svc.details}</span> : null}
+            <span className="ServiceState">
+              {running ? '运行中' : '未运行'}
+            </span>
+            {svc.details ? (
+              <span className="ServiceDetails">{svc.details}</span>
+            ) : null}
           </div>
         </div>
 
@@ -193,7 +197,9 @@ export default function ServiceCardIpfs({
       </div>
 
       <div className="ServiceHint">
-        IPFS 服务用于内容寻址缓存与大文件分发；当前默认随应用自动启动，也可独立于 Yggdrasil 运行。
+        IPFS
+        服务用于内容寻址缓存与大文件分发；当前默认随应用自动启动，也可独立于
+        Yggdrasil 运行。
         {loadingDetails ? ' 正在刷新状态…' : ''}
       </div>
 
@@ -203,7 +209,10 @@ export default function ServiceCardIpfs({
         <div>Peer ID：{peerId || '—'}</div>
       </div>
 
-      <div className="ServiceActions" style={{ marginTop: 10, flexWrap: 'wrap' }}>
+      <div
+        className="ServiceActions"
+        style={{ marginTop: 10, flexWrap: 'wrap' }}
+      >
         <button
           type="button"
           className="ServiceGhostButton"
@@ -239,15 +248,23 @@ export default function ServiceCardIpfs({
       </div>
 
       {publishResult ? (
-        <div className="ServiceHint" style={{ marginTop: 10, userSelect: 'text' }}>
+        <div
+          className="ServiceHint"
+          style={{ marginTop: 10, userSelect: 'text' }}
+        >
           <div>CID：{publishResult.cid}</div>
           <div>路径：{publishResult.path}</div>
-          {copyHint ? <div>{copyHint === 'copied' ? '已复制' : '复制失败'}</div> : null}
+          {copyHint ? (
+            <div>{copyHint === 'copied' ? '已复制' : '复制失败'}</div>
+          ) : null}
         </div>
       ) : null}
 
       {publishError ? (
-        <div className="ServiceError" style={{ marginTop: 10, marginBottom: 0 }}>
+        <div
+          className="ServiceError"
+          style={{ marginTop: 10, marginBottom: 0 }}
+        >
           {publishError}
         </div>
       ) : null}

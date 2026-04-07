@@ -233,7 +233,11 @@ const getYggdrasilBaseDir = (): string => {
 };
 
 const startYggdrasil = async (): Promise<ServiceStatus> => {
-  return await yggdrasilManager.start();
+  const status = await yggdrasilManager.start();
+  if (status.state === 'running') {
+    await autoStartIpfsIfYggdrasilRunning('yggdrasil started');
+  }
+  return status;
 };
 
 const stopYggdrasil = async (): Promise<ServiceStatus> => {
@@ -272,6 +276,9 @@ const getAllServiceStatuses = (): ServiceStatus[] => {
 };
 
 const startIpfsService = async (): Promise<ServiceStatus> => {
+  if (getYggdrasilStatus().state !== 'running') {
+    throw new Error('Yggdrasil 未运行，无法启动 IPFS 服务。请先启动 Yggdrasil。');
+  }
   return await ipfsManager.start();
 };
 
@@ -285,14 +292,21 @@ const getIpfsRepoDir = (): string => {
 
 let ipfsAutoStartAttempted = false;
 
-const scheduleAutoStartIpfsIfNeeded = (reason: string): void => {
+const autoStartIpfsIfYggdrasilRunning = async (reason: string): Promise<void> => {
+  if (getYggdrasilStatus().state !== 'running') {
+    return;
+  }
   if (ipfsAutoStartAttempted) return;
   ipfsAutoStartAttempted = true;
 
-  ipfsManager.start().catch((error) => {
+  await ipfsManager.start().catch((error) => {
     ipfsAutoStartAttempted = false;
     log.warn(`Failed to auto-start IPFS (${reason})`, error);
   });
+};
+
+const scheduleAutoStartIpfsIfNeeded = (reason: string): void => {
+  void autoStartIpfsIfYggdrasilRunning(reason);
 };
 
 const runYggdrasilCtl = async (
@@ -337,7 +351,13 @@ registerServiceIpc({
   onBeforeStopYggdrasil: async () => {
     await yggPeerCoordinator.stopAutoPeerManager();
   },
-  onAfterStopYggdrasil: () => {
+  onAfterStopYggdrasil: async (status) => {
+    if (status.state !== 'stopped') {
+      return;
+    }
+
+    await stopIpfsService();
+    ipfsAutoStartAttempted = false;
     // announcementsCoordinator.stop().catch(() => {
     //   // ignore
     // });
@@ -450,7 +470,9 @@ const initializeDefaultSession = (): void => {
 const prepareStartup = (reason: string): void => {
   yggPeerCoordinator.prepareRuntimeConfigOnStartup(reason);
   // scheduleAutoStartAnnouncementsIfNeeded(reason);
-  scheduleAutoStartIpfsIfNeeded(reason);
+  if (getYggdrasilStatus().state === 'running') {
+    scheduleAutoStartIpfsIfNeeded(reason);
+  }
 };
 
 const createAndTrackMainWindow = async (): Promise<void> => {

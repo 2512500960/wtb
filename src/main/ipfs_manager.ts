@@ -538,9 +538,9 @@ export class IpfsSidecarManager {
     if (this.options.getYggdrasilAddress) {
       try {
         const yggAddr = await this.options.getYggdrasilAddress();
-        debug("Got Yggdrasil address for IPFS config: %s", yggAddr);
+        // debug("Got Yggdrasil address for IPFS config: %s", yggAddr);
         const yggMultiaddr = `/ip6/${yggAddr}/tcp/4001`;
-        debug("Constructed Yggdrasil multiaddr for IPFS config: %s", yggMultiaddr);
+        // debug("Constructed Yggdrasil multiaddr for IPFS config: %s", yggMultiaddr);
         if (!announce.includes(yggMultiaddr)) {
           announce.push(yggMultiaddr);
         }

@@ -14,6 +14,7 @@ import type {
   YggdrasilCtlCommand,
   YggdrasilCtlResult,
 } from './yggdrasil_types';
+import { debug } from 'console';
 
 type LoggerLike = {
   info: (...args: unknown[]) => void;
@@ -499,7 +500,9 @@ export class YggdrasilManager {
     this.pid = null;
     return { name: 'yggdrasil', state: 'stopped' };
   }
-
+  // run yggdrasilctl getself with retries to obtain the IPv6 address, since it may take some time for the TUN interface to be ready after startup
+  // add --json flag to get structured output if supported
+  // fallback to regex parsing should be deprecated now
   async getIPv6AddressOrThrow(): Promise<string> {
     const maxAttempts = 10;
     const delayMs = 1000;
@@ -507,24 +510,44 @@ export class YggdrasilManager {
 
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       try {
-        const result = await this.runCtl('getself', 3000);
+        const result = await this.runCtlCommand('getself', [], { timeoutMs: 3000, json: true });
         if (!result.ok) {
           const msg = (result.stderr || result.stdout || '').trim();
           lastError = new Error(
             `Failed to query Yggdrasil self address${msg ? `: ${msg}` : ''}`,
           );
         } else {
-          const addr = parseYggdrasilIPv6FromGetself(result.stdout);
-          if (addr) {
-            return addr;
+          const text = (result.stdout || '').trim();
+          if (!text) {
+            lastError = new Error('yggdrasilctl returned empty JSON output');
+          } else {
+            let parsed: any = null;
+            try {
+              parsed = JSON.parse(text);
+            } catch (e) {
+              lastError = new Error('yggdrasilctl returned invalid JSON');
+            }
+
+            if (parsed && typeof parsed === 'object') {
+              const candidates: string[] = [];
+              if (typeof parsed.address === 'string') candidates.push(parsed.address.trim());
+              if (typeof parsed.self?.address === 'string') candidates.push(parsed.self.address.trim());
+              if (typeof parsed.subnet === 'string') candidates.push(parsed.subnet.split('/')[0].trim());
+
+              const addr = candidates.find((a) => typeof a === 'string' && a.includes(':')) ?? null;
+              if (addr) {
+                // debug(`Obtained Yggdrasil IPv6 address on attempt ${attempt + 1}: ${addr}`);
+                return addr;
+              }
+
+              lastError = new Error(
+                'Unable to obtain IPv6 address from yggdrasilctl JSON output.',
+              );
+            }
           }
-          lastError = new Error(
-            'Unable to parse Yggdrasil IPv6 address from yggdrasilctl getself output.',
-          );
         }
       } catch (error) {
-        lastError =
-          error instanceof Error ? error : new Error(String(error));
+        lastError = error instanceof Error ? error : new Error(String(error));
       }
 
       if (attempt < maxAttempts - 1) {

@@ -17,7 +17,7 @@ type RegisterServiceIpcOptions = {
   stopIpfsService: () => Promise<ServiceStatus>;
   getIpfsRepoDir: () => string;
   onBeforeStopYggdrasil: () => Promise<void>;
-  onAfterStopYggdrasil: () => void;
+  onAfterStopYggdrasil: (status: ServiceStatus) => Promise<void>;
 };
 
 export const registerServiceIpc = (
@@ -69,7 +69,7 @@ export const registerServiceIpc = (
       if (serviceName === 'yggdrasil') {
         await options.onBeforeStopYggdrasil();
         const res = await options.stopYggdrasil();
-        options.onAfterStopYggdrasil();
+        await options.onAfterStopYggdrasil(res);
         return res;
       }
 
