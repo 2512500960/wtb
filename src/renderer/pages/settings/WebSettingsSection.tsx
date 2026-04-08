@@ -16,6 +16,26 @@ type LocalWebEntry = {
 };
 
 type FileFilterMode = 'all' | 'converted' | 'ipfs-backed' | 'local-only';
+type SettingsViewMode = 'manager' | 'simple';
+
+type SyncContentResult = {
+  thresholdBytes: number;
+  scannedFiles: number;
+  syncedFiles: number;
+  unchangedManagedFiles: number;
+  skippedSmallFiles: number;
+  staleManifestEntries: number;
+  syncedPaths: string[];
+  stalePaths: string[];
+  failures: Array<{ path: string; error: string }>;
+};
+
+type ManagedImportResult = {
+  importedFiles: number;
+  importedDirectories: number;
+  overwrittenPaths: string[];
+  paths: string[];
+};
 
 const formatBytes = (bytes: number): string => {
   if (!Number.isFinite(bytes) || bytes < 0) return '-';
@@ -106,6 +126,7 @@ export default function WebSettingsSection() {
   const [current, setCurrent] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [viewMode, setViewMode] = React.useState<SettingsViewMode>('manager');
   const [focusedPath, setFocusedPath] = React.useState('/');
   const [treeEntries, setTreeEntries] = React.useState<
     Record<string, LocalWebEntry[]>
@@ -120,6 +141,8 @@ export default function WebSettingsSection() {
   const [entryMessage, setEntryMessage] = React.useState<string | null>(null);
   const [copyHint, setCopyHint] = React.useState<string | null>(null);
   const [filterMode, setFilterMode] = React.useState<FileFilterMode>('all');
+  const [syncBusy, setSyncBusy] = React.useState(false);
+  const [managerBusy, setManagerBusy] = React.useState(false);
 
   const refresh = React.useCallback(async () => {
     setError(null);
@@ -256,6 +279,50 @@ export default function WebSettingsSection() {
     }
   };
 
+  const syncSimpleModeContent = React.useCallback(async () => {
+    setError(null);
+    setEntryMessage(null);
+    setSyncBusy(true);
+
+    try {
+      const res = (await window.electron.ipcRenderer.invoke(
+        'wtb:web:syncContentWithIpfs',
+      )) as {
+        ok?: boolean;
+        error?: string;
+        result?: SyncContentResult;
+      };
+
+      if (!res?.ok || !res.result) {
+        setError(res?.error ?? '同步站点内容失败');
+        return;
+      }
+
+      await loadDirectory('/', { focus: true });
+
+      const summary = [
+        `已扫描 ${res.result.scannedFiles} 个文件`,
+        `新同步 ${res.result.syncedFiles} 个大文件`,
+        `已跟踪且未变化 ${res.result.unchangedManagedFiles} 个`,
+      ];
+
+      if (res.result.staleManifestEntries > 0) {
+        summary.push(
+          `检测到 ${res.result.staleManifestEntries} 个已删除或移走的已跟踪文件`,
+        );
+      }
+      if (res.result.failures.length > 0) {
+        summary.push(`有 ${res.result.failures.length} 个文件同步失败`);
+      }
+
+      setEntryMessage(`${summary.join('；')}。`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSyncBusy(false);
+    }
+  }, [loadDirectory]);
+
   const copyCid = React.useCallback(async (cid: string) => {
     try {
       await navigator.clipboard.writeText(cid);
@@ -379,6 +446,220 @@ export default function WebSettingsSection() {
     };
   }, [loadedEntries]);
 
+  const focusedEntry = React.useMemo(() => {
+    return loadedEntries.find((entry) => entry.path === focusedPath) || null;
+  }, [focusedPath, loadedEntries]);
+
+  const focusedDirectoryPath = React.useMemo(() => {
+    if (!focusedEntry) return focusedPath === '/' ? '/' : getParentPath(focusedPath);
+    return focusedEntry.isDirectory ? focusedEntry.path : getParentPath(focusedEntry.path);
+  }, [focusedEntry, focusedPath]);
+
+  const refreshManagedDirectory = React.useCallback(
+    async (nextFocusedDirectoryPath: string) => {
+      const paths = Array.from(
+        new Set<string>([
+          '/',
+          nextFocusedDirectoryPath || '/',
+          ...Object.keys(expandedPaths).filter((path) => expandedPaths[path]),
+        ]),
+      );
+
+      await Promise.all(
+        paths.map(async (path) => {
+          await loadDirectory(path, { focus: false });
+        }),
+      );
+      setFocusedPath(nextFocusedDirectoryPath || '/');
+    },
+    [expandedPaths, loadDirectory],
+  );
+
+  const createDirectoryInManager = React.useCallback(
+    async (targetDirectoryPath: string) => {
+      const directoryName = window.prompt('请输入新目录名称');
+      if (!directoryName) return;
+
+      setError(null);
+      setEntryMessage(null);
+      setManagerBusy(true);
+      try {
+        const res = (await window.electron.ipcRenderer.invoke(
+          'wtb:web:createDirectory',
+          targetDirectoryPath,
+          directoryName,
+        )) as {
+          ok?: boolean;
+          error?: string;
+          result?: { path: string; created: boolean };
+        };
+
+        if (!res?.ok || !res.result) {
+          setError(res?.error ?? '新建目录失败');
+          return;
+        }
+
+        await refreshManagedDirectory(targetDirectoryPath);
+        setEntryMessage(
+          res.result.created
+            ? `已创建目录 ${res.result.path}`
+            : `目录已存在：${res.result.path}`,
+        );
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setManagerBusy(false);
+      }
+    },
+    [refreshManagedDirectory],
+  );
+
+  const importFilesIntoManager = React.useCallback(
+    async (targetDirectoryPath: string) => {
+      setError(null);
+      setEntryMessage(null);
+      setManagerBusy(true);
+      try {
+        const res = (await window.electron.ipcRenderer.invoke(
+          'wtb:web:pickAndImportFiles',
+          targetDirectoryPath,
+        )) as {
+          ok?: boolean;
+          canceled?: boolean;
+          error?: string;
+          result?: ManagedImportResult;
+        };
+
+        if (res?.canceled) return;
+        if (!res?.ok || !res.result) {
+          setError(res?.error ?? '导入文件失败');
+          return;
+        }
+
+        await refreshManagedDirectory(targetDirectoryPath);
+        setEntryMessage(
+          `已导入 ${res.result.importedFiles} 个文件到 ${targetDirectoryPath}${
+            res.result.overwrittenPaths.length
+              ? `，覆盖 ${res.result.overwrittenPaths.length} 个同名路径`
+              : ''
+          }。`,
+        );
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setManagerBusy(false);
+      }
+    },
+    [refreshManagedDirectory],
+  );
+
+  const importDirectoryIntoManager = React.useCallback(
+    async (targetDirectoryPath: string) => {
+      setError(null);
+      setEntryMessage(null);
+      setManagerBusy(true);
+      try {
+        const res = (await window.electron.ipcRenderer.invoke(
+          'wtb:web:pickAndImportDirectory',
+          targetDirectoryPath,
+        )) as {
+          ok?: boolean;
+          canceled?: boolean;
+          error?: string;
+          result?: ManagedImportResult;
+        };
+
+        if (res?.canceled) return;
+        if (!res?.ok || !res.result) {
+          setError(res?.error ?? '导入目录失败');
+          return;
+        }
+
+        await refreshManagedDirectory(targetDirectoryPath);
+        setEntryMessage(
+          `已导入目录，新增 ${res.result.importedDirectories} 个目录、${res.result.importedFiles} 个文件。`,
+        );
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setManagerBusy(false);
+      }
+    },
+    [refreshManagedDirectory],
+  );
+
+  const replaceManagedFileEntry = React.useCallback(
+    async (entry: LocalWebEntry) => {
+      setError(null);
+      setEntryMessage(null);
+      setManagerBusy(true);
+      try {
+        const res = (await window.electron.ipcRenderer.invoke(
+          'wtb:web:replaceFile',
+          entry.path,
+        )) as {
+          ok?: boolean;
+          canceled?: boolean;
+          error?: string;
+          result?: ManagedImportResult;
+        };
+
+        if (res?.canceled) return;
+        if (!res?.ok || !res.result) {
+          setError(res?.error ?? '替换文件失败');
+          return;
+        }
+
+        await refreshManagedDirectory(getParentPath(entry.path));
+        setEntryMessage(`已替换 ${entry.path}。`);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setManagerBusy(false);
+      }
+    },
+    [refreshManagedDirectory],
+  );
+
+  const deleteManagedEntry = React.useCallback(
+    async (entry: LocalWebEntry) => {
+      const confirmed = window.confirm(
+        `确定要删除 ${entry.isDirectory ? '目录' : '文件'} ${entry.path} 吗？`,
+      );
+      if (!confirmed) return;
+
+      setError(null);
+      setEntryMessage(null);
+      setManagerBusy(true);
+      try {
+        const res = (await window.electron.ipcRenderer.invoke(
+          'wtb:web:deleteEntry',
+          entry.path,
+        )) as {
+          ok?: boolean;
+          error?: string;
+          result?: { removedPaths: string[] };
+        };
+
+        if (!res?.ok || !res.result) {
+          setError(res?.error ?? '删除失败');
+          return;
+        }
+
+        const nextDirectory = entry.isDirectory
+          ? getParentPath(entry.path)
+          : getParentPath(entry.path);
+        await refreshManagedDirectory(nextDirectory);
+        setEntryMessage(`已删除 ${res.result.removedPaths.length} 个条目。`);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setManagerBusy(false);
+      }
+    },
+    [refreshManagedDirectory],
+  );
+
   const shouldDisplayEntry = React.useCallback(
     (entry: LocalWebEntry): boolean => {
       if (entry.isDirectory) return true;
@@ -408,6 +689,7 @@ export default function WebSettingsSection() {
       return (
         <React.Fragment key={entry.path}>
           <div
+            onClick={() => setFocusedPath(entry.path)}
             style={{
               display: 'grid',
               gridTemplateColumns: 'minmax(0, 1fr) auto',
@@ -420,6 +702,7 @@ export default function WebSettingsSection() {
                 ? 'rgba(64, 132, 244, 0.08)'
                 : 'transparent',
               marginLeft: depth * 18,
+              cursor: 'pointer',
             }}
           >
             <div style={{ minWidth: 0 }}>
@@ -545,34 +828,53 @@ export default function WebSettingsSection() {
                   >
                     刷新
                   </button>
+                  {!entry.virtual ? null : (
+                    <button
+                      type="button"
+                      className="ServiceSecondaryButton"
+                      onClick={() => {
+                        deleteManagedEntry(entry).catch(() => {});
+                      }}
+                      disabled={directoryLoading || managerBusy || !!entryBusyPath}
+                    >
+                      删除
+                    </button>
+                  )}
                 </>
               ) : (
                 <>
+                  {entry.sourceMode === 'local' && entry.localPresent !== false ? (
+                    <button
+                      type="button"
+                      className="ServiceSecondaryButton"
+                      onClick={() => {
+                        convertEntry(entry, true).catch(() => {});
+                      }}
+                      disabled={rowBusy || !!entryBusyPath || managerBusy}
+                      title="把现有本地文件迁入 IPFS，并删除站点目录中的物理副本"
+                    >
+                      {rowBusy ? '处理中...' : '迁入 IPFS'}
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     className="ServiceSecondaryButton"
                     onClick={() => {
-                      convertEntry(entry, false).catch(() => {});
+                      replaceManagedFileEntry(entry).catch(() => {});
                     }}
-                    disabled={
-                      rowBusy || !!entryBusyPath || entry.localPresent === false
-                    }
-                    title="保留本地文件，并补写一条带 CID 的资源清单记录"
+                    disabled={rowBusy || !!entryBusyPath || managerBusy}
                   >
-                    {rowBusy ? '处理中...' : '转为双源（保留本地）'}
+                    替换
                   </button>
                   <button
                     type="button"
                     className="ServiceSecondaryButton"
                     onClick={() => {
-                      convertEntry(entry, true).catch(() => {});
+                      deleteManagedEntry(entry).catch(() => {});
                     }}
-                    disabled={
-                      rowBusy || !!entryBusyPath || entry.localPresent === false
-                    }
-                    title="写入带 CID 的资源清单后删除本地文件"
+                    disabled={rowBusy || !!entryBusyPath || managerBusy}
                   >
-                    {rowBusy ? '处理中...' : '转为 IPFS 托管（删除本地）'}
+                    删除
                   </button>
                   <button
                     type="button"
@@ -616,11 +918,14 @@ export default function WebSettingsSection() {
     [
       convertEntry,
       copyCid,
+      deleteManagedEntry,
       entryBusyPath,
       expandedPaths,
       focusedPath,
       loadDirectory,
       loadingPaths,
+      managerBusy,
+      replaceManagedFileEntry,
       shouldDisplayEntry,
       toggleDirectory,
       treeEntries,
@@ -668,6 +973,31 @@ export default function WebSettingsSection() {
           CID，就说明服务端资源清单已经记录了它。双源会保留本地文件；IPFS
           托管则可以通过删除本地文件来节省磁盘空间。
         </div>
+        <div
+          style={{
+            display: 'flex',
+            gap: 8,
+            flexWrap: 'wrap',
+            marginTop: 10,
+          }}
+        >
+          <button
+            type="button"
+            className="ServiceSecondaryButton"
+            onClick={() => setViewMode('manager')}
+            disabled={viewMode === 'manager'}
+          >
+            管理模式
+          </button>
+          <button
+            type="button"
+            className="ServiceSecondaryButton"
+            onClick={() => setViewMode('simple')}
+            disabled={viewMode === 'simple'}
+          >
+            简单模式
+          </button>
+        </div>
         {error ? (
           <div style={{ color: 'var(--danger)', marginTop: 8 }}>{error}</div>
         ) : null}
@@ -707,22 +1037,147 @@ export default function WebSettingsSection() {
         </div>
       </div>
 
+      {viewMode === 'simple' ? (
+        <div
+          style={{
+            paddingTop: 8,
+            borderTop: '1px solid var(--border-color, #ddd)',
+            display: 'grid',
+            gap: 12,
+          }}
+        >
+          <div className="ChatTopTitleRow">
+            <div className="ChatTopTitle">简单模式</div>
+            <div className="ChatTopActions">
+              <button
+                type="button"
+                className="ServiceSecondaryButton"
+                onClick={openDir}
+                disabled={busy || syncBusy}
+                style={{ marginRight: 8 }}
+              >
+                在资源管理器中打开目录
+              </button>
+              <button
+                type="button"
+                className="ServiceSecondaryButton"
+                onClick={() => {
+                  syncSimpleModeContent().catch(() => {});
+                }}
+                disabled={busy || syncBusy || !!entryBusyPath}
+              >
+                {syncBusy ? '同步中...' : '保存内容更改'}
+              </button>
+            </div>
+          </div>
+
+          <div style={{ opacity: 0.86, lineHeight: 1.7 }}>
+            <span>
+              适合继续在系统资源管理器里维护站点文件。你可以先直接新增、替换、覆盖内容，再回到这里点
+              “保存内容更改”。
+            </span>
+            <span>
+              {[
+                'WTB 会重新扫描目录，并把尚未纳入资源清单的大文件自动补成“双源”条目，',
+                '保留本地文件同时写入 CID。',
+              ].join('')}
+            </span>
+          </div>
+
+          <div style={{ opacity: 0.78, fontSize: 12, lineHeight: 1.7 }}>
+            当前实现不会替你自动执行删除确认或目录级差异合并；如果简单模式检测到某些已跟踪文件在本地不存在，
+            会在同步结果里提示。更完整的新建目录、上传、替换、删除，建议直接切到上面的管理模式做。
+          </div>
+
+          <div
+            style={{
+              display: 'grid',
+              gap: 8,
+              padding: '12px',
+              border: '1px solid var(--border-color, #ddd)',
+              borderRadius: 8,
+              background: 'rgba(0, 0, 0, 0.08)',
+            }}
+          >
+            <div style={{ fontWeight: 600 }}>后续方向</div>
+            <div style={{ fontSize: 12, opacity: 0.82, lineHeight: 1.7 }}>
+              <span>
+                {[
+                  '简单模式现在定位为兼容入口。',
+                  '如果你仍想保留外部编辑习惯，可以继续用它做快速同步。',
+                ].join('')}
+              </span>
+              <span>
+                站内统一文件管理已经开始落到这页里，后续会继续往“单一 IPFS 存储事实来源”的方向收敛，而不是再单独强化资源管理器工作流。
+              </span>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div
         style={{
           paddingTop: 8,
           borderTop: '1px solid var(--border-color, #ddd)',
+          display: viewMode === 'manager' ? 'block' : 'none',
         }}
       >
         <div className="ChatTopTitleRow">
-          <div className="ChatTopTitle">本地内容树</div>
+          <div className="ChatTopTitle">管理模式 / 站内文件管理</div>
           <div className="ChatTopActions">
+            <button
+              type="button"
+              className="ServiceSecondaryButton"
+              onClick={() => {
+                createDirectoryInManager(focusedDirectoryPath).catch(() => {});
+              }}
+              disabled={managerBusy || syncBusy || !!entryBusyPath}
+              style={{ marginRight: 8 }}
+            >
+              新建目录
+            </button>
+            <button
+              type="button"
+              className="ServiceSecondaryButton"
+              onClick={() => {
+                importFilesIntoManager(focusedDirectoryPath).catch(() => {});
+              }}
+              disabled={managerBusy || syncBusy || !!entryBusyPath}
+              style={{ marginRight: 8 }}
+            >
+              上传文件
+            </button>
+            <button
+              type="button"
+              className="ServiceSecondaryButton"
+              onClick={() => {
+                importDirectoryIntoManager(focusedDirectoryPath).catch(() => {});
+              }}
+              disabled={managerBusy || syncBusy || !!entryBusyPath}
+              style={{ marginRight: 8 }}
+            >
+              导入目录
+            </button>
+            {focusedEntry && focusedEntry.path !== '/' ? (
+              <button
+                type="button"
+                className="ServiceSecondaryButton"
+                onClick={() => {
+                  deleteManagedEntry(focusedEntry).catch(() => {});
+                }}
+                disabled={managerBusy || syncBusy || !!entryBusyPath}
+                style={{ marginRight: 8 }}
+              >
+                删除当前选中
+              </button>
+            ) : null}
             <button
               type="button"
               className="ServiceSecondaryButton"
               onClick={() => {
                 loadDirectory('/', { focus: true }).catch(() => {});
               }}
-              disabled={!!entryBusyPath || !!loadingPaths['/']}
+              disabled={!!entryBusyPath || !!loadingPaths['/'] || managerBusy}
               style={{ marginRight: 8 }}
             >
               刷新根目录
@@ -733,7 +1188,7 @@ export default function WebSettingsSection() {
               onClick={() => {
                 refreshExpandedDirectories().catch(() => {});
               }}
-              disabled={!!entryBusyPath}
+              disabled={!!entryBusyPath || managerBusy}
             >
               刷新已展开目录
             </button>
@@ -741,10 +1196,44 @@ export default function WebSettingsSection() {
         </div>
 
         <div style={{ padding: '8px 0' }}>
-          <div>当前聚焦：{focusedPath}</div>
+          <div>当前选中：{focusedEntry ? focusedEntry.path : focusedPath}</div>
           <div style={{ marginTop: 4, opacity: 0.8 }}>
-            这里使用的是本地实现的懒加载树视图。对这个页面来说，它比额外引入一套较重的树控件依赖更合适。
+            当前操作目录：{focusedDirectoryPath}
           </div>
+          <div style={{ marginTop: 4, opacity: 0.8 }}>
+            这里已经按站内文件管理来组织：新增目录、上传文件、导入目录、替换、删除都直接写入站点内容清单。新导入的内容默认直接落成 IPFS 托管，不再要求你先把文件放进站点目录再二次转换。
+          </div>
+          {focusedEntry && !focusedEntry.isDirectory ? (
+            <div
+              style={{
+                display: 'flex',
+                gap: 8,
+                flexWrap: 'wrap',
+                marginTop: 10,
+              }}
+            >
+              <button
+                type="button"
+                className="ServiceSecondaryButton"
+                onClick={() => {
+                  replaceManagedFileEntry(focusedEntry).catch(() => {});
+                }}
+                disabled={managerBusy || !!entryBusyPath}
+              >
+                替换当前文件
+              </button>
+              <button
+                type="button"
+                className="ServiceSecondaryButton"
+                onClick={() => {
+                  deleteManagedEntry(focusedEntry).catch(() => {});
+                }}
+                disabled={managerBusy || !!entryBusyPath}
+              >
+                删除当前文件
+              </button>
+            </div>
+          ) : null}
           <div
             style={{
               display: 'flex',

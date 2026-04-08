@@ -264,8 +264,8 @@ export default function RemoteResourcesPage({
 
       <div className="ServiceHint">
         {standalone
-          ? '已检测到目标站点支持 WTB 资源清单，当前使用本地原生页面浏览内容。目录清单始终通过 HTTP 获取；媒体和大文件会优先尝试本地 IPFS gateway，失败后自动回退到 HTTP。加载资源清单时还会顺带读取远端声明的 IPFS peer 地址，并尝试接入本地 IPFS 节点。'
-          : '输入远端 WTB 服务地址。目录清单始终通过 HTTP 获取；媒体和大文件会优先尝试本地 IPFS gateway，失败后自动回退到 HTTP。加载资源清单时会顺带读取远端声明的 IPFS peer 地址，并尝试接入本地 IPFS 节点。'}
+          ? '已检测到目标站点支持 WTB 资源清单，当前使用本地原生页面浏览内容。目录清单始终通过 HTTP 获取；媒体和大文件会优先尝试本地 IPFS gateway，失败后自动回退到 HTTP。加载资源清单时会读取远端在清单里声明的 IPFS swarm 地址，并尝试接入本地 IPFS 节点。当前不会额外通过 HTTP 拉取对方的 announcement 数据或其它全量 peer 端点。'
+          : '输入远端 WTB 服务地址。目录清单始终通过 HTTP 获取；媒体和大文件会优先尝试本地 IPFS gateway，失败后自动回退到 HTTP。加载资源清单时会读取远端在清单里声明的 IPFS swarm 地址，并尝试接入本地 IPFS 节点。当前不会额外通过 HTTP 拉取对方的 announcement 数据或其它全量 peer 端点。'}
       </div>
 
       <div className="ResourceToolbar">

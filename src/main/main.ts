@@ -36,8 +36,14 @@ import { registerRemoteResourcesIpc } from './register_remote_resources_ipc';
 import { registerServiceIpc } from './register_service_ipc';
 import { registerYggIpc } from './register_ygg_ipc';
 import {
+  createManagedWebDirectory,
+  deleteManagedWebEntry,
   convertLocalFileToIpfsSource,
+  importManagedWebDirectory,
+  importManagedWebFiles,
   listWebContentDirectoryEntries,
+  replaceManagedWebFile,
+  syncWebContentWithIpfs,
 } from './web_content_sources';
 import type {
   YggdrasilCtlCommand,
@@ -412,6 +418,53 @@ registerMiscIpc({
       requestedPath,
       ipfsManager,
       removeLocalFile: options?.removeLocalFile,
+    }),
+  syncWebContentWithIpfs: async (options?: { thresholdBytes?: number }) =>
+    await syncWebContentWithIpfs({
+      webRoot: getWebRootDir(),
+      ipfsManager,
+      thresholdBytes: options?.thresholdBytes,
+    }),
+  createManagedWebDirectory: (parentPath: string, directoryName: string) =>
+    createManagedWebDirectory({
+      webRoot: getWebRootDir(),
+      parentPath,
+      directoryName,
+    }),
+  importManagedWebFiles: async (
+    targetDirectoryPath: string,
+    sourceFilePaths: string[],
+  ) =>
+    await importManagedWebFiles({
+      webRoot: getWebRootDir(),
+      targetDirectoryPath,
+      sourceFilePaths,
+      ipfsManager,
+    }),
+  importManagedWebDirectory: async (
+    targetDirectoryPath: string,
+    sourceDirectoryPath: string,
+  ) =>
+    await importManagedWebDirectory({
+      webRoot: getWebRootDir(),
+      targetDirectoryPath,
+      sourceDirectoryPath,
+      ipfsManager,
+    }),
+  replaceManagedWebFile: async (
+    requestedPath: string,
+    sourceFilePath: string,
+  ) =>
+    await replaceManagedWebFile({
+      webRoot: getWebRootDir(),
+      targetPath: requestedPath,
+      sourceFilePath,
+      ipfsManager,
+    }),
+  deleteManagedWebEntry: (requestedPath: string) =>
+    deleteManagedWebEntry({
+      webRoot: getWebRootDir(),
+      requestedPath,
     }),
 });
 

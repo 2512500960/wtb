@@ -16,6 +16,24 @@ export const registerMiscIpc = (options: {
     requestedPath: string,
     options?: { removeLocalFile?: boolean },
   ) => Promise<unknown>;
+  syncWebContentWithIpfs: (options?: { thresholdBytes?: number }) => Promise<unknown>;
+  createManagedWebDirectory: (
+    parentPath: string,
+    directoryName: string,
+  ) => Promise<unknown> | unknown;
+  importManagedWebFiles: (
+    targetDirectoryPath: string,
+    sourceFilePaths: string[],
+  ) => Promise<unknown>;
+  importManagedWebDirectory: (
+    targetDirectoryPath: string,
+    sourceDirectoryPath: string,
+  ) => Promise<unknown>;
+  replaceManagedWebFile: (
+    requestedPath: string,
+    sourceFilePath: string,
+  ) => Promise<unknown>;
+  deleteManagedWebEntry: (requestedPath: string) => Promise<unknown> | unknown;
 }): void => {
   ipcMain.handle('wtb:web:getDir', async () => {
     try {
@@ -104,6 +122,148 @@ export const registerMiscIpc = (options: {
       }
     },
   );
+
+  ipcMain.handle(
+    'wtb:web:syncContentWithIpfs',
+    async (_event, syncOptions?: { thresholdBytes?: number }) => {
+      try {
+        const result = await options.syncWebContentWithIpfs(syncOptions);
+        const webStatus = options.getWebStatus();
+        if (webStatus.state === 'running') {
+          await options.stopWebService();
+          await options.startWebService();
+        }
+        return { ok: true, result };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'wtb:web:createDirectory',
+    async (_event, parentPath: string, directoryName: string) => {
+      try {
+        const result = await options.createManagedWebDirectory(
+          parentPath,
+          directoryName,
+        );
+        return { ok: true, result };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'wtb:web:pickAndImportFiles',
+    async (_event, targetDirectoryPath: string) => {
+      try {
+        const selection = await dialog.showOpenDialog({
+          properties: ['openFile', 'multiSelections'],
+        });
+        if (selection.canceled || !selection.filePaths.length) {
+          return { ok: false, canceled: true };
+        }
+        const result = await options.importManagedWebFiles(
+          targetDirectoryPath,
+          selection.filePaths,
+        );
+        const webStatus = options.getWebStatus();
+        if (webStatus.state === 'running') {
+          await options.stopWebService();
+          await options.startWebService();
+        }
+        return { ok: true, result };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'wtb:web:pickAndImportDirectory',
+    async (_event, targetDirectoryPath: string) => {
+      try {
+        const selection = await dialog.showOpenDialog({
+          properties: ['openDirectory'],
+        });
+        if (selection.canceled || !selection.filePaths.length) {
+          return { ok: false, canceled: true };
+        }
+        const result = await options.importManagedWebDirectory(
+          targetDirectoryPath,
+          selection.filePaths[0],
+        );
+        const webStatus = options.getWebStatus();
+        if (webStatus.state === 'running') {
+          await options.stopWebService();
+          await options.startWebService();
+        }
+        return { ok: true, result };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'wtb:web:replaceFile',
+    async (_event, requestedPath: string) => {
+      try {
+        const selection = await dialog.showOpenDialog({
+          properties: ['openFile'],
+        });
+        if (selection.canceled || !selection.filePaths.length) {
+          return { ok: false, canceled: true };
+        }
+        const result = await options.replaceManagedWebFile(
+          requestedPath,
+          selection.filePaths[0],
+        );
+        const webStatus = options.getWebStatus();
+        if (webStatus.state === 'running') {
+          await options.stopWebService();
+          await options.startWebService();
+        }
+        return { ok: true, result };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  );
+
+  ipcMain.handle('wtb:web:deleteEntry', async (_event, requestedPath: string) => {
+    try {
+      const result = await options.deleteManagedWebEntry(requestedPath);
+      const webStatus = options.getWebStatus();
+      if (webStatus.state === 'running') {
+        await options.stopWebService();
+        await options.startWebService();
+      }
+      return { ok: true, result };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
 
   ipcMain.handle('dialog:selectDirectory', async () => {
     try {
