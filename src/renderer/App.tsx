@@ -446,7 +446,7 @@ function Home() {
         /> */}
         <LauncherTileLink
           to="/site-services"
-          label="站点服务"
+          label="站点管理"
           icon="🛰️"
           disabled={false}
           disabledHint=""

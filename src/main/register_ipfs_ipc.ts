@@ -4,6 +4,7 @@ import type { IpfsDetailedStatus } from './ipfs_manager';
 
 type RegisterIpfsIpcOptions = {
   getDetailedStatus: () => Promise<IpfsDetailedStatus>;
+  listSwarmPeers: () => Promise<unknown[]>;
   addPath: (
     targetPath: string,
     options?: { wrapWithDirectory?: boolean },
@@ -13,6 +14,10 @@ type RegisterIpfsIpcOptions = {
 export const registerIpfsIpc = (options: RegisterIpfsIpcOptions): void => {
   ipcMain.handle('ipfs:statusDetailed', async () => {
     return await options.getDetailedStatus();
+  });
+
+  ipcMain.handle('ipfs:swarmPeers', async () => {
+    return await options.listSwarmPeers();
   });
 
   ipcMain.handle('ipfs:addPath', async (_event, targetPath: string) => {

@@ -29,6 +29,15 @@ export type IpfsDetailedStatus = {
   addresses: string[];
 };
 
+export type IpfsSwarmPeer = {
+  peerId: string;
+  address: string;
+  latency: string;
+  direction: string;
+  muxer: string;
+  streams: string[];
+};
+
 const DEFAULT_API_PORT = 5001;
 const DEFAULT_GATEWAY_PORT = 8080;
 
@@ -122,6 +131,49 @@ export class IpfsSidecarManager {
         addresses: [],
       };
     }
+  }
+
+  async listSwarmPeers(): Promise<IpfsSwarmPeer[]> {
+    const pid = this.readPidFromFile();
+    if (!pid || !this.isProcessAlive(pid)) {
+      return [];
+    }
+
+    const responseText = await this.apiPost('swarm/peers', {
+      verbose: true,
+      streams: true,
+      direction: true,
+      latency: true,
+    });
+    const parsed = JSON.parse(responseText) as {
+      Peers?: Array<Record<string, unknown>>;
+    };
+
+    if (!Array.isArray(parsed.Peers)) {
+      return [];
+    }
+
+    return parsed.Peers.map((item) => {
+      const streams = Array.isArray(item.Streams)
+        ? item.Streams.map((stream) => {
+            if (typeof stream === 'string') return stream;
+            try {
+              return JSON.stringify(stream);
+            } catch {
+              return '';
+            }
+          }).filter((stream): stream is string => !!stream)
+        : [];
+
+      return {
+        peerId: typeof item.Peer === 'string' ? item.Peer : '',
+        address: typeof item.Addr === 'string' ? item.Addr : '',
+        latency: typeof item.Latency === 'string' ? item.Latency : '',
+        direction: typeof item.Direction === 'string' ? item.Direction : '',
+        muxer: typeof item.Muxer === 'string' ? item.Muxer : '',
+        streams,
+      };
+    }).filter((peer) => peer.peerId || peer.address);
   }
 
   async start(): Promise<ServiceStatus> {

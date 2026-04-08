@@ -84,7 +84,7 @@
     "protocol": "tls",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 5 days",
+    "status": "online 6 days",
     "reliability": "99%"
   },
   {
@@ -132,8 +132,8 @@
     "protocol": "tls",
     "ipVersion": "ipv4",
     "region": "(unknown)",
-    "status": "offline 3 days",
-    "reliability": "52%"
+    "status": "offline 4 days",
+    "reliability": "41%"
   },
   {
     "address": "tls://[2001:470:1f13:e56::64]:39575",
@@ -324,8 +324,8 @@
     "protocol": "tls",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 2 days",
-    "reliability": "99%"
+    "status": "online 2 hours",
+    "reliability": "98%"
   },
   {
     "address": "tls://133.18.201.69:54232",
@@ -336,20 +336,20 @@
     "reliability": "100%"
   },
   {
-    "address": "tls://yg-tyo.magicum.net:32333",
-    "protocol": "tls",
-    "ipVersion": "unknown",
-    "region": "(unknown)",
-    "status": "online 6 days",
-    "reliability": "92%"
-  },
-  {
     "address": "tls://153.120.42.137:54232",
     "protocol": "tls",
     "ipVersion": "ipv4",
     "region": "(unknown)",
-    "status": "offline 1 hour",
-    "reliability": "98%"
+    "status": "online 2 hours",
+    "reliability": "97%"
+  },
+  {
+    "address": "tls://yg-tyo.magicum.net:32333",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "(unknown)",
+    "status": "online 1 week+",
+    "reliability": "100%"
   },
   {
     "address": "tls://srl.newsdeef.eu:59999",
@@ -396,8 +396,8 @@
     "protocol": "tls",
     "ipVersion": "ipv4",
     "region": "(unknown)",
-    "status": "offline 2 days",
-    "reliability": "66%"
+    "status": "offline 3 days",
+    "reliability": "54%"
   },
   {
     "address": "tls://185.181.60.111:1513?key=00defa4b4b243547f2d5641ac5235ff1e35d393c576e4bb9cd45baefc81e48d9",
@@ -416,20 +416,20 @@
     "reliability": "100%"
   },
   {
-    "address": "tls://ygg-ro.axxa.dev:18080",
-    "protocol": "tls",
-    "ipVersion": "unknown",
-    "region": "(unknown)",
-    "status": "online 1 week+",
-    "reliability": "100%"
-  },
-  {
     "address": "tls://185.165.169.234:8443",
     "protocol": "tls",
     "ipVersion": "ipv4",
     "region": "(unknown)",
-    "status": "online 1 week+",
-    "reliability": "100%"
+    "status": "online 7 hours",
+    "reliability": "95%"
+  },
+  {
+    "address": "tls://ygg-ro.axxa.dev:18080",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "(unknown)",
+    "status": "offline 1 hour",
+    "reliability": "98%"
   },
   {
     "address": "tls://srv.itrus.su:7992",
@@ -476,7 +476,7 @@
     "protocol": "tls",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 2 days",
+    "status": "online 3 days",
     "reliability": "99%"
   },
   {
@@ -484,23 +484,23 @@
     "protocol": "tls",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 6 days",
-    "reliability": "99%"
+    "status": "online 1 week+",
+    "reliability": "100%"
   },
   {
     "address": "tls://45.95.202.21:443",
     "protocol": "tls",
     "ipVersion": "ipv4",
     "region": "(unknown)",
-    "status": "online 6 days",
-    "reliability": "99%"
+    "status": "online 1 week+",
+    "reliability": "100%"
   },
   {
     "address": "tls://[2a00:b700::a:279]:443",
     "protocol": "tls",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 5 days",
+    "status": "online 6 days",
     "reliability": "99%"
   },
   {
@@ -508,7 +508,7 @@
     "protocol": "tls",
     "ipVersion": "ipv4",
     "region": "(unknown)",
-    "status": "online 3 days",
+    "status": "online 4 days",
     "reliability": "98%"
   },
   {
@@ -520,11 +520,19 @@
     "reliability": "100%"
   },
   {
+    "address": "tls://ygg-msk-1.averyan.ru:8362",
+    "protocol": "tls",
+    "ipVersion": "unknown",
+    "region": "(unknown)",
+    "status": "online 1 week+",
+    "reliability": "100%"
+  },
+  {
     "address": "tls://box.paulll.cc:13338",
     "protocol": "tls",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 21 hours",
+    "status": "online 1 day",
     "reliability": "98%"
   },
   {
@@ -532,7 +540,7 @@
     "protocol": "tls",
     "ipVersion": "ipv4",
     "region": "(unknown)",
-    "status": "online 4 days",
+    "status": "online 5 days",
     "reliability": "99%"
   },
   {
@@ -540,24 +548,16 @@
     "protocol": "tls",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 6 days",
-    "reliability": "99%"
+    "status": "online 1 week+",
+    "reliability": "100%"
   },
   {
     "address": "tls://vix.duckdns.org:36014",
     "protocol": "tls",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 2 days",
+    "status": "online 4 hours",
     "reliability": "94%"
-  },
-  {
-    "address": "tls://ygg-msk-1.averyan.ru:8362",
-    "protocol": "tls",
-    "ipVersion": "unknown",
-    "region": "(unknown)",
-    "status": "online 1 week+",
-    "reliability": "100%"
   },
   {
     "address": "tls://ru2.cert.dev:7041",
@@ -596,8 +596,8 @@
     "protocol": "tls",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "offline 3 days",
-    "reliability": "41%"
+    "status": "offline 4 days",
+    "reliability": "38%"
   },
   {
     "address": "tls://jed-peer.ygg.sy.sa:8442",
@@ -628,7 +628,7 @@
     "protocol": "tls",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 2 days",
+    "status": "online 3 days",
     "reliability": "83%"
   },
   {
@@ -652,7 +652,7 @@
     "protocol": "tls",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 13 hours",
+    "status": "online 1 day",
     "reliability": "99%"
   },
   {
@@ -660,16 +660,16 @@
     "protocol": "tls",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "offline 2 hours",
-    "reliability": "55%"
+    "status": "offline 3 hours",
+    "reliability": "52%"
   },
   {
     "address": "tls://ygg-tw.lxak.net:8880",
     "protocol": "tls",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 6 days",
-    "reliability": "88%"
+    "status": "online 1 week+",
+    "reliability": "100%"
   },
   {
     "address": "tls://193.93.119.42:443",
@@ -740,8 +740,8 @@
     "protocol": "tls",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 1 week+",
-    "reliability": "100%"
+    "status": "online 17 hours",
+    "reliability": "99%"
   },
   {
     "address": "tls://ygg-dc.lxak.net:8880",
@@ -821,7 +821,7 @@
     "ipVersion": "unknown",
     "region": "(unknown)",
     "status": "online 6 days",
-    "reliability": "95%"
+    "reliability": "99%"
   },
   {
     "address": "tls://redcatho.de:9494",
@@ -876,16 +876,8 @@
     "protocol": "quic",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 4 days",
-    "reliability": "89%"
-  },
-  {
-    "address": "quic://scarlet.mboa.dev:3443",
-    "protocol": "quic",
-    "ipVersion": "unknown",
-    "region": "(unknown)",
-    "status": "offline 4 days",
-    "reliability": "32%"
+    "status": "online 5 days",
+    "reliability": "94%"
   },
   {
     "address": "quic://ip4.fvm.mywire.org:443?key=000000000143db657d1d6f80b5066dd109a4cb31f7dc6cb5d56050fffb014217",
@@ -908,7 +900,7 @@
     "protocol": "quic",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 4 hours",
+    "status": "online 23 hours",
     "reliability": "88%"
   },
   {
@@ -916,7 +908,7 @@
     "protocol": "quic",
     "ipVersion": "ipv4",
     "region": "(unknown)",
-    "status": "online 3 days",
+    "status": "online 4 days",
     "reliability": "89%"
   },
   {
@@ -924,15 +916,15 @@
     "protocol": "quic",
     "ipVersion": "ipv4",
     "region": "(unknown)",
-    "status": "online 1 hour",
-    "reliability": "91%"
+    "status": "online 5 hours",
+    "reliability": "92%"
   },
   {
     "address": "quic://[2a0c:b641:ce0::25d8:c5d6]:65535",
     "protocol": "quic",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 20 hours",
+    "status": "online 1 day",
     "reliability": "98%"
   },
   {
@@ -940,7 +932,7 @@
     "protocol": "quic",
     "ipVersion": "ipv4",
     "region": "(unknown)",
-    "status": "online 20 hours",
+    "status": "online 1 day",
     "reliability": "97%"
   },
   {
@@ -948,16 +940,16 @@
     "protocol": "quic",
     "ipVersion": "ipv4",
     "region": "(unknown)",
-    "status": "online 4 hours",
-    "reliability": "96%"
+    "status": "online 16 hours",
+    "reliability": "95%"
   },
   {
     "address": "quic://[2a14:1e00:3:15c::]:65535",
     "protocol": "quic",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 17 hours",
-    "reliability": "97%"
+    "status": "online 14 hours",
+    "reliability": "95%"
   },
   {
     "address": "quic://109.107.177.127:65535",
@@ -972,7 +964,7 @@
     "protocol": "quic",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 4 hours",
+    "status": "online 23 hours",
     "reliability": "99%"
   },
   {
@@ -980,7 +972,7 @@
     "protocol": "quic",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 4 hours",
+    "status": "online 17 hours",
     "reliability": "98%"
   },
   {
@@ -988,15 +980,15 @@
     "protocol": "quic",
     "ipVersion": "ipv4",
     "region": "(unknown)",
-    "status": "online 4 hours",
-    "reliability": "98%"
+    "status": "online 17 hours",
+    "reliability": "97%"
   },
   {
     "address": "quic://[2a14:1e00:1:f3c::]:65535",
     "protocol": "quic",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 4 hours",
+    "status": "online 23 hours",
     "reliability": "99%"
   },
   {
@@ -1004,7 +996,7 @@
     "protocol": "quic",
     "ipVersion": "ipv4",
     "region": "(unknown)",
-    "status": "online 4 hours",
+    "status": "online 23 hours",
     "reliability": "99%"
   },
   {
@@ -1020,7 +1012,7 @@
     "protocol": "quic",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 4 hours",
+    "status": "online 17 hours",
     "reliability": "96%"
   },
   {
@@ -1028,7 +1020,7 @@
     "protocol": "quic",
     "ipVersion": "ipv4",
     "region": "(unknown)",
-    "status": "online 3 days",
+    "status": "online 13 hours",
     "reliability": "98%"
   },
   {
@@ -1036,7 +1028,7 @@
     "protocol": "quic",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 3 days",
+    "status": "online 13 hours",
     "reliability": "97%"
   },
   {
@@ -1044,7 +1036,7 @@
     "protocol": "quic",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 4 hours",
+    "status": "online 23 hours",
     "reliability": "99%"
   },
   {
@@ -1060,7 +1052,7 @@
     "protocol": "quic",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 14 hours",
+    "status": "online 1 day",
     "reliability": "97%"
   },
   {
@@ -1068,7 +1060,7 @@
     "protocol": "quic",
     "ipVersion": "ipv4",
     "region": "(unknown)",
-    "status": "online 1 hour",
+    "status": "offline 1 hour",
     "reliability": "94%"
   },
   {
@@ -1084,8 +1076,8 @@
     "protocol": "quic",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "offline 3 days",
-    "reliability": "48%"
+    "status": "offline 4 days",
+    "reliability": "36%"
   },
   {
     "address": "quic://ip4.nerdvm.mywire.org:443?key=00000000c61d731961a290d127cd3fc03a4c5f3f35b9083559d4c81d48d65854",
@@ -1100,23 +1092,23 @@
     "protocol": "quic",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 4 days",
-    "reliability": "98%"
+    "status": "online 5 days",
+    "reliability": "99%"
   },
   {
     "address": "quic://23.184.48.86:993",
     "protocol": "quic",
     "ipVersion": "ipv4",
     "region": "(unknown)",
-    "status": "online 3 hours",
-    "reliability": "95%"
+    "status": "online 22 hours",
+    "reliability": "98%"
   },
   {
     "address": "quic://129.80.167.244:23165",
     "protocol": "quic",
     "ipVersion": "ipv4",
     "region": "(unknown)",
-    "status": "online 1 day",
+    "status": "online 5 hours",
     "reliability": "94%"
   },
   {
@@ -1124,8 +1116,8 @@
     "protocol": "quic",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 1 day",
-    "reliability": "92%"
+    "status": "online 4 hours",
+    "reliability": "91%"
   },
   {
     "address": "wss://ygg-evn-1.wgos.org:443",
@@ -1173,14 +1165,14 @@
     "ipVersion": "unknown",
     "region": "(unknown)",
     "status": "offline 4 days",
-    "reliability": "42%"
+    "reliability": "31%"
   },
   {
     "address": "tcp://yggdrasil.1337.moe:7676",
     "protocol": "tcp",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 10 hours",
+    "status": "online 1 day",
     "reliability": "95%"
   },
   {
@@ -1212,7 +1204,7 @@
     "protocol": "tcp",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 3 days",
+    "status": "online 4 days",
     "reliability": "99%"
   },
   {

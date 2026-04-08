@@ -41,6 +41,34 @@ const psSingleQuote = (value: string): string => {
   return `'${value.replace(/'/g, "''")}'`;
 };
 
+export type WebServiceRequestRecord = {
+  id: number;
+  at: string;
+  method: string;
+  path: string;
+  remoteAddress: string;
+  userAgent: string;
+  statusCode: number;
+};
+
+export type WebServiceActiveClient = {
+  remoteAddress: string;
+  lastSeenAt: string;
+  requestCount: number;
+  recentPaths: string[];
+  userAgent: string;
+};
+
+export type WebServiceActivitySnapshot = {
+  activeWindowMinutes: number;
+  activeClients: WebServiceActiveClient[];
+  recentRequests: WebServiceRequestRecord[];
+};
+
+const WEB_ACTIVITY_MAX_RECORDS = 120;
+const WEB_ACTIVITY_ACTIVE_WINDOW_MS = 10 * 60 * 1000;
+const WTB_SERVICE_HEADER_VALUE = 'web; version=1';
+
 export class WebServiceManager {
   private server: http.Server | null = null;
 
@@ -49,6 +77,10 @@ export class WebServiceManager {
   private listenPort: number | null = null;
 
   private readonly openSockets = new Set<Socket>();
+
+  private readonly requestRecords: WebServiceRequestRecord[] = [];
+
+  private requestSequence = 0;
 
   constructor(
     private readonly options: {
@@ -89,6 +121,63 @@ export class WebServiceManager {
     return path.join(this.options.getWtbDataDir(), 'web');
   }
 
+  getActivitySnapshot(): WebServiceActivitySnapshot {
+    const recentRequests = this.requestRecords
+      .slice()
+      .sort((left, right) => right.id - left.id);
+    const activeSince = Date.now() - WEB_ACTIVITY_ACTIVE_WINDOW_MS;
+    const clients = new Map<
+      string,
+      {
+        remoteAddress: string;
+        lastSeenAt: string;
+        lastSeenMs: number;
+        requestCount: number;
+        recentPaths: string[];
+        userAgent: string;
+      }
+    >();
+
+    recentRequests.forEach((record) => {
+      const atMs = Date.parse(record.at);
+      if (!Number.isFinite(atMs) || atMs < activeSince) return;
+
+      const existing = clients.get(record.remoteAddress);
+      if (!existing) {
+        clients.set(record.remoteAddress, {
+          remoteAddress: record.remoteAddress,
+          lastSeenAt: record.at,
+          lastSeenMs: atMs,
+          requestCount: 1,
+          recentPaths: [record.path],
+          userAgent: record.userAgent,
+        });
+        return;
+      }
+
+      existing.requestCount += 1;
+      if (!existing.recentPaths.includes(record.path) && existing.recentPaths.length < 4) {
+        existing.recentPaths.push(record.path);
+      }
+      if (!existing.userAgent && record.userAgent) {
+        existing.userAgent = record.userAgent;
+      }
+    });
+
+    return {
+      activeWindowMinutes: Math.floor(WEB_ACTIVITY_ACTIVE_WINDOW_MS / 60_000),
+      activeClients: Array.from(clients.values())
+        .sort((left, right) => {
+          if (right.lastSeenMs !== left.lastSeenMs) {
+            return right.lastSeenMs - left.lastSeenMs;
+          }
+          return right.requestCount - left.requestCount;
+        })
+        .map(({ lastSeenMs: _lastSeenMs, ...client }) => client),
+      recentRequests,
+    };
+  }
+
   async start(): Promise<ServiceStatus> {
     this.ensureWindowsOrThrow();
 
@@ -110,6 +199,8 @@ export class WebServiceManager {
 
     const server = http.createServer(async (req, res) => {
       try {
+        this.applyWtbResponseHeaders(res);
+
         const method = (req.method || 'GET').toUpperCase();
         if (method !== 'GET' && method !== 'HEAD') {
           res.statusCode = 405;
@@ -121,6 +212,7 @@ export class WebServiceManager {
 
         const urlPath = parseAndNormalizeUrlPath(req.url);
         const requestUrl = new URL(req.url || '/', 'http://localhost');
+        this.recordRequestActivity(req, res, req.url || urlPath);
 
         if (urlPath === '/health') {
           const body = JSON.stringify({
@@ -380,6 +472,65 @@ export class WebServiceManager {
     }
   }
 
+  private recordRequestActivity(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    requestPath: string,
+  ): void {
+    const trimmedPath = (requestPath || '/').trim() || '/';
+    if (trimmedPath === '/health') return;
+
+    const remoteAddress = this.normalizeRemoteAddress(req.socket.remoteAddress);
+    const rawUserAgent = req.headers['user-agent'];
+    const userAgent =
+      typeof rawUserAgent === 'string'
+        ? rawUserAgent.trim().slice(0, 160)
+        : Array.isArray(rawUserAgent) && typeof rawUserAgent[0] === 'string'
+          ? rawUserAgent[0].trim().slice(0, 160)
+          : '';
+    const method = (req.method || 'GET').toUpperCase();
+    const pathText = trimmedPath.slice(0, 240);
+
+    res.once('finish', () => {
+      this.requestSequence += 1;
+      this.requestRecords.push({
+        id: this.requestSequence,
+        at: new Date().toISOString(),
+        method,
+        path: pathText,
+        remoteAddress,
+        userAgent,
+        statusCode: res.statusCode || 0,
+      });
+
+      if (this.requestRecords.length > WEB_ACTIVITY_MAX_RECORDS) {
+        this.requestRecords.splice(
+          0,
+          this.requestRecords.length - WEB_ACTIVITY_MAX_RECORDS,
+        );
+      }
+    });
+  }
+
+  private normalizeRemoteAddress(value: string | undefined): string {
+    const trimmed = (value || '').trim();
+    if (!trimmed) return 'unknown';
+    if (trimmed.startsWith('::ffff:')) {
+      return trimmed.slice('::ffff:'.length);
+    }
+    return trimmed;
+  }
+
+  private applyWtbResponseHeaders(res: http.ServerResponse): void {
+    const ipfsStatus = this.options.ipfsManager.getServiceStatus().state;
+    res.setHeader('WTB-Service', WTB_SERVICE_HEADER_VALUE);
+    res.setHeader(
+      'WTB-Features',
+      ['resource-manifest', 'dual-source', 'http-fallback', 'ipfs'].join(','),
+    );
+    res.setHeader('WTB-IPFS-Status', ipfsStatus);
+  }
+
   private respondWithLocalFile(
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -387,6 +538,7 @@ export class WebServiceManager {
     filePath: string,
     stat: fs.Stats,
   ): void {
+    this.applyWtbResponseHeaders(res);
     const range = parseByteRange(req.headers.range, stat.size);
     res.setHeader('Content-Type', guessContentType(filePath));
     res.setHeader('Last-Modified', stat.mtime.toUTCString());
@@ -453,6 +605,7 @@ export class WebServiceManager {
     method: string,
     cid: string,
   ): Promise<void> {
+    this.applyWtbResponseHeaders(res);
     if (this.options.ipfsManager.getServiceStatus().state !== 'running') {
       res.statusCode = 503;
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');

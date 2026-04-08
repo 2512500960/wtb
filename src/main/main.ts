@@ -369,6 +369,9 @@ registerIpfsIpc({
   getDetailedStatus: async () => {
     return await ipfsManager.getDetailedStatus();
   },
+  listSwarmPeers: async () => {
+    return await ipfsManager.listSwarmPeers();
+  },
   addPath: async (targetPath: string, options?: { wrapWithDirectory?: boolean }) => {
     return await ipfsManager.addPath(targetPath, options);
   },
@@ -390,6 +393,7 @@ registerEmbeddedAppsIpc({
 
 registerMiscIpc({
   getWebRootDir,
+  getWebActivity: () => webServiceManager.getActivitySnapshot(),
   setWebAssetsDir: setWtbWebAssetsDir,
   getWebStatus,
   stopWebService,

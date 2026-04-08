@@ -4,6 +4,7 @@ import path from 'path';
 
 export const registerMiscIpc = (options: {
   getWebRootDir: () => string;
+  getWebActivity: () => unknown;
   setWebAssetsDir: (dir: string | null) => {
     web?: { assetsDir?: string | null };
   };
@@ -22,6 +23,19 @@ export const registerMiscIpc = (options: {
     } catch (error) {
       return {
         ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+  ipcMain.handle('wtb:web:getActivity', async () => {
+    try {
+      return options.getWebActivity();
+    } catch (error) {
+      return {
+        activeWindowMinutes: 10,
+        activeClients: [],
+        recentRequests: [],
         error: error instanceof Error ? error.message : String(error),
       };
     }
