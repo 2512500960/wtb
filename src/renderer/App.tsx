@@ -27,6 +27,30 @@ const YGG_WEBSITE_INDEX_IN_APP_URL =
 const YGG_MINI_WIKI_URL =
   'http://[200:85b:60c4:e7b5:c33b:959f:9b52:6783]/?lang=zh';
 
+type StandaloneRemoteResourcesConfig = {
+  baseUrl: string;
+  path: string;
+};
+
+function getStandaloneRemoteResourcesConfig(): StandaloneRemoteResourcesConfig | null {
+  if (typeof window === 'undefined') return null;
+
+  const params = new URLSearchParams(window.location.search || '');
+  if (params.get('wtbView') !== 'remote-resources') {
+    return null;
+  }
+
+  const baseUrl = (params.get('baseUrl') || '').trim();
+  if (!baseUrl) {
+    return null;
+  }
+
+  return {
+    baseUrl,
+    path: (params.get('path') || '/').trim() || '/',
+  };
+}
+
 function ModalShell({
   title,
   open,
@@ -471,14 +495,25 @@ function Home() {
 }
 
 export default function App() {
+  const standaloneRemoteResources = getStandaloneRemoteResourcesConfig();
+
   return (
-    <Router>
+    <Router initialEntries={[standaloneRemoteResources ? '/resources' : '/']}>
       <Routes>
         <Route path="/" element={<Home />} />
         {/* 临时弃用：保留文件但不再挂载路由 */}
         {/* <Route path="/ygg" element={<YggWebsiteIndexPage />} /> */}
         {FEATURES.chat && <Route path="/irc" element={<ChatPage />} />}
-        <Route path="/resources" element={<RemoteResourcesPage />} />
+        <Route
+          path="/resources"
+          element={
+            <RemoteResourcesPage
+              initialBaseUrl={standaloneRemoteResources?.baseUrl}
+              initialPath={standaloneRemoteResources?.path}
+              standalone={!!standaloneRemoteResources}
+            />
+          }
+        />
         <Route path="/site-services" element={<SiteServicesPage />} />
         {/* <Route path="/announcements" element={<ServiceAnnouncementsPage />} /> */}
         {/* <Route path="/announcements" element={<ServiceSyncPage />} /> */}

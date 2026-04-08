@@ -1,3 +1,4 @@
+/* eslint-disable jsx-a11y/media-has-caption */
 import * as React from 'react';
 import { Link } from 'react-router-dom';
 
@@ -48,22 +49,33 @@ function getSourceLabel(source: RemoteResourceSource): string {
   return source === 'ipfs' ? 'IPFS' : 'HTTP';
 }
 
-export default function RemoteResourcesPage() {
-  const [baseUrlInput, setBaseUrlInput] = React.useState('');
-  const [currentPath, setCurrentPath] = React.useState('/');
+export default function RemoteResourcesPage({
+  initialBaseUrl,
+  initialPath = '/',
+  standalone = false,
+}: {
+  initialBaseUrl: string | undefined;
+  initialPath: string | undefined;
+  standalone: boolean | undefined;
+}) {
+  const [baseUrlInput, setBaseUrlInput] = React.useState(initialBaseUrl || '');
+  const [currentPath, setCurrentPath] = React.useState(initialPath || '/');
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [result, setResult] = React.useState<RemoteResourceFetchResult | null>(
     null,
   );
-  const [selectedEntry, setSelectedEntry] = React.useState<RemoteResourcePreparedEntry | null>(null);
+  const [selectedEntry, setSelectedEntry] =
+    React.useState<RemoteResourcePreparedEntry | null>(null);
   const [previewUrl, setPreviewUrl] = React.useState<string | null>(null);
-  const [previewSource, setPreviewSource] = React.useState<'http' | 'ipfs' | null>(null);
+  const [previewSource, setPreviewSource] = React.useState<
+    'http' | 'ipfs' | null
+  >(null);
   const [previewNotice, setPreviewNotice] = React.useState<string | null>(null);
   const [copyHint, setCopyHint] = React.useState<string | null>(null);
-  const [sessionSourcePreferences, setSessionSourcePreferences] = React.useState<
-    Record<string, RemoteResourceSource>
-  >({});
+  const [sessionSourcePreferences, setSessionSourcePreferences] =
+    React.useState<Record<string, RemoteResourceSource>>({});
+  const autoLoadedRef = React.useRef(false);
 
   const getSourcePreferenceKey = React.useCallback(
     (entry: RemoteResourcePreparedEntry, baseUrl: string) => {
@@ -102,7 +114,11 @@ export default function RemoteResourcesPage() {
   );
 
   const updateSessionSourcePreference = React.useCallback(
-    (entry: RemoteResourcePreparedEntry, baseUrl: string, source: RemoteResourceSource) => {
+    (
+      entry: RemoteResourcePreparedEntry,
+      baseUrl: string,
+      source: RemoteResourceSource,
+    ) => {
       const preferenceKey = getSourcePreferenceKey(entry, baseUrl);
       setSessionSourcePreferences((current) => {
         if (current[preferenceKey] === source) return current;
@@ -140,14 +156,17 @@ export default function RemoteResourcesPage() {
     [],
   );
 
-  const openPreview = React.useCallback((entry: RemoteResourcePreparedEntry) => {
-    if (!result) return;
-    const next = chooseSourceForEntry(entry, result.baseUrl);
-    setSelectedEntry(entry);
-    setPreviewNotice(next.notice);
-    setPreviewUrl(next.url);
-    setPreviewSource(next.source);
-  }, [chooseSourceForEntry, result]);
+  const openPreview = React.useCallback(
+    (entry: RemoteResourcePreparedEntry) => {
+      if (!result) return;
+      const next = chooseSourceForEntry(entry, result.baseUrl);
+      setSelectedEntry(entry);
+      setPreviewNotice(next.notice);
+      setPreviewUrl(next.url);
+      setPreviewSource(next.source);
+    },
+    [chooseSourceForEntry, result],
+  );
 
   const handlePreviewSuccess = React.useCallback(() => {
     if (!selectedEntry || !result || !previewSource) return;
@@ -174,11 +193,19 @@ export default function RemoteResourcesPage() {
       updateSessionSourcePreference(selectedEntry, result.baseUrl, 'http');
       setPreviewUrl(selectedEntry.fallbackUrl);
       setPreviewSource('http');
-      setPreviewNotice('IPFS 访问失败，已自动回退到 HTTP，并降低当前会话同类资源的 IPFS 优先级。');
+      setPreviewNotice(
+        'IPFS 访问失败，已自动回退到 HTTP，并降低当前会话同类资源的 IPFS 优先级。',
+      );
       return;
     }
     setPreviewNotice('资源加载失败。');
-  }, [previewSource, previewUrl, result, selectedEntry, updateSessionSourcePreference]);
+  }, [
+    previewSource,
+    previewUrl,
+    result,
+    selectedEntry,
+    updateSessionSourcePreference,
+  ]);
 
   const copyCid = React.useCallback(async (cid: string) => {
     const ok = await copyText(cid);
@@ -188,21 +215,57 @@ export default function RemoteResourcesPage() {
 
   const parentPath = React.useMemo(() => {
     if (currentPath === '/') return null;
-    const up = currentPath.replace(/\/+$/, '').split('/').slice(0, -1).join('/');
+    const up = currentPath
+      .replace(/\/+$/, '')
+      .split('/')
+      .slice(0, -1)
+      .join('/');
     return up ? `${up}/`.replace(/\/\/+/, '/') : '/';
   }, [currentPath]);
+
+  React.useEffect(() => {
+    if (autoLoadedRef.current) return;
+    if (!initialBaseUrl) return;
+
+    autoLoadedRef.current = true;
+    setBaseUrlInput(initialBaseUrl);
+    setCurrentPath(initialPath || '/');
+    loadManifest(initialBaseUrl, initialPath || '/').catch(() => {
+      // ignore initial auto-load errors here; page state already captures them
+    });
+  }, [initialBaseUrl, initialPath, loadManifest]);
 
   return (
     <div className="LauncherRoot">
       <div className="ServiceHeader">
-        <div className="ServiceTitle">WTB 远程内容</div>
-        <Link className="ServiceGhostButton" to="/">
-          返回首页
-        </Link>
+        <div className="ServiceTitle">
+          {standalone ? 'WTB 远程内容浏览' : 'WTB 远程内容'}
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {baseUrlInput ? (
+            <button
+              type="button"
+              className="ServiceGhostButton"
+              onClick={() =>
+                window.electron.ipcRenderer.invoke(
+                  'open-external',
+                  baseUrlInput,
+                )
+              }
+            >
+              浏览器打开源站
+            </button>
+          ) : null}
+          <Link className="ServiceGhostButton" to="/">
+            {standalone ? '返回启动页' : '返回首页'}
+          </Link>
+        </div>
       </div>
 
       <div className="ServiceHint">
-        输入远端 WTB 服务地址。目录清单始终通过 HTTP 获取；媒体和大文件会优先尝试本地 IPFS gateway，失败后自动回退到 HTTP。
+        {standalone
+          ? '已检测到目标站点支持 WTB 资源清单，当前使用本地原生页面浏览内容。目录清单始终通过 HTTP 获取；媒体和大文件会优先尝试本地 IPFS gateway，失败后自动回退到 HTTP。加载资源清单时还会顺带读取远端声明的 IPFS peer 地址，并尝试接入本地 IPFS 节点。'
+          : '输入远端 WTB 服务地址。目录清单始终通过 HTTP 获取；媒体和大文件会优先尝试本地 IPFS gateway，失败后自动回退到 HTTP。加载资源清单时会顺带读取远端声明的 IPFS peer 地址，并尝试接入本地 IPFS 节点。'}
       </div>
 
       <div className="ResourceToolbar">
@@ -244,7 +307,8 @@ export default function RemoteResourcesPage() {
             {result.localIpfs.connected.length > 0 ? (
               <>
                 <br />
-                已尝试连接远端 IPFS 地址：{result.localIpfs.connected.length} 条成功
+                已尝试接入远端声明的 IPFS peer 地址：
+                {result.localIpfs.connected.length} 条成功
               </>
             ) : null}
             {result.localIpfs.failed.length > 0 ? (
@@ -272,7 +336,10 @@ export default function RemoteResourcesPage() {
               ) : null}
               <div className="ResourceList">
                 {result.entries.map((entry) => (
-                  <div key={`${entry.path}-${entry.name}`} className="ResourceRow">
+                  <div
+                    key={`${entry.path}-${entry.name}`}
+                    className="ResourceRow"
+                  >
                     <div className="ResourceMetaBlock">
                       <div className="ResourceName">
                         {entry.isDirectory ? '📁' : '📄'} {entry.name}
@@ -289,7 +356,10 @@ export default function RemoteResourcesPage() {
                       </div>
                       {!entry.isDirectory ? (
                         <div className="ServiceHint">
-                          可用源：{entry.availableSources.map(getSourceLabel).join(' / ')}
+                          可用源：
+                          {entry.availableSources
+                            .map(getSourceLabel)
+                            .join(' / ')}
                           {' · '}
                           {entry.recommendedReason}
                         </div>

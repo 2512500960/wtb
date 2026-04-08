@@ -11,6 +11,7 @@ import {
 } from 'electron';
 
 import { escapeHtml } from './web_service_utils';
+import { resolveHtmlPath } from './util';
 
 type LoggerLike = {
   warn: (...args: unknown[]) => void;
@@ -25,7 +26,18 @@ type ProxiedToolbarState = {
   isLoading: boolean;
 };
 
+type WtbServiceProbeResult = {
+  url: string;
+  serviceHeader: string;
+  featureList: string[];
+  ipfsStatus: string;
+  isWtbWebService: boolean;
+  supportsResourceManifest: boolean;
+  supportsIpfs: boolean;
+};
+
 const PROXIED_TOOLBAR_HEIGHT = 60;
+const WTB_SERVICE_PROBE_TIMEOUT_MS = 3500;
 
 const attachSelectionContextMenu = (targetWindow: BrowserWindow): void => {
   targetWindow.webContents.on('context-menu', (_event, params) => {
@@ -98,6 +110,47 @@ const makeInAppLoadingDataUrl = (targetUrl: string): string => {
   return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 };
 
+const makeWtbProbeLoadingDataUrl = (targetUrl: string): string => {
+  const safeUrl = escapeHtml(targetUrl || '');
+  const html = `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>正在探测…</title>
+    <style>
+      body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, sans-serif; background: #0c1017; color: rgba(255,255,255,0.92); }
+      .wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+      .card { width: min(760px, calc(100vw - 48px)); border-radius: 16px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); padding: 18px; }
+      .row { display: flex; gap: 14px; align-items: center; }
+      .spinner { width: 28px; height: 28px; border-radius: 999px; border: 3px solid rgba(255,255,255,0.18); border-top-color: rgba(255,255,255,0.92); animation: spin 0.9s linear infinite; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .title { font-size: 16px; font-weight: 700; margin: 0; }
+      .sub { margin-top: 10px; font-size: 12px; opacity: 0.85; word-break: break-all; line-height: 1.45; }
+      .hint { margin-top: 10px; font-size: 12px; opacity: 0.72; line-height: 1.5; }
+      .tip { margin-top: 12px; font-size: 12px; opacity: 0.62; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <div class="row">
+          <div class="spinner" aria-hidden="true"></div>
+          <div>
+            <p class="title">正在探测网页能力…</p>
+            <div class="sub">${safeUrl}</div>
+          </div>
+        </div>
+        <div class="hint">正在判断目标是否为 WTB Web 服务。如果响应头声明支持资源清单，将切换到本地原生资源页，以便使用 HTTP / IPFS 双源加载与回退。</div>
+        <div class="tip">普通网页会继续按原样打开。</div>
+      </div>
+    </div>
+  </body>
+</html>`;
+
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+};
+
 const normalizeProxiedTargetUrl = (value: string): string | null => {
   const trimmed = value.trim();
   if (!trimmed) return null;
@@ -115,6 +168,93 @@ const normalizeProxiedTargetUrl = (value: string): string | null => {
   } catch {
     return null;
   }
+};
+
+const parseWtbFeatureList = (headerValue: string): string[] => {
+  return headerValue
+    .split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+};
+
+const createProbeAbortSignal = (timeoutMs: number): AbortSignal => {
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), timeoutMs);
+  return controller.signal;
+};
+
+const probeWtbWebService = async (
+  targetUrl: string,
+): Promise<WtbServiceProbeResult> => {
+  let response: Response;
+
+  try {
+    response = await fetch(targetUrl, {
+      method: 'HEAD',
+      redirect: 'follow',
+      signal: createProbeAbortSignal(WTB_SERVICE_PROBE_TIMEOUT_MS),
+      headers: {
+        Accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
+      },
+    });
+  } catch {
+    response = await fetch(targetUrl, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: createProbeAbortSignal(WTB_SERVICE_PROBE_TIMEOUT_MS),
+      headers: {
+        Accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
+        Range: 'bytes=0-0',
+      },
+    });
+    await response.body?.cancel().catch(() => {
+      // ignore
+    });
+  }
+
+  const serviceHeader = (response.headers.get('wtb-service') || '').trim();
+  const featureList = parseWtbFeatureList(
+    response.headers.get('wtb-features') || '',
+  );
+  const ipfsStatus = (response.headers.get('wtb-ipfs-status') || '')
+    .trim()
+    .toLowerCase();
+  const isWtbWebService = /^web(?:\s*;|$)/i.test(serviceHeader);
+  const supportsResourceManifest = featureList.includes('resource-manifest');
+  const supportsIpfs = featureList.includes('ipfs') && ipfsStatus === 'running';
+
+  return {
+    url: response.url || targetUrl,
+    serviceHeader,
+    featureList,
+    ipfsStatus,
+    isWtbWebService,
+    supportsResourceManifest,
+    supportsIpfs,
+  };
+};
+
+const normalizeStandaloneResourcePath = (inputPath: string): string => {
+  const normalized = (inputPath || '/').trim() || '/';
+  if (normalized === '/') return '/';
+  if (normalized.endsWith('/')) return normalized;
+  const lastSegment = normalized.split('/').pop() || '';
+  if (lastSegment.includes('.')) {
+    const directory = normalized.split('/').slice(0, -1).join('/');
+    return directory ? `${directory}/` : '/';
+  }
+  return `${normalized}/`;
+};
+
+const buildStandaloneRemoteResourcesUrl = (opts: {
+  baseUrl: string;
+  requestedPath: string;
+}): string => {
+  const appUrl = new URL(resolveHtmlPath('index.html'));
+  appUrl.searchParams.set('wtbView', 'remote-resources');
+  appUrl.searchParams.set('baseUrl', opts.baseUrl);
+  appUrl.searchParams.set('path', opts.requestedPath);
+  return appUrl.toString();
 };
 
 const layoutProxiedBrowserView = (
@@ -389,16 +529,43 @@ export class BrowserWindowCoordinator {
     }
 
     const child = this.createInAppWindow();
-    const loadingUrl = makeInAppLoadingDataUrl(url);
+    const loadingUrl = makeWtbProbeLoadingDataUrl(url);
     try {
       await child.loadURL(loadingUrl);
     } catch {
       // ignore
     }
 
-    child.loadURL(url).catch(() => {
-      // ignore
-    });
+    let targetUrl = url;
+    try {
+      const probe = await probeWtbWebService(url);
+      targetUrl = probe.url || url;
+
+      if (probe.isWtbWebService && probe.supportsResourceManifest) {
+        const parsed = new URL(targetUrl);
+        const baseUrl = `${parsed.protocol}//${parsed.host}`;
+        const requestedPath = normalizeStandaloneResourcePath(parsed.pathname);
+
+        if (!child.isDestroyed()) {
+          child.close();
+        }
+
+        await this.openStandaloneRemoteResourcesWindow({
+          baseUrl,
+          requestedPath,
+          detectedIpfsSupport: probe.supportsIpfs,
+        });
+        return;
+      }
+    } catch (error) {
+      this.options.logger.debug?.('WTB web service probe failed', error);
+    }
+
+    if (!child.isDestroyed()) {
+      child.loadURL(targetUrl).catch(() => {
+        // ignore
+      });
+    }
   }
 
   async openProxiedWindow(
@@ -643,19 +810,7 @@ export class BrowserWindowCoordinator {
           return { action: 'deny' };
         }
 
-        const popup = this.createInAppWindow();
-        const targetUrl = parsed.toString();
-        const loadingUrl = makeInAppLoadingDataUrl(targetUrl);
-        popup
-          .loadURL(loadingUrl)
-          .catch(() => {
-            // ignore
-          })
-          .finally(() => {
-            popup.loadURL(targetUrl).catch(() => {
-              // ignore
-            });
-          });
+        void this.openInAppUrl(parsed.toString());
         return { action: 'deny' };
       } catch {
         return { action: 'deny' };
@@ -663,5 +818,44 @@ export class BrowserWindowCoordinator {
     });
 
     return child;
+  }
+
+  private async openStandaloneRemoteResourcesWindow(opts: {
+    baseUrl: string;
+    requestedPath: string;
+    detectedIpfsSupport: boolean;
+  }): Promise<void> {
+    const child = new BrowserWindow({
+      width: 1080,
+      height: 760,
+      show: false,
+      webPreferences: {
+        preload: getPreloadPath(this.options.app),
+        nodeIntegration: false,
+        contextIsolation: true,
+      },
+    });
+
+    this.options.applyChineseAcceptLanguage(child.webContents.session);
+    attachSelectionContextMenu(child);
+    child.once('ready-to-show', () => child.show());
+    child.webContents.setWindowOpenHandler((details) => {
+      shell.openExternal(details.url).catch(() => {
+        // ignore
+      });
+      return { action: 'deny' };
+    });
+
+    const label = opts.detectedIpfsSupport
+      ? 'WTB 远程内容（IPFS 可用）'
+      : 'WTB 远程内容';
+    child.setTitle(label);
+
+    await child.loadURL(
+      buildStandaloneRemoteResourcesUrl({
+        baseUrl: opts.baseUrl,
+        requestedPath: opts.requestedPath,
+      }),
+    );
   }
 }
