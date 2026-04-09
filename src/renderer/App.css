@@ -1411,107 +1411,20 @@ a:hover {
 }
 
 .WebFileManagerTheme {
-  --file-manager-primary-color: #7ee0a5;
-  border-radius: 18px;
-  overflow: hidden;
-  border: 1px solid rgba(126, 224, 165, 0.18);
-  background:
-    radial-gradient(circle at top left, rgba(126, 224, 165, 0.12), transparent 38%),
-    linear-gradient(180deg, rgba(8, 18, 16, 0.94), rgba(12, 24, 22, 0.96));
-  box-shadow: 0 22px 60px -34px rgba(0, 0, 0, 0.7);
+  background: transparent;
+  color: rgba(52, 208, 29, 0.683);
+}
+.WebFileManagerTheme .item-action {
+  background: rgba(52, 208, 29, 0.1);
+  width: fit-content;
+  border: 10px solid rgba(52, 208, 29, 0.3);
+  background-color: #c9e0c3;
+  margin-right: 5px;
+}
+.WebFileManagerTheme .toolbar .fm-toolbar .toggle-view ul li {
+  width: 80px;
 }
 
-.WebFileManagerTheme .WebSettingsFileManager,
-.WebFileManagerTheme .toolbar,
-.WebFileManagerTheme .fm-toolbar,
-.WebFileManagerTheme .files,
-.WebFileManagerTheme .files-header,
-.WebFileManagerTheme .file-item-container,
-.WebFileManagerTheme .file-item,
-.WebFileManagerTheme .empty-folder,
-.WebFileManagerTheme .fm-context-menu,
-.WebFileManagerTheme .file-context-menu-list,
-.WebFileManagerTheme .file-delete-confirm,
-.WebFileManagerTheme .fm-upload-file {
-  color: rgba(240, 248, 244, 0.96);
-}
-
-.WebFileManagerTheme .toolbar,
-.WebFileManagerTheme .files-header,
-.WebFileManagerTheme .fm-context-menu,
-.WebFileManagerTheme .file-delete-confirm,
-.WebFileManagerTheme .fm-upload-file {
-  background: rgba(11, 24, 21, 0.96) !important;
-  border-color: rgba(126, 224, 165, 0.18) !important;
-}
-
-.WebFileManagerTheme .item-action,
-.WebFileManagerTheme .file-action,
-.WebFileManagerTheme .toolbar-left-items button,
-.WebFileManagerTheme .file-context-menu-list li {
-  color: rgba(240, 248, 244, 0.96) !important;
-}
-
-.WebFileManagerTheme .item-action:hover:not(:disabled),
-.WebFileManagerTheme .file-context-menu-list li:hover,
-.WebFileManagerTheme .file-context-menu-list li.active {
-  background: rgba(126, 224, 165, 0.16) !important;
-  color: #eafff2 !important;
-}
-
-.WebFileManagerTheme .files {
-  background: transparent !important;
-}
-
-.WebFileManagerTheme .files.list .file-item,
-.WebFileManagerTheme .file-item {
-  background: rgba(15, 30, 27, 0.72) !important;
-  border-bottom: 1px solid rgba(126, 224, 165, 0.08);
-}
-
-.WebFileManagerTheme .file-item-container:hover .file-item,
-.WebFileManagerTheme .file-item-container.file-selected .file-item {
-  background: rgba(126, 224, 165, 0.14) !important;
-}
-
-.WebFileManagerTheme .file-name,
-.WebFileManagerTheme .modified-date,
-.WebFileManagerTheme .size,
-.WebFileManagerTheme .empty-folder,
-.WebFileManagerTheme .file-delete-confirm-text,
-.WebFileManagerTheme .fm-progress-status,
-.WebFileManagerTheme .fm-upload-file {
-  color: rgba(240, 248, 244, 0.94) !important;
-}
-
-.WebFileManagerTheme .selection-checkbox,
-.WebFileManagerTheme input,
-.WebFileManagerTheme .rename-file-container input {
-  accent-color: #7ee0a5;
-}
-
-.WebFileManagerTheme .file-select-all,
-.WebFileManagerTheme .file-date,
-.WebFileManagerTheme .file-size,
-.WebFileManagerTheme .file-name.active,
-.WebFileManagerTheme .file-date.active,
-.WebFileManagerTheme .file-size.active {
-  color: rgba(240, 248, 244, 0.94) !important;
-}
-
-.WebFileManagerTheme .file-delete-confirm-actions button,
-.WebFileManagerTheme .fm-upload-file button,
-.WebFileManagerTheme .btn-choose-file label {
-  border-color: rgba(126, 224, 165, 0.22) !important;
-  background: rgba(18, 38, 34, 0.92) !important;
-  color: rgba(240, 248, 244, 0.96) !important;
-}
-
-.WebFileManagerTheme .draggable-file-input {
-  background: rgba(14, 28, 25, 0.92) !important;
-  border-color: rgba(126, 224, 165, 0.22) !important;
-  color: rgba(240, 248, 244, 0.8) !important;
-}
 
 @keyframes WebStorageProgressSlide {
   0% {

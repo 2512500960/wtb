@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { FileManager } from '@cubone/react-file-manager';
+import { createPortal } from 'react-dom';
 import '@cubone/react-file-manager/dist/style.css';
 
 const ROOT_MANAGER_PATH = '';
@@ -128,6 +129,7 @@ const getProgressPercent = (
 };
 
 export default function WebSettingsSection() {
+  const fileManagerThemeRef = React.useRef<HTMLDivElement | null>(null);
   const [loadingEntries, setLoadingEntries] = React.useState(false);
   const [storageBusy, setStorageBusy] = React.useState(false);
   const [operationBusy, setOperationBusy] = React.useState(false);
@@ -145,6 +147,8 @@ export default function WebSettingsSection() {
   const [managerResetKey, setManagerResetKey] = React.useState(0);
   const [taskProgress, setTaskProgress] =
     React.useState<TaskProgressPayload | null>(null);
+  const [toolbarActionsHost, setToolbarActionsHost] =
+    React.useState<HTMLElement | null>(null);
 
   const refreshStorageSummary = React.useCallback(async () => {
     setStorageBusy(true);
@@ -256,6 +260,33 @@ export default function WebSettingsSection() {
       window.clearTimeout(timer);
     };
   }, [taskProgress]);
+
+  React.useEffect(() => {
+    const container = fileManagerThemeRef.current;
+    if (!container) {
+      setToolbarActionsHost(null);
+      return undefined;
+    }
+
+    const syncToolbarHost = () => {
+      const nextHost = container.querySelector(
+        '.toolbar .fm-toolbar > div:first-child',
+      );
+      setToolbarActionsHost(nextHost instanceof HTMLElement ? nextHost : null);
+    };
+
+    syncToolbarHost();
+
+    const observer = new MutationObserver(() => {
+      syncToolbarHost();
+    });
+
+    observer.observe(container, { childList: true, subtree: true });
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [managerResetKey]);
 
   const managerFiles = React.useMemo(
     () => entries.map(toManagerFile),
@@ -518,18 +549,20 @@ export default function WebSettingsSection() {
       setMessage(null);
       setOperationBusy(true);
       try {
-        for (const file of files) {
-          const res = (await window.electron.ipcRenderer.invoke(
-            'wtb:web:deleteEntry',
-            fromManagerPath(file.path),
-          )) as {
-            ok?: boolean;
-            error?: string;
-          };
-          if (!res?.ok) {
-            throw new Error(res?.error ?? `删除失败：${file.name}`);
-          }
-        }
+        await Promise.all(
+          files.map(async (file) => {
+            const res = (await window.electron.ipcRenderer.invoke(
+              'wtb:web:deleteEntry',
+              fromManagerPath(file.path),
+            )) as {
+              ok?: boolean;
+              error?: string;
+            };
+            if (!res?.ok) {
+              throw new Error(res?.error ?? `删除失败：${file.name}`);
+            }
+          }),
+        );
         await refreshAll();
         setMessage(`已删除 ${files.length} 个条目。`);
       } catch (e) {
@@ -600,30 +633,6 @@ export default function WebSettingsSection() {
             type="button"
             className="ServiceSecondaryButton"
             onClick={() => {
-              importFiles().catch(() => {
-                // ignore
-              });
-            }}
-            disabled={busy}
-          >
-            上传文件
-          </button>
-          <button
-            type="button"
-            className="ServiceSecondaryButton"
-            onClick={() => {
-              importDirectory().catch(() => {
-                // ignore
-              });
-            }}
-            disabled={busy}
-          >
-            上传目录
-          </button>
-          <button
-            type="button"
-            className="ServiceSecondaryButton"
-            onClick={() => {
               refreshManagedContent().catch(() => {
                 // ignore
               });
@@ -661,10 +670,13 @@ export default function WebSettingsSection() {
 
       <div style={{ padding: '10px 0' }}>
         <div style={{ marginTop: 8, opacity: 0.82, lineHeight: 1.7 }}>
-          页面现在围绕统一 IPFS 存储工作：文件管理器只负责浏览、重命名、删除、移动和复制；上传与目录导入仍然走后台 IPC，避免把 Kubo 相关重活放在 renderer 线程里阻塞界面。
+          页面现在围绕统一 IPFS
+          存储工作：上传文件和上传目录已经并入文件管理器工具栏，但实际导入仍然走后台
+          IPC，避免把 Kubo 相关重活放在 renderer 线程里阻塞界面。
         </div>
         <div style={{ marginTop: 8, opacity: 0.82, lineHeight: 1.7 }}>
-          组件自带的删除确认已经保留，所以页面外层不再重复确认。组件自带 HTTP 上传入口当前没有启用，因为我们这里不走浏览器内直传，而是统一走后台导入管道；导入和迁移任务的进度现在也沿着这条后台任务链回传到页面。
+          组件自带的删除确认已经保留，所以页面外层不再重复确认。文件管理器里看到的上传入口现在只是统一触发桌面端选择器和后台导入管道，不会退回浏览器内
+          HTTP 直传；导入和迁移任务的进度也继续沿着这条后台任务链回传到页面。
         </div>
 
         {error ? (
@@ -684,7 +696,9 @@ export default function WebSettingsSection() {
           <div className="WebStorageProgress" style={{ marginTop: 12 }}>
             <div
               className={`WebStorageProgressBar${
-                progressPercent == null ? ' WebStorageProgressBarIndeterminate' : ''
+                progressPercent == null
+                  ? ' WebStorageProgressBarIndeterminate'
+                  : ''
               }`}
             >
               {progressPercent != null ? (
@@ -701,7 +715,9 @@ export default function WebSettingsSection() {
         <div className="WebStorageGrid" style={{ marginTop: 14 }}>
           <div className="WebStorageCard">
             <div className="WebStorageLabel">站点内容</div>
-            <div className="WebStorageValue">{formatBytes(managedContentBytes)}</div>
+            <div className="WebStorageValue">
+              {formatBytes(managedContentBytes)}
+            </div>
             <div className="WebStorageMeta">
               文件 {fileCount}，目录 {directoryCount}，CID {cidCount}
             </div>
@@ -756,7 +772,7 @@ export default function WebSettingsSection() {
       <div
         style={{
           paddingTop: 8,
-          borderTop: '1px solid var(--border-color, #ddd)',
+          borderTop: '1px solid var(--border-color, #000000)',
           display: 'grid',
           gap: 12,
         }}
@@ -766,17 +782,24 @@ export default function WebSettingsSection() {
         </div>
 
         <div style={{ opacity: 0.8, lineHeight: 1.6 }}>
-          文件管理器负责目录浏览、重命名、删除、拖拽移动和复制。上传文件和上传目录仍由上方按钮触发后台 IPC 任务；FileManager 自带的 HTTP 上传按钮暂时关闭，避免和当前的后台管道重复。
+          文件管理器负责目录浏览、重命名、删除、拖拽移动和复制。上传文件和上传目录现在也已经收进工具栏，依旧触发后台
+          IPC 任务，避免和当前的桌面端导入管道分叉。
         </div>
 
-        <div className="WebFileManagerTheme" style={{ minHeight: 720 }}>
+        <div
+          ref={fileManagerThemeRef}
+          className="WebFileManagerTheme"
+          style={{ minHeight: 720 }}
+        >
           <FileManager
             key={managerResetKey}
-            className="WebSettingsFileManager"
+            // className="WebSettingsFileManager"
             files={managerFiles}
             initialPath={currentManagerPath}
             onFolderChange={setCurrentManagerPath}
-            onSelectionChange={(files: ManagerFileItem[]) => setSelectedFiles(files)}
+            onSelectionChange={(files: ManagerFileItem[]) =>
+              setSelectedFiles(files)
+            }
             onCreateFolder={handleCreateFolder}
             onRename={handleRename}
             onDelete={handleDelete}
@@ -792,20 +815,19 @@ export default function WebSettingsSection() {
               }
             }}
             isLoading={busy}
-            layout="list"
+            // layout="list"
             enableFilePreview={false}
             height="720px"
             width="100%"
             language="zh-CN"
-            fontFamily="Segoe UI, Microsoft YaHei, sans-serif"
-            primaryColor="#7ee0a5"
+            primaryColor="var(--primary-color, #000000)"
             permissions={{
               create: true,
-              upload: false,
+              upload: true,
               move: true,
               copy: true,
               rename: true,
-              download: false,
+              download: true,
               delete: true,
             }}
             onError={(nextError: { message?: string }) => {
@@ -820,6 +842,37 @@ export default function WebSettingsSection() {
                 : date.toLocaleString('zh-CN', { hour12: false });
             }}
           />
+          {toolbarActionsHost
+            ? createPortal(
+                <>
+                  <button
+                    type="button"
+                    className="item-action WebFileManagerToolbarAction"
+                    onClick={() => {
+                      importFiles().catch(() => {
+                        // ignore
+                      });
+                    }}
+                    disabled={busy}
+                  >
+                    <span>上传文件</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="item-action WebFileManagerToolbarAction"
+                    onClick={() => {
+                      importDirectory().catch(() => {
+                        // ignore
+                      });
+                    }}
+                    disabled={busy}
+                  >
+                    <span>上传目录</span>
+                  </button>
+                </>,
+                toolbarActionsHost,
+              )
+            : null}
         </div>
       </div>
     </div>
