@@ -1,33 +1,25 @@
 import * as React from 'react';
+import { FileManager } from '@cubone/react-file-manager';
+import '@cubone/react-file-manager/dist/style.css';
 
-const prettyPath = (value: string | null | undefined) =>
-  value || '（未设置，使用数据目录下的默认路径）';
+const ROOT_MANAGER_PATH = '';
 
-type LocalWebEntry = {
+type ManagedWebEntry = {
   name: string;
   path: string;
   isDirectory: boolean;
   size: number;
   mtimeMs: number;
   cid?: string;
-  sourceMode?: 'local' | 'dual' | 'ipfs-backed';
-  localPresent?: boolean;
-  virtual?: boolean;
 };
 
-type FileFilterMode = 'all' | 'converted' | 'ipfs-backed' | 'local-only';
-type SettingsViewMode = 'manager' | 'simple';
-
-type SyncContentResult = {
-  thresholdBytes: number;
-  scannedFiles: number;
-  syncedFiles: number;
-  unchangedManagedFiles: number;
-  skippedSmallFiles: number;
-  staleManifestEntries: number;
-  syncedPaths: string[];
-  stalePaths: string[];
-  failures: Array<{ path: string; error: string }>;
+type ManagerFileItem = {
+  name: string;
+  isDirectory: boolean;
+  path: string;
+  updatedAt?: string;
+  size?: number;
+  cid?: string;
 };
 
 type ManagedImportResult = {
@@ -37,8 +29,56 @@ type ManagedImportResult = {
   paths: string[];
 };
 
-const formatBytes = (bytes: number): string => {
-  if (!Number.isFinite(bytes) || bytes < 0) return '-';
+type IpfsStorageSummary = {
+  running: boolean;
+  repoDir: string;
+  repoSizeBytes: number;
+  storageMaxBytes: number | null;
+  numObjects: number | null;
+  diskAvailableBytes: number | null;
+  diskTotalBytes: number | null;
+  diskUsedBytes: number | null;
+};
+
+type RepoMigrationResult = {
+  fromDir: string;
+  toDir: string;
+  restarted: boolean;
+};
+
+type TaskProgressPayload = {
+  operation:
+    | 'import-files'
+    | 'import-directory'
+    | 'migrate-web-content'
+    | 'migrate-repo';
+  stage: 'running' | 'completed' | 'failed';
+  current: number;
+  total: number;
+  message: string;
+};
+
+const toManagerPath = (webPath: string): string => {
+  return webPath === '/' ? ROOT_MANAGER_PATH : webPath;
+};
+
+const fromManagerPath = (managerPath: string | null | undefined): string => {
+  const value = (managerPath || '').trim();
+  if (!value) return '/';
+  return value.startsWith('/') ? value : `/${value}`;
+};
+
+const toManagerFile = (entry: ManagedWebEntry): ManagerFileItem => ({
+  name: entry.name,
+  isDirectory: entry.isDirectory,
+  path: toManagerPath(entry.path),
+  updatedAt: entry.mtimeMs ? new Date(entry.mtimeMs).toISOString() : undefined,
+  size: entry.isDirectory ? undefined : entry.size,
+  cid: entry.cid,
+});
+
+const formatBytes = (bytes: number | null | undefined): string => {
+  if (!Number.isFinite(bytes) || bytes == null || bytes < 0) return '—';
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
   if (bytes < 1024 * 1024 * 1024) {
@@ -47,174 +87,327 @@ const formatBytes = (bytes: number): string => {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
 };
 
-const getParentPath = (value: string): string => {
-  const normalized = (value || '/').replace(/\/+$/, '') || '/';
-  if (normalized === '/') return '/';
-
-  const segments = normalized.split('/').filter(Boolean);
-  if (segments.length <= 1) return '/';
-  return `/${segments.slice(0, -1).join('/')}`;
-};
-
-const getSourceModeLabel = (mode?: LocalWebEntry['sourceMode']): string => {
-  switch (mode) {
-    case 'dual':
-      return '双源';
-    case 'ipfs-backed':
-      return 'IPFS 托管';
-    default:
-      return '本地';
-  }
-};
-
-const getStorageHint = (entry: LocalWebEntry): string => {
-  if (entry.isDirectory) {
-    return entry.virtual
-      ? '该目录仅来自内容清单，本地磁盘上没有对应目录。'
-      : '普通目录。';
+const formatPercent = (
+  numerator: number | null | undefined,
+  denominator: number | null | undefined,
+): string => {
+  if (
+    !Number.isFinite(numerator) ||
+    numerator == null ||
+    !Number.isFinite(denominator) ||
+    denominator == null ||
+    denominator <= 0
+  ) {
+    return '—';
   }
 
-  if (entry.sourceMode === 'ipfs-backed') {
-    return entry.localPresent === false
-      ? '已写入资源清单，本地文件已删除；HTTP 访问会经由服务端 IPFS gateway 反代。'
-      : '已写入资源清单；HTTP 访问会经由服务端 IPFS gateway 反代。';
-  }
-
-  if (entry.sourceMode === 'dual') {
-    return '已写入资源清单，并保留本地文件；HTTP 和 IPFS 两个来源都可用。';
-  }
-
-  return '当前仍只是普通本地文件，尚未写入 IPFS 资源清单。';
+  return `${((numerator / denominator) * 100).toFixed(1)}%`;
 };
 
-const shortenCid = (cid: string): string => {
-  if (cid.length <= 18) return cid;
-  return `${cid.slice(0, 10)}...${cid.slice(-6)}`;
+const getProgressLabel = (state: {
+  storageBusy: boolean;
+  loadingEntries: boolean;
+  operationBusy: boolean;
+  taskProgress: TaskProgressPayload | null;
+}): string => {
+  if (state.taskProgress?.message) return state.taskProgress.message;
+  if (state.operationBusy) return '正在处理站点内容…';
+  if (state.storageBusy) return '正在读取 IPFS 存储信息…';
+  if (state.loadingEntries) return '正在刷新文件列表…';
+  return '';
 };
 
-function badgeStyle(background: string, color = '#fff') {
-  return {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 4,
-    height: 22,
-    padding: '0 8px',
-    borderRadius: 999,
-    background,
-    color,
-    fontSize: 12,
-    fontWeight: 600,
-    whiteSpace: 'nowrap' as const,
-  };
-}
-
-function getModeBadgeStyle(mode?: LocalWebEntry['sourceMode']) {
-  if (mode === 'ipfs-backed') return badgeStyle('#1d6b57');
-  if (mode === 'dual') return badgeStyle('#355f97');
-  return badgeStyle('#6b7280');
-}
-
-function getDirectoryToggleLabel(opts: {
-  directoryLoading: boolean;
-  directoryExpanded: boolean;
-}): string {
-  if (opts.directoryLoading) return '加载中...';
-  return opts.directoryExpanded ? '收起' : '展开';
-}
+const getProgressPercent = (
+  taskProgress: TaskProgressPayload | null,
+): number | null => {
+  if (!taskProgress) return null;
+  if (taskProgress.stage === 'completed') return 100;
+  if (taskProgress.total <= 0) return null;
+  const ratio = (taskProgress.current / taskProgress.total) * 100;
+  return Math.max(0, Math.min(100, ratio));
+};
 
 export default function WebSettingsSection() {
-  const [current, setCurrent] = React.useState<string | null>(null);
-  const [busy, setBusy] = React.useState(false);
+  const [loadingEntries, setLoadingEntries] = React.useState(false);
+  const [storageBusy, setStorageBusy] = React.useState(false);
+  const [operationBusy, setOperationBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const [viewMode, setViewMode] = React.useState<SettingsViewMode>('manager');
-  const [focusedPath, setFocusedPath] = React.useState('/');
-  const [treeEntries, setTreeEntries] = React.useState<
-    Record<string, LocalWebEntry[]>
-  >({});
-  const [loadingPaths, setLoadingPaths] = React.useState<
-    Record<string, boolean>
-  >({});
-  const [expandedPaths, setExpandedPaths] = React.useState<
-    Record<string, boolean>
-  >({ '/': true });
-  const [entryBusyPath, setEntryBusyPath] = React.useState<string | null>(null);
-  const [entryMessage, setEntryMessage] = React.useState<string | null>(null);
+  const [message, setMessage] = React.useState<string | null>(null);
   const [copyHint, setCopyHint] = React.useState<string | null>(null);
-  const [filterMode, setFilterMode] = React.useState<FileFilterMode>('all');
-  const [syncBusy, setSyncBusy] = React.useState(false);
-  const [managerBusy, setManagerBusy] = React.useState(false);
+  const [entries, setEntries] = React.useState<ManagedWebEntry[]>([]);
+  const [storageSummary, setStorageSummary] =
+    React.useState<IpfsStorageSummary | null>(null);
+  const [currentManagerPath, setCurrentManagerPath] =
+    React.useState(ROOT_MANAGER_PATH);
+  const [selectedFiles, setSelectedFiles] = React.useState<ManagerFileItem[]>(
+    [],
+  );
+  const [managerResetKey, setManagerResetKey] = React.useState(0);
+  const [taskProgress, setTaskProgress] =
+    React.useState<TaskProgressPayload | null>(null);
 
-  const refresh = React.useCallback(async () => {
-    setError(null);
+  const refreshStorageSummary = React.useCallback(async () => {
+    setStorageBusy(true);
     try {
       const res = (await window.electron.ipcRenderer.invoke(
-        'wtb:web:getDir',
-      )) as {
-        ok?: boolean;
-        path?: string | null;
-        error?: string;
-      };
-      if (res?.ok) setCurrent(res.path ?? null);
-      else setError(res?.error ?? '未知错误');
+        'ipfs:storageSummary',
+      )) as IpfsStorageSummary;
+      setStorageSummary(res);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setStorageBusy(false);
     }
   }, []);
 
-  const loadDirectory = React.useCallback(
-    async (requestedPath?: string, options?: { focus?: boolean }) => {
-      const nextPath = requestedPath || '/';
-      setLoadingPaths((currentLoading) => ({
-        ...currentLoading,
-        [nextPath]: true,
-      }));
-      setEntryMessage(null);
-
+  const refreshEntries = React.useCallback(
+    async (options?: { migrate?: boolean; resetPath?: boolean }) => {
+      setLoadingEntries(true);
       try {
+        if (options?.migrate) {
+          const migrateRes = (await window.electron.ipcRenderer.invoke(
+            'wtb:web:migrateToManagedIpfs',
+          )) as {
+            ok?: boolean;
+            error?: string;
+            result?: { migratedFiles: number; migratedDirectories: number };
+          };
+          if (!migrateRes?.ok) {
+            setError(migrateRes?.error ?? '同步现有内容到 IPFS 失败');
+          } else if (migrateRes.result) {
+            const { migratedFiles, migratedDirectories } = migrateRes.result;
+            if (migratedFiles > 0 || migratedDirectories > 0) {
+              setMessage(
+                `已同步 ${migratedFiles} 个文件、${migratedDirectories} 个目录到统一 IPFS 内容存储。`,
+              );
+            }
+          }
+        }
+
         const res = (await window.electron.ipcRenderer.invoke(
-          'wtb:web:listEntries',
-          nextPath,
+          'wtb:web:listAllEntries',
         )) as {
           ok?: boolean;
           error?: string;
-          path?: string;
-          entries?: LocalWebEntry[];
+          entries?: ManagedWebEntry[];
         };
         if (!res?.ok) {
-          setError(res?.error ?? '读取 Web 内容失败');
+          setError(res?.error ?? '读取站点内容失败');
           return;
         }
 
-        const resolvedPath = res.path || nextPath;
-        setTreeEntries((currentEntries) => ({
-          ...currentEntries,
-          [resolvedPath]: res.entries || [],
-        }));
-        if (options?.focus !== false) {
-          setFocusedPath(resolvedPath);
+        setEntries(res.entries || []);
+        if (options?.resetPath) {
+          setCurrentManagerPath(ROOT_MANAGER_PATH);
+          setManagerResetKey((value) => value + 1);
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
-        setLoadingPaths((currentLoading) => ({
-          ...currentLoading,
-          [nextPath]: false,
-        }));
+        setLoadingEntries(false);
       }
     },
     [],
   );
 
-  React.useEffect(() => {
-    refresh().catch(() => {});
-  }, [refresh]);
+  const refreshAll = React.useCallback(
+    async (options?: { migrate?: boolean; resetPath?: boolean }) => {
+      setError(null);
+      await refreshEntries(options);
+      await refreshStorageSummary();
+    },
+    [refreshEntries, refreshStorageSummary],
+  );
 
   React.useEffect(() => {
-    loadDirectory('/', { focus: true }).catch(() => {});
-  }, [loadDirectory]);
+    refreshAll({ migrate: true, resetPath: true }).catch(() => {
+      // ignore
+    });
+  }, [refreshAll]);
 
-  const choose = async () => {
+  React.useEffect(() => {
+    const unsubscribe = window.electron.ipcRenderer.on(
+      'wtb:web:taskProgress',
+      (payload) => {
+        setTaskProgress(payload as TaskProgressPayload);
+      },
+    );
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (!taskProgress || taskProgress.stage === 'running') {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => {
+      setTaskProgress((current) => {
+        if (!current || current.stage === 'running') {
+          return current;
+        }
+        return null;
+      });
+    }, 2400);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [taskProgress]);
+
+  const managerFiles = React.useMemo(
+    () => entries.map(toManagerFile),
+    [entries],
+  );
+
+  const selectedEntryPaths = React.useMemo(
+    () => selectedFiles.map((file) => fromManagerPath(file.path)),
+    [selectedFiles],
+  );
+
+  const selectedEntries = React.useMemo(
+    () => entries.filter((entry) => selectedEntryPaths.includes(entry.path)),
+    [entries, selectedEntryPaths],
+  );
+
+  const fileCount = React.useMemo(
+    () => entries.filter((entry) => !entry.isDirectory).length,
+    [entries],
+  );
+
+  const directoryCount = React.useMemo(
+    () => entries.filter((entry) => entry.isDirectory).length,
+    [entries],
+  );
+
+  const cidCount = React.useMemo(
+    () => entries.filter((entry) => !entry.isDirectory && !!entry.cid).length,
+    [entries],
+  );
+
+  const managedContentBytes = React.useMemo(
+    () =>
+      entries.reduce((totalBytes, entry) => {
+        return entry.isDirectory ? totalBytes : totalBytes + (entry.size || 0);
+      }, 0),
+    [entries],
+  );
+
+  const selectedCidCount = React.useMemo(
+    () => selectedEntries.filter((entry) => !!entry.cid).length,
+    [selectedEntries],
+  );
+
+  const currentWebPath = React.useMemo(
+    () => fromManagerPath(currentManagerPath),
+    [currentManagerPath],
+  );
+
+  const quotaPercent = React.useMemo(
+    () =>
+      formatPercent(
+        storageSummary?.repoSizeBytes,
+        storageSummary?.storageMaxBytes,
+      ),
+    [storageSummary],
+  );
+
+  const diskPercent = React.useMemo(
+    () =>
+      formatPercent(
+        storageSummary?.diskUsedBytes,
+        storageSummary?.diskTotalBytes,
+      ),
+    [storageSummary],
+  );
+
+  const importFiles = React.useCallback(async () => {
     setError(null);
+    setMessage(null);
+    setOperationBusy(true);
+    try {
+      const res = (await window.electron.ipcRenderer.invoke(
+        'wtb:web:pickAndImportFiles',
+        currentWebPath,
+      )) as {
+        ok?: boolean;
+        canceled?: boolean;
+        error?: string;
+        result?: ManagedImportResult;
+      };
+      if (res?.canceled) return;
+      if (!res?.ok || !res.result) {
+        setError(res?.error ?? '导入文件失败');
+        return;
+      }
+      await refreshAll();
+      setMessage(
+        `已导入 ${res.result.importedFiles} 个文件${
+          res.result.overwrittenPaths.length
+            ? `，覆盖 ${res.result.overwrittenPaths.length} 个同名路径`
+            : ''
+        }。`,
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setOperationBusy(false);
+    }
+  }, [currentWebPath, refreshAll]);
+
+  const importDirectory = React.useCallback(async () => {
+    setError(null);
+    setMessage(null);
+    setOperationBusy(true);
+    try {
+      const res = (await window.electron.ipcRenderer.invoke(
+        'wtb:web:pickAndImportDirectory',
+        currentWebPath,
+      )) as {
+        ok?: boolean;
+        canceled?: boolean;
+        error?: string;
+        result?: ManagedImportResult;
+      };
+      if (res?.canceled) return;
+      if (!res?.ok || !res.result) {
+        setError(res?.error ?? '导入目录失败');
+        return;
+      }
+      await refreshAll();
+      setMessage(
+        `已导入目录，新增 ${res.result.importedDirectories} 个目录、${res.result.importedFiles} 个文件。`,
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setOperationBusy(false);
+    }
+  }, [currentWebPath, refreshAll]);
+
+  const refreshManagedContent = React.useCallback(async () => {
+    await refreshAll({ migrate: true });
+  }, [refreshAll]);
+
+  const copyCid = React.useCallback(async () => {
+    const cid = selectedEntries.find((entry) => !!entry.cid)?.cid;
+    if (!cid) return;
+
+    try {
+      await navigator.clipboard.writeText(cid);
+      setCopyHint('CID 已复制');
+    } catch {
+      setCopyHint('复制失败');
+    }
+    window.setTimeout(() => setCopyHint(null), 1200);
+  }, [selectedEntries]);
+
+  const migrateRepoDirectory = React.useCallback(async () => {
+    setError(null);
+    setMessage(null);
+    setOperationBusy(true);
     try {
       const pick = (await window.electron.ipcRenderer.invoke(
         'dialog:selectDirectory',
@@ -223,284 +416,57 @@ export default function WebSettingsSection() {
         canceled?: boolean;
         path?: string;
       };
-      if (!pick?.ok) return;
-      setBusy(true);
-      const setRes = (await window.electron.ipcRenderer.invoke(
-        'wtb:web:setDir',
-        pick.path,
-      )) as {
-        ok?: boolean;
-        path?: string | null;
-        error?: string;
-      };
-      if (setRes?.ok) {
-        setCurrent(setRes.path ?? null);
-        await loadDirectory('/', { focus: true });
-      } else {
-        setError(setRes?.error ?? '保存失败');
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const clearOverride = async () => {
-    setError(null);
-    setBusy(true);
-    try {
-      const setRes = (await window.electron.ipcRenderer.invoke(
-        'wtb:web:setDir',
-        null,
-      )) as {
-        ok?: boolean;
-        path?: string | null;
-        error?: string;
-      };
-      if (setRes?.ok) {
-        setCurrent(setRes.path ?? null);
-        await loadDirectory('/', { focus: true });
-      } else {
-        setError(setRes?.error ?? '保存失败');
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const openDir = async () => {
-    try {
-      await window.electron.ipcRenderer.invoke('services:openDir', 'web');
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  };
-
-  const syncSimpleModeContent = React.useCallback(async () => {
-    setError(null);
-    setEntryMessage(null);
-    setSyncBusy(true);
-
-    try {
-      const res = (await window.electron.ipcRenderer.invoke(
-        'wtb:web:syncContentWithIpfs',
-      )) as {
-        ok?: boolean;
-        error?: string;
-        result?: SyncContentResult;
-      };
-
-      if (!res?.ok || !res.result) {
-        setError(res?.error ?? '同步站点内容失败');
+      if (!pick?.ok || pick.canceled || !pick.path) {
         return;
       }
 
-      await loadDirectory('/', { focus: true });
-
-      const summary = [
-        `已扫描 ${res.result.scannedFiles} 个文件`,
-        `新同步 ${res.result.syncedFiles} 个大文件`,
-        `已跟踪且未变化 ${res.result.unchangedManagedFiles} 个`,
-      ];
-
-      if (res.result.staleManifestEntries > 0) {
-        summary.push(
-          `检测到 ${res.result.staleManifestEntries} 个已删除或移走的已跟踪文件`,
-        );
-      }
-      if (res.result.failures.length > 0) {
-        summary.push(`有 ${res.result.failures.length} 个文件同步失败`);
+      const res = (await window.electron.ipcRenderer.invoke(
+        'ipfs:migrateRepoDir',
+        pick.path,
+      )) as {
+        ok?: boolean;
+        error?: string;
+        result?: RepoMigrationResult;
+      };
+      if (!res?.ok || !res.result) {
+        setError(res?.error ?? '迁移 IPFS 数据目录失败');
+        return;
       }
 
-      setEntryMessage(`${summary.join('；')}。`);
+      await refreshStorageSummary();
+      setMessage(
+        `已将 IPFS 数据目录迁移到 ${res.result.toDir}${
+          res.result.restarted ? '，并自动恢复 IPFS 服务。' : '。'
+        }`,
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setSyncBusy(false);
+      setOperationBusy(false);
     }
-  }, [loadDirectory]);
+  }, [refreshStorageSummary]);
 
-  const copyCid = React.useCallback(async (cid: string) => {
-    try {
-      await navigator.clipboard.writeText(cid);
-      setCopyHint('CID 已复制');
-    } catch {
-      setCopyHint('复制失败');
-    }
-    window.setTimeout(() => setCopyHint(null), 1200);
-  }, []);
-
-  const convertEntry = React.useCallback(
-    async (entry: LocalWebEntry, removeLocalFile: boolean) => {
+  const handleCreateFolder = React.useCallback(
+    async (name: string, parentFolder?: { path?: string }) => {
       setError(null);
-      setEntryMessage(null);
-      setEntryBusyPath(entry.path);
-      try {
-        const res = (await window.electron.ipcRenderer.invoke(
-          'wtb:web:convertFileToIpfsSource',
-          entry.path,
-          { removeLocalFile },
-        )) as {
-          ok?: boolean;
-          error?: string;
-          result?: {
-            cid?: string;
-            sourceMode?: string;
-            removedLocalFile?: boolean;
-          };
-        };
-        if (!res?.ok) {
-          setError(res?.error ?? '转换失败');
-          return;
-        }
-
-        const sourceMode =
-          res.result?.sourceMode || (removeLocalFile ? 'ipfs-backed' : 'dual');
-        const removedText = res.result?.removedLocalFile
-          ? '已删除本地文件。'
-          : '已保留本地文件。';
-        const cidText = res.result?.cid ? ` CID：${res.result.cid}` : '';
-        setEntryMessage(
-          `已将 ${entry.name} 转为 ${getSourceModeLabel(
-            sourceMode as LocalWebEntry['sourceMode'],
-          )}。${removedText}${cidText}`,
-        );
-
-        const parentPath = getParentPath(entry.path);
-        await loadDirectory(parentPath, {
-          focus: focusedPath === parentPath || focusedPath === entry.path,
-        });
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      } finally {
-        setEntryBusyPath(null);
-      }
-    },
-    [focusedPath, loadDirectory],
-  );
-
-  const refreshExpandedDirectories = React.useCallback(async () => {
-    const paths = Array.from(
-      new Set<string>([
-        '/',
-        ...Object.keys(expandedPaths).filter((path) => expandedPaths[path]),
-      ]),
-    );
-
-    await Promise.all(
-      paths.map(async (path) => {
-        await loadDirectory(path, { focus: path === focusedPath });
-      }),
-    );
-  }, [expandedPaths, focusedPath, loadDirectory]);
-
-  const toggleDirectory = React.useCallback(
-    async (entry: LocalWebEntry) => {
-      if (!entry.isDirectory) return;
-
-      const expanded = !!expandedPaths[entry.path];
-      setExpandedPaths((currentExpanded) => ({
-        ...currentExpanded,
-        [entry.path]: !expanded,
-      }));
-      setFocusedPath(entry.path);
-
-      if (!expanded) {
-        await loadDirectory(entry.path, { focus: false });
-      }
-    },
-    [expandedPaths, loadDirectory],
-  );
-
-  const rootEntries = treeEntries['/'] || [];
-
-  const loadedEntries = React.useMemo(() => {
-    const allEntries = Object.values(treeEntries).flat();
-    const uniqueEntries = new Map<string, LocalWebEntry>();
-    allEntries.forEach((entry) => {
-      uniqueEntries.set(entry.path, entry);
-    });
-    return [...uniqueEntries.values()];
-  }, [treeEntries]);
-
-  const loadedStats = React.useMemo(() => {
-    const files = loadedEntries.filter((entry) => !entry.isDirectory);
-    return {
-      directories: loadedEntries.filter((entry) => entry.isDirectory).length,
-      files: files.length,
-      converted: files.filter(
-        (entry) => entry.sourceMode && entry.sourceMode !== 'local',
-      ).length,
-      ipfsBacked: files.filter((entry) => entry.sourceMode === 'ipfs-backed')
-        .length,
-      dual: files.filter((entry) => entry.sourceMode === 'dual').length,
-      localOnly: files.filter(
-        (entry) => !entry.sourceMode || entry.sourceMode === 'local',
-      ).length,
-      withCid: files.filter((entry) => !!entry.cid).length,
-      localRemoved: files.filter((entry) => entry.localPresent === false)
-        .length,
-    };
-  }, [loadedEntries]);
-
-  const focusedEntry = React.useMemo(() => {
-    return loadedEntries.find((entry) => entry.path === focusedPath) || null;
-  }, [focusedPath, loadedEntries]);
-
-  const focusedDirectoryPath = React.useMemo(() => {
-    if (!focusedEntry) return focusedPath === '/' ? '/' : getParentPath(focusedPath);
-    return focusedEntry.isDirectory ? focusedEntry.path : getParentPath(focusedEntry.path);
-  }, [focusedEntry, focusedPath]);
-
-  const refreshManagedDirectory = React.useCallback(
-    async (nextFocusedDirectoryPath: string) => {
-      const paths = Array.from(
-        new Set<string>([
-          '/',
-          nextFocusedDirectoryPath || '/',
-          ...Object.keys(expandedPaths).filter((path) => expandedPaths[path]),
-        ]),
-      );
-
-      await Promise.all(
-        paths.map(async (path) => {
-          await loadDirectory(path, { focus: false });
-        }),
-      );
-      setFocusedPath(nextFocusedDirectoryPath || '/');
-    },
-    [expandedPaths, loadDirectory],
-  );
-
-  const createDirectoryInManager = React.useCallback(
-    async (targetDirectoryPath: string) => {
-      const directoryName = window.prompt('请输入新目录名称');
-      if (!directoryName) return;
-
-      setError(null);
-      setEntryMessage(null);
-      setManagerBusy(true);
+      setMessage(null);
+      setOperationBusy(true);
       try {
         const res = (await window.electron.ipcRenderer.invoke(
           'wtb:web:createDirectory',
-          targetDirectoryPath,
-          directoryName,
+          fromManagerPath(parentFolder?.path || currentManagerPath),
+          name,
         )) as {
           ok?: boolean;
           error?: string;
           result?: { path: string; created: boolean };
         };
-
         if (!res?.ok || !res.result) {
           setError(res?.error ?? '新建目录失败');
           return;
         }
-
-        await refreshManagedDirectory(targetDirectoryPath);
-        setEntryMessage(
+        await refreshAll();
+        setMessage(
           res.result.created
             ? `已创建目录 ${res.result.path}`
             : `目录已存在：${res.result.path}`,
@@ -508,787 +474,352 @@ export default function WebSettingsSection() {
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
-        setManagerBusy(false);
+        setOperationBusy(false);
       }
     },
-    [refreshManagedDirectory],
+    [currentManagerPath, refreshAll],
   );
 
-  const importFilesIntoManager = React.useCallback(
-    async (targetDirectoryPath: string) => {
+  const handleRename = React.useCallback(
+    async (file: { path: string }, newName: string) => {
       setError(null);
-      setEntryMessage(null);
-      setManagerBusy(true);
+      setMessage(null);
+      setOperationBusy(true);
       try {
         const res = (await window.electron.ipcRenderer.invoke(
-          'wtb:web:pickAndImportFiles',
-          targetDirectoryPath,
+          'wtb:web:renameEntry',
+          fromManagerPath(file.path),
+          newName,
         )) as {
           ok?: boolean;
-          canceled?: boolean;
           error?: string;
-          result?: ManagedImportResult;
+          result?: { toPath: string };
         };
-
-        if (res?.canceled) return;
         if (!res?.ok || !res.result) {
-          setError(res?.error ?? '导入文件失败');
+          setError(res?.error ?? '重命名失败');
           return;
         }
+        await refreshAll();
+        setMessage(`已重命名为 ${res.result.toPath}`);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setOperationBusy(false);
+      }
+    },
+    [refreshAll],
+  );
 
-        await refreshManagedDirectory(targetDirectoryPath);
-        setEntryMessage(
-          `已导入 ${res.result.importedFiles} 个文件到 ${targetDirectoryPath}${
-            res.result.overwrittenPaths.length
-              ? `，覆盖 ${res.result.overwrittenPaths.length} 个同名路径`
-              : ''
-          }。`,
+  const handleDelete = React.useCallback(
+    async (files: Array<{ path: string; name: string }>) => {
+      if (!files.length) return;
+
+      setError(null);
+      setMessage(null);
+      setOperationBusy(true);
+      try {
+        for (const file of files) {
+          const res = (await window.electron.ipcRenderer.invoke(
+            'wtb:web:deleteEntry',
+            fromManagerPath(file.path),
+          )) as {
+            ok?: boolean;
+            error?: string;
+          };
+          if (!res?.ok) {
+            throw new Error(res?.error ?? `删除失败：${file.name}`);
+          }
+        }
+        await refreshAll();
+        setMessage(`已删除 ${files.length} 个条目。`);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setOperationBusy(false);
+      }
+    },
+    [refreshAll],
+  );
+
+  const handlePaste = React.useCallback(
+    async (
+      files: Array<{ path: string }>,
+      destinationFolder: { path?: string },
+      operationType: 'copy' | 'move',
+    ) => {
+      if (!files.length) return;
+
+      setError(null);
+      setMessage(null);
+      setOperationBusy(true);
+      try {
+        const res = (await window.electron.ipcRenderer.invoke(
+          'wtb:web:pasteEntries',
+          files.map((file) => fromManagerPath(file.path)),
+          fromManagerPath(destinationFolder?.path || currentManagerPath),
+          operationType,
+        )) as {
+          ok?: boolean;
+          error?: string;
+          result?: { operationType: 'copy' | 'move' };
+        };
+        if (!res?.ok || !res.result) {
+          setError(res?.error ?? '粘贴失败');
+          return;
+        }
+        await refreshAll();
+        setMessage(
+          `${res.result.operationType === 'move' ? '已移动' : '已复制'} ${
+            files.length
+          } 个条目。`,
         );
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
-        setManagerBusy(false);
+        setOperationBusy(false);
       }
     },
-    [refreshManagedDirectory],
+    [currentManagerPath, refreshAll],
   );
 
-  const importDirectoryIntoManager = React.useCallback(
-    async (targetDirectoryPath: string) => {
-      setError(null);
-      setEntryMessage(null);
-      setManagerBusy(true);
-      try {
-        const res = (await window.electron.ipcRenderer.invoke(
-          'wtb:web:pickAndImportDirectory',
-          targetDirectoryPath,
-        )) as {
-          ok?: boolean;
-          canceled?: boolean;
-          error?: string;
-          result?: ManagedImportResult;
-        };
-
-        if (res?.canceled) return;
-        if (!res?.ok || !res.result) {
-          setError(res?.error ?? '导入目录失败');
-          return;
-        }
-
-        await refreshManagedDirectory(targetDirectoryPath);
-        setEntryMessage(
-          `已导入目录，新增 ${res.result.importedDirectories} 个目录、${res.result.importedFiles} 个文件。`,
-        );
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      } finally {
-        setManagerBusy(false);
-      }
-    },
-    [refreshManagedDirectory],
-  );
-
-  const replaceManagedFileEntry = React.useCallback(
-    async (entry: LocalWebEntry) => {
-      setError(null);
-      setEntryMessage(null);
-      setManagerBusy(true);
-      try {
-        const res = (await window.electron.ipcRenderer.invoke(
-          'wtb:web:replaceFile',
-          entry.path,
-        )) as {
-          ok?: boolean;
-          canceled?: boolean;
-          error?: string;
-          result?: ManagedImportResult;
-        };
-
-        if (res?.canceled) return;
-        if (!res?.ok || !res.result) {
-          setError(res?.error ?? '替换文件失败');
-          return;
-        }
-
-        await refreshManagedDirectory(getParentPath(entry.path));
-        setEntryMessage(`已替换 ${entry.path}。`);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      } finally {
-        setManagerBusy(false);
-      }
-    },
-    [refreshManagedDirectory],
-  );
-
-  const deleteManagedEntry = React.useCallback(
-    async (entry: LocalWebEntry) => {
-      const confirmed = window.confirm(
-        `确定要删除 ${entry.isDirectory ? '目录' : '文件'} ${entry.path} 吗？`,
-      );
-      if (!confirmed) return;
-
-      setError(null);
-      setEntryMessage(null);
-      setManagerBusy(true);
-      try {
-        const res = (await window.electron.ipcRenderer.invoke(
-          'wtb:web:deleteEntry',
-          entry.path,
-        )) as {
-          ok?: boolean;
-          error?: string;
-          result?: { removedPaths: string[] };
-        };
-
-        if (!res?.ok || !res.result) {
-          setError(res?.error ?? '删除失败');
-          return;
-        }
-
-        const nextDirectory = entry.isDirectory
-          ? getParentPath(entry.path)
-          : getParentPath(entry.path);
-        await refreshManagedDirectory(nextDirectory);
-        setEntryMessage(`已删除 ${res.result.removedPaths.length} 个条目。`);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      } finally {
-        setManagerBusy(false);
-      }
-    },
-    [refreshManagedDirectory],
-  );
-
-  const shouldDisplayEntry = React.useCallback(
-    (entry: LocalWebEntry): boolean => {
-      if (entry.isDirectory) return true;
-
-      switch (filterMode) {
-        case 'converted':
-          return !!entry.sourceMode && entry.sourceMode !== 'local';
-        case 'ipfs-backed':
-          return entry.sourceMode === 'ipfs-backed';
-        case 'local-only':
-          return !entry.sourceMode || entry.sourceMode === 'local';
-        default:
-          return true;
-      }
-    },
-    [filterMode],
-  );
-
-  const renderEntryRow = React.useCallback(
-    (entry: LocalWebEntry, depth: number): React.ReactNode => {
-      const rowBusy = entryBusyPath === entry.path;
-      const directoryExpanded =
-        entry.isDirectory && !!expandedPaths[entry.path];
-      const directoryLoading = !!loadingPaths[entry.path];
-      const isFocused = focusedPath === entry.path;
-
-      return (
-        <React.Fragment key={entry.path}>
-          <div
-            onClick={() => setFocusedPath(entry.path)}
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'minmax(0, 1fr) auto',
-              gap: 12,
-              alignItems: 'center',
-              padding: '10px 12px',
-              border: '1px solid var(--border-color, #ddd)',
-              borderRadius: 8,
-              background: isFocused
-                ? 'rgba(64, 132, 244, 0.08)'
-                : 'transparent',
-              marginLeft: depth * 18,
-              cursor: 'pointer',
-            }}
-          >
-            <div style={{ minWidth: 0 }}>
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  minWidth: 0,
-                }}
-              >
-                {entry.isDirectory ? (
-                  <button
-                    type="button"
-                    className="ServiceGhostButton"
-                    onClick={() => {
-                      toggleDirectory(entry).catch(() => {});
-                    }}
-                    disabled={directoryLoading || !!entryBusyPath}
-                    style={{ minWidth: 34, padding: '0 8px' }}
-                  >
-                    {directoryExpanded ? 'v' : '>'}
-                  </button>
-                ) : (
-                  <div
-                    style={{ width: 34, textAlign: 'center', opacity: 0.55 }}
-                  >
-                    *
-                  </div>
-                )}
-
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ fontWeight: 600, wordBreak: 'break-all' }}>
-                    {entry.isDirectory ? '[DIR]' : '[FILE]'} {entry.name}
-                  </div>
-                  <div
-                    style={{
-                      marginTop: 4,
-                      opacity: 0.8,
-                      wordBreak: 'break-all',
-                      fontSize: 12,
-                    }}
-                  >
-                    {entry.path}
-                  </div>
-                </div>
-              </div>
-
-              <div
-                style={{
-                  display: 'flex',
-                  flexWrap: 'wrap',
-                  gap: 6,
-                  marginTop: 8,
-                }}
-              >
-                <span
-                  style={badgeStyle(entry.isDirectory ? '#506174' : '#3c4b60')}
-                >
-                  {entry.isDirectory ? '目录' : formatBytes(entry.size)}
-                </span>
-                <span style={getModeBadgeStyle(entry.sourceMode)}>
-                  {getSourceModeLabel(entry.sourceMode)}
-                </span>
-                {entry.cid ? (
-                  <span style={badgeStyle('#7a4f18')} title={entry.cid}>
-                    CID {shortenCid(entry.cid)}
-                  </span>
-                ) : null}
-                {!entry.isDirectory ? (
-                  <span
-                    style={
-                      entry.localPresent === false
-                        ? badgeStyle('#7a1f32')
-                        : badgeStyle('#2f6a37')
-                    }
-                  >
-                    {entry.localPresent === false ? '本地已删除' : '本地存在'}
-                  </span>
-                ) : null}
-                {entry.virtual ? (
-                  <span style={badgeStyle('#6a3e82')}>虚拟目录</span>
-                ) : null}
-              </div>
-
-              <div style={{ marginTop: 8, fontSize: 12, opacity: 0.82 }}>
-                {getStorageHint(entry)}
-              </div>
-            </div>
-
-            <div
-              style={{
-                display: 'flex',
-                gap: 8,
-                flexWrap: 'wrap',
-                justifyContent: 'flex-end',
-              }}
-            >
-              {entry.isDirectory ? (
-                <>
-                  <button
-                    type="button"
-                    className="ServiceSecondaryButton"
-                    onClick={() => {
-                      toggleDirectory(entry).catch(() => {});
-                    }}
-                    disabled={directoryLoading || !!entryBusyPath}
-                  >
-                    {getDirectoryToggleLabel({
-                      directoryLoading,
-                      directoryExpanded,
-                    })}
-                  </button>
-                  <button
-                    type="button"
-                    className="ServiceSecondaryButton"
-                    onClick={() => {
-                      loadDirectory(entry.path, { focus: true }).catch(
-                        () => {},
-                      );
-                    }}
-                    disabled={directoryLoading || !!entryBusyPath}
-                  >
-                    刷新
-                  </button>
-                  {!entry.virtual ? null : (
-                    <button
-                      type="button"
-                      className="ServiceSecondaryButton"
-                      onClick={() => {
-                        deleteManagedEntry(entry).catch(() => {});
-                      }}
-                      disabled={directoryLoading || managerBusy || !!entryBusyPath}
-                    >
-                      删除
-                    </button>
-                  )}
-                </>
-              ) : (
-                <>
-                  {entry.sourceMode === 'local' && entry.localPresent !== false ? (
-                    <button
-                      type="button"
-                      className="ServiceSecondaryButton"
-                      onClick={() => {
-                        convertEntry(entry, true).catch(() => {});
-                      }}
-                      disabled={rowBusy || !!entryBusyPath || managerBusy}
-                      title="把现有本地文件迁入 IPFS，并删除站点目录中的物理副本"
-                    >
-                      {rowBusy ? '处理中...' : '迁入 IPFS'}
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    className="ServiceSecondaryButton"
-                    onClick={() => {
-                      replaceManagedFileEntry(entry).catch(() => {});
-                    }}
-                    disabled={rowBusy || !!entryBusyPath || managerBusy}
-                  >
-                    替换
-                  </button>
-                  <button
-                    type="button"
-                    className="ServiceSecondaryButton"
-                    onClick={() => {
-                      deleteManagedEntry(entry).catch(() => {});
-                    }}
-                    disabled={rowBusy || !!entryBusyPath || managerBusy}
-                  >
-                    删除
-                  </button>
-                  <button
-                    type="button"
-                    className="ServiceSecondaryButton"
-                    disabled={!entry.cid}
-                    onClick={() => {
-                      if (!entry.cid) return;
-                      copyCid(entry.cid).catch(() => {});
-                    }}
-                  >
-                    复制 CID
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-
-          {entry.isDirectory && directoryExpanded ? (
-            <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
-              {directoryLoading ? (
-                <div style={{ marginLeft: depth * 18 + 20, opacity: 0.72 }}>
-                  正在加载 {entry.path} ...
-                </div>
-              ) : null}
-              {!directoryLoading &&
-              (treeEntries[entry.path] || []).length === 0 ? (
-                <div style={{ marginLeft: depth * 18 + 20, opacity: 0.72 }}>
-                  当前目录为空。
-                </div>
-              ) : null}
-              {!directoryLoading
-                ? (treeEntries[entry.path] || [])
-                    .filter((child) => shouldDisplayEntry(child))
-                    .map((child) => renderEntryRow(child, depth + 1))
-                : null}
-            </div>
-          ) : null}
-        </React.Fragment>
-      );
-    },
-    [
-      convertEntry,
-      copyCid,
-      deleteManagedEntry,
-      entryBusyPath,
-      expandedPaths,
-      focusedPath,
-      loadDirectory,
-      loadingPaths,
-      managerBusy,
-      replaceManagedFileEntry,
-      shouldDisplayEntry,
-      toggleDirectory,
-      treeEntries,
-    ],
-  );
+  const progressLabel = getProgressLabel({
+    storageBusy,
+    loadingEntries,
+    operationBusy,
+    taskProgress,
+  });
+  const progressPercent = getProgressPercent(taskProgress);
+  const busy = storageBusy || loadingEntries || operationBusy;
 
   return (
     <div className="ChatTopPanel">
       <div className="ChatTopTitleRow">
-        <div className="ChatTopTitle">Web 静态文件目录</div>
+        <div className="ChatTopTitle">Web IPFS 文件管理</div>
         <div className="ChatTopActions">
           <button
             type="button"
             className="ServiceSecondaryButton"
-            onClick={choose}
+            onClick={() => {
+              importFiles().catch(() => {
+                // ignore
+              });
+            }}
             disabled={busy}
-            style={{ marginRight: 8 }}
           >
-            选择目录
+            上传文件
           </button>
           <button
             type="button"
             className="ServiceSecondaryButton"
-            onClick={openDir}
+            onClick={() => {
+              importDirectory().catch(() => {
+                // ignore
+              });
+            }}
             disabled={busy}
-            style={{ marginRight: 8 }}
           >
-            打开目录
+            上传目录
           </button>
           <button
             type="button"
             className="ServiceSecondaryButton"
-            onClick={clearOverride}
+            onClick={() => {
+              refreshManagedContent().catch(() => {
+                // ignore
+              });
+            }}
             disabled={busy}
           >
-            清除覆盖
+            {busy ? '处理中…' : '刷新内容'}
+          </button>
+          <button
+            type="button"
+            className="ServiceSecondaryButton"
+            onClick={() => {
+              migrateRepoDirectory().catch(() => {
+                // ignore
+              });
+            }}
+            disabled={busy}
+          >
+            迁移数据目录
+          </button>
+          <button
+            type="button"
+            className="ServiceSecondaryButton"
+            onClick={() => {
+              copyCid().catch(() => {
+                // ignore
+              });
+            }}
+            disabled={selectedCidCount === 0}
+          >
+            复制选中 CID
           </button>
         </div>
       </div>
 
       <div style={{ padding: '10px 0' }}>
-        <div>当前设置：{prettyPath(current)}</div>
-        <div style={{ marginTop: 8, opacity: 0.82, lineHeight: 1.6 }}>
-          判断规则：只要文件显示为“双源”或“IPFS 托管”，并且同时带有
-          CID，就说明服务端资源清单已经记录了它。双源会保留本地文件；IPFS
-          托管则可以通过删除本地文件来节省磁盘空间。
+        <div style={{ marginTop: 8, opacity: 0.82, lineHeight: 1.7 }}>
+          页面现在围绕统一 IPFS 存储工作：文件管理器只负责浏览、重命名、删除、移动和复制；上传与目录导入仍然走后台 IPC，避免把 Kubo 相关重活放在 renderer 线程里阻塞界面。
         </div>
-        <div
-          style={{
-            display: 'flex',
-            gap: 8,
-            flexWrap: 'wrap',
-            marginTop: 10,
-          }}
-        >
-          <button
-            type="button"
-            className="ServiceSecondaryButton"
-            onClick={() => setViewMode('manager')}
-            disabled={viewMode === 'manager'}
-          >
-            管理模式
-          </button>
-          <button
-            type="button"
-            className="ServiceSecondaryButton"
-            onClick={() => setViewMode('simple')}
-            disabled={viewMode === 'simple'}
-          >
-            简单模式
-          </button>
+        <div style={{ marginTop: 8, opacity: 0.82, lineHeight: 1.7 }}>
+          组件自带的删除确认已经保留，所以页面外层不再重复确认。组件自带 HTTP 上传入口当前没有启用，因为我们这里不走浏览器内直传，而是统一走后台导入管道；导入和迁移任务的进度现在也沿着这条后台任务链回传到页面。
         </div>
+
         {error ? (
           <div style={{ color: 'var(--danger)', marginTop: 8 }}>{error}</div>
         ) : null}
-        {entryMessage ? (
-          <div style={{ color: 'var(--success, #2e7d32)', marginTop: 8 }}>
-            {entryMessage}
+        {message ? (
+          <div style={{ color: 'var(--success, #7ee0a5)', marginTop: 8 }}>
+            {message}
           </div>
         ) : null}
         {copyHint ? (
-          <div style={{ color: 'var(--success, #2e7d32)', marginTop: 8 }}>
+          <div style={{ color: 'var(--success, #7ee0a5)', marginTop: 8 }}>
             {copyHint}
           </div>
         ) : null}
-        <div
-          style={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: 8,
-            marginTop: 10,
-          }}
-        >
-          <span style={badgeStyle('#3c4b60')}>
-            目录 {loadedStats.directories}
-          </span>
-          <span style={badgeStyle('#3c4b60')}>文件 {loadedStats.files}</span>
-          <span style={badgeStyle('#355f97')}>
-            已转换 {loadedStats.converted}
-          </span>
-          <span style={badgeStyle('#1d6b57')}>
-            IPFS 托管 {loadedStats.ipfsBacked}
-          </span>
-          <span style={badgeStyle('#4d6386')}>双源 {loadedStats.dual}</span>
-          <span style={badgeStyle('#7a4f18')}>CID {loadedStats.withCid}</span>
-          <span style={badgeStyle('#7a1f32')}>
-            本地已删除 {loadedStats.localRemoved}
-          </span>
+        {progressLabel ? (
+          <div className="WebStorageProgress" style={{ marginTop: 12 }}>
+            <div
+              className={`WebStorageProgressBar${
+                progressPercent == null ? ' WebStorageProgressBarIndeterminate' : ''
+              }`}
+            >
+              {progressPercent != null ? (
+                <div
+                  className="WebStorageProgressBarFill"
+                  style={{ width: `${progressPercent}%` }}
+                />
+              ) : null}
+            </div>
+            <div className="WebStorageProgressText">{progressLabel}</div>
+          </div>
+        ) : null}
+
+        <div className="WebStorageGrid" style={{ marginTop: 14 }}>
+          <div className="WebStorageCard">
+            <div className="WebStorageLabel">站点内容</div>
+            <div className="WebStorageValue">{formatBytes(managedContentBytes)}</div>
+            <div className="WebStorageMeta">
+              文件 {fileCount}，目录 {directoryCount}，CID {cidCount}
+            </div>
+          </div>
+
+          <div className="WebStorageCard">
+            <div className="WebStorageLabel">IPFS Repo 已用</div>
+            <div className="WebStorageValue">
+              {formatBytes(storageSummary?.repoSizeBytes)}
+            </div>
+            <div className="WebStorageMeta">
+              对象数 {storageSummary?.numObjects ?? '—'}
+            </div>
+          </div>
+
+          <div className="WebStorageCard">
+            <div className="WebStorageLabel">IPFS 配额</div>
+            <div className="WebStorageValue">
+              {storageSummary?.storageMaxBytes != null
+                ? `${formatBytes(storageSummary.repoSizeBytes)} / ${formatBytes(
+                    storageSummary.storageMaxBytes,
+                  )}`
+                : '未配置'}
+            </div>
+            <div className="WebStorageMeta">占比 {quotaPercent}</div>
+          </div>
+
+          <div className="WebStorageCard">
+            <div className="WebStorageLabel">所在磁盘</div>
+            <div className="WebStorageValue">
+              {formatBytes(storageSummary?.diskAvailableBytes)} 可用
+            </div>
+            <div className="WebStorageMeta">
+              已用 {formatBytes(storageSummary?.diskUsedBytes)} / 总计{' '}
+              {formatBytes(storageSummary?.diskTotalBytes)}，占比 {diskPercent}
+            </div>
+          </div>
+
+          <div className="WebStorageCard WebStorageCardWide">
+            <div className="WebStorageLabel">数据目录</div>
+            <div className="WebStorageValue WebStorageValuePath">
+              {storageSummary?.repoDir ?? '—'}
+            </div>
+            <div className="WebStorageMeta">
+              当前目录 {currentWebPath}，已选 {selectedFiles.length}，IPFS 服务
+              {storageSummary?.running ? '运行中' : '未运行'}
+            </div>
+          </div>
         </div>
       </div>
-
-      {viewMode === 'simple' ? (
-        <div
-          style={{
-            paddingTop: 8,
-            borderTop: '1px solid var(--border-color, #ddd)',
-            display: 'grid',
-            gap: 12,
-          }}
-        >
-          <div className="ChatTopTitleRow">
-            <div className="ChatTopTitle">简单模式</div>
-            <div className="ChatTopActions">
-              <button
-                type="button"
-                className="ServiceSecondaryButton"
-                onClick={openDir}
-                disabled={busy || syncBusy}
-                style={{ marginRight: 8 }}
-              >
-                在资源管理器中打开目录
-              </button>
-              <button
-                type="button"
-                className="ServiceSecondaryButton"
-                onClick={() => {
-                  syncSimpleModeContent().catch(() => {});
-                }}
-                disabled={busy || syncBusy || !!entryBusyPath}
-              >
-                {syncBusy ? '同步中...' : '保存内容更改'}
-              </button>
-            </div>
-          </div>
-
-          <div style={{ opacity: 0.86, lineHeight: 1.7 }}>
-            <span>
-              适合继续在系统资源管理器里维护站点文件。你可以先直接新增、替换、覆盖内容，再回到这里点
-              “保存内容更改”。
-            </span>
-            <span>
-              {[
-                'WTB 会重新扫描目录，并把尚未纳入资源清单的大文件自动补成“双源”条目，',
-                '保留本地文件同时写入 CID。',
-              ].join('')}
-            </span>
-          </div>
-
-          <div style={{ opacity: 0.78, fontSize: 12, lineHeight: 1.7 }}>
-            当前实现不会替你自动执行删除确认或目录级差异合并；如果简单模式检测到某些已跟踪文件在本地不存在，
-            会在同步结果里提示。更完整的新建目录、上传、替换、删除，建议直接切到上面的管理模式做。
-          </div>
-
-          <div
-            style={{
-              display: 'grid',
-              gap: 8,
-              padding: '12px',
-              border: '1px solid var(--border-color, #ddd)',
-              borderRadius: 8,
-              background: 'rgba(0, 0, 0, 0.08)',
-            }}
-          >
-            <div style={{ fontWeight: 600 }}>后续方向</div>
-            <div style={{ fontSize: 12, opacity: 0.82, lineHeight: 1.7 }}>
-              <span>
-                {[
-                  '简单模式现在定位为兼容入口。',
-                  '如果你仍想保留外部编辑习惯，可以继续用它做快速同步。',
-                ].join('')}
-              </span>
-              <span>
-                站内统一文件管理已经开始落到这页里，后续会继续往“单一 IPFS 存储事实来源”的方向收敛，而不是再单独强化资源管理器工作流。
-              </span>
-            </div>
-          </div>
-        </div>
-      ) : null}
 
       <div
         style={{
           paddingTop: 8,
           borderTop: '1px solid var(--border-color, #ddd)',
-          display: viewMode === 'manager' ? 'block' : 'none',
+          display: 'grid',
+          gap: 12,
         }}
       >
         <div className="ChatTopTitleRow">
-          <div className="ChatTopTitle">管理模式 / 站内文件管理</div>
-          <div className="ChatTopActions">
-            <button
-              type="button"
-              className="ServiceSecondaryButton"
-              onClick={() => {
-                createDirectoryInManager(focusedDirectoryPath).catch(() => {});
-              }}
-              disabled={managerBusy || syncBusy || !!entryBusyPath}
-              style={{ marginRight: 8 }}
-            >
-              新建目录
-            </button>
-            <button
-              type="button"
-              className="ServiceSecondaryButton"
-              onClick={() => {
-                importFilesIntoManager(focusedDirectoryPath).catch(() => {});
-              }}
-              disabled={managerBusy || syncBusy || !!entryBusyPath}
-              style={{ marginRight: 8 }}
-            >
-              上传文件
-            </button>
-            <button
-              type="button"
-              className="ServiceSecondaryButton"
-              onClick={() => {
-                importDirectoryIntoManager(focusedDirectoryPath).catch(() => {});
-              }}
-              disabled={managerBusy || syncBusy || !!entryBusyPath}
-              style={{ marginRight: 8 }}
-            >
-              导入目录
-            </button>
-            {focusedEntry && focusedEntry.path !== '/' ? (
-              <button
-                type="button"
-                className="ServiceSecondaryButton"
-                onClick={() => {
-                  deleteManagedEntry(focusedEntry).catch(() => {});
-                }}
-                disabled={managerBusy || syncBusy || !!entryBusyPath}
-                style={{ marginRight: 8 }}
-              >
-                删除当前选中
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className="ServiceSecondaryButton"
-              onClick={() => {
-                loadDirectory('/', { focus: true }).catch(() => {});
-              }}
-              disabled={!!entryBusyPath || !!loadingPaths['/'] || managerBusy}
-              style={{ marginRight: 8 }}
-            >
-              刷新根目录
-            </button>
-            <button
-              type="button"
-              className="ServiceSecondaryButton"
-              onClick={() => {
-                refreshExpandedDirectories().catch(() => {});
-              }}
-              disabled={!!entryBusyPath || managerBusy}
-            >
-              刷新已展开目录
-            </button>
-          </div>
+          <div className="ChatTopTitle">站点内容</div>
         </div>
 
-        <div style={{ padding: '8px 0' }}>
-          <div>当前选中：{focusedEntry ? focusedEntry.path : focusedPath}</div>
-          <div style={{ marginTop: 4, opacity: 0.8 }}>
-            当前操作目录：{focusedDirectoryPath}
-          </div>
-          <div style={{ marginTop: 4, opacity: 0.8 }}>
-            这里已经按站内文件管理来组织：新增目录、上传文件、导入目录、替换、删除都直接写入站点内容清单。新导入的内容默认直接落成 IPFS 托管，不再要求你先把文件放进站点目录再二次转换。
-          </div>
-          {focusedEntry && !focusedEntry.isDirectory ? (
-            <div
-              style={{
-                display: 'flex',
-                gap: 8,
-                flexWrap: 'wrap',
-                marginTop: 10,
-              }}
-            >
-              <button
-                type="button"
-                className="ServiceSecondaryButton"
-                onClick={() => {
-                  replaceManagedFileEntry(focusedEntry).catch(() => {});
-                }}
-                disabled={managerBusy || !!entryBusyPath}
-              >
-                替换当前文件
-              </button>
-              <button
-                type="button"
-                className="ServiceSecondaryButton"
-                onClick={() => {
-                  deleteManagedEntry(focusedEntry).catch(() => {});
-                }}
-                disabled={managerBusy || !!entryBusyPath}
-              >
-                删除当前文件
-              </button>
-            </div>
-          ) : null}
-          <div
-            style={{
-              display: 'flex',
-              gap: 8,
-              flexWrap: 'wrap',
-              marginTop: 10,
+        <div style={{ opacity: 0.8, lineHeight: 1.6 }}>
+          文件管理器负责目录浏览、重命名、删除、拖拽移动和复制。上传文件和上传目录仍由上方按钮触发后台 IPC 任务；FileManager 自带的 HTTP 上传按钮暂时关闭，避免和当前的后台管道重复。
+        </div>
+
+        <div className="WebFileManagerTheme" style={{ minHeight: 720 }}>
+          <FileManager
+            key={managerResetKey}
+            className="WebSettingsFileManager"
+            files={managerFiles}
+            initialPath={currentManagerPath}
+            onFolderChange={setCurrentManagerPath}
+            onSelectionChange={(files: ManagerFileItem[]) => setSelectedFiles(files)}
+            onCreateFolder={handleCreateFolder}
+            onRename={handleRename}
+            onDelete={handleDelete}
+            onPaste={handlePaste}
+            onRefresh={() => {
+              refreshManagedContent().catch(() => {
+                // ignore
+              });
             }}
-          >
-            <button
-              type="button"
-              className="ServiceSecondaryButton"
-              onClick={() => setFilterMode('all')}
-              disabled={filterMode === 'all'}
-            >
-              全部
-            </button>
-            <button
-              type="button"
-              className="ServiceSecondaryButton"
-              onClick={() => setFilterMode('converted')}
-              disabled={filterMode === 'converted'}
-            >
-              仅看已转换
-            </button>
-            <button
-              type="button"
-              className="ServiceSecondaryButton"
-              onClick={() => setFilterMode('ipfs-backed')}
-              disabled={filterMode === 'ipfs-backed'}
-            >
-              仅看 IPFS 托管
-            </button>
-            <button
-              type="button"
-              className="ServiceSecondaryButton"
-              onClick={() => setFilterMode('local-only')}
-              disabled={filterMode === 'local-only'}
-            >
-              仅看本地
-            </button>
-          </div>
-        </div>
-
-        <div style={{ display: 'grid', gap: 8 }}>
-          {loadingPaths['/'] && rootEntries.length === 0 ? (
-            <div>正在加载根目录...</div>
-          ) : null}
-          {!loadingPaths['/'] &&
-          rootEntries.filter((entry) => shouldDisplayEntry(entry)).length ===
-            0 ? (
-            <div>当前根目录下没有符合条件的条目。</div>
-          ) : null}
-          {rootEntries
-            .filter((entry) => shouldDisplayEntry(entry))
-            .map((entry) => renderEntryRow(entry, 0))}
+            onFileOpen={(file: ManagerFileItem) => {
+              if (file.isDirectory) {
+                setCurrentManagerPath(file.path);
+              }
+            }}
+            isLoading={busy}
+            layout="list"
+            enableFilePreview={false}
+            height="720px"
+            width="100%"
+            language="zh-CN"
+            fontFamily="Segoe UI, Microsoft YaHei, sans-serif"
+            primaryColor="#7ee0a5"
+            permissions={{
+              create: true,
+              upload: false,
+              move: true,
+              copy: true,
+              rename: true,
+              download: false,
+              delete: true,
+            }}
+            onError={(nextError: { message?: string }) => {
+              if (nextError?.message) {
+                setError(nextError.message);
+              }
+            }}
+            formatDate={(value: string | Date) => {
+              const date = value instanceof Date ? value : new Date(value);
+              return Number.isNaN(date.getTime())
+                ? ''
+                : date.toLocaleString('zh-CN', { hour12: false });
+            }}
+          />
         </div>
       </div>
     </div>

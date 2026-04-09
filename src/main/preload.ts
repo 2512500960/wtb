@@ -2,21 +2,24 @@
 /* eslint no-unused-vars: off */
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 
-export type SendChannels = 'ipc-example' | 'chat:message';
+export type SendChannels = 'ipc-example' | 'chat:message' | 'wtb:web:taskProgress';
 export type InvokeChannels =
   | 'services:getAll'
   | 'services:start'
   | 'services:stop'
   | 'services:openDir'
   | 'ipfs:statusDetailed'
+  | 'ipfs:storageSummary'
   | 'ipfs:swarmPeers'
   | 'ipfs:addPath'
   | 'ipfs:pickAndAddPath'
+  | 'ipfs:migrateRepoDir'
   | 'remote-resources:fetchManifest'
   | 'wtb:web:getDir'
   | 'wtb:web:getActivity'
   | 'wtb:web:setDir'
   | 'wtb:web:listEntries'
+  | 'wtb:web:listAllEntries'
   | 'wtb:web:convertFileToIpfsSource'
   | 'wtb:web:syncContentWithIpfs'
   | 'wtb:web:createDirectory'
@@ -24,6 +27,9 @@ export type InvokeChannels =
   | 'wtb:web:pickAndImportDirectory'
   | 'wtb:web:replaceFile'
   | 'wtb:web:deleteEntry'
+  | 'wtb:web:renameEntry'
+  | 'wtb:web:pasteEntries'
+  | 'wtb:web:migrateToManagedIpfs'
   | 'dialog:selectDirectory'
   | 'logs:getMainLogPath'
   | 'logs:openContainingFolder'

@@ -2,6 +2,18 @@ import { dialog, ipcMain, shell } from 'electron';
 import log from 'electron-log';
 import path from 'path';
 
+type TaskProgressPayload = {
+  operation:
+    | 'import-files'
+    | 'import-directory'
+    | 'migrate-web-content'
+    | 'migrate-repo';
+  stage: 'running' | 'completed' | 'failed';
+  current: number;
+  total: number;
+  message: string;
+};
+
 export const registerMiscIpc = (options: {
   getWebRootDir: () => string;
   getWebActivity: () => unknown;
@@ -12,6 +24,7 @@ export const registerMiscIpc = (options: {
   stopWebService: () => Promise<unknown>;
   startWebService: () => Promise<unknown>;
   listWebEntries: (requestedPath: string) => Array<unknown>;
+  listAllWebEntries: () => Array<unknown>;
   convertWebFileToIpfsSource: (
     requestedPath: string,
     options?: { removeLocalFile?: boolean },
@@ -24,16 +37,31 @@ export const registerMiscIpc = (options: {
   importManagedWebFiles: (
     targetDirectoryPath: string,
     sourceFilePaths: string[],
+    onProgress?: (progress: Omit<TaskProgressPayload, 'operation' | 'stage'>) => void,
   ) => Promise<unknown>;
   importManagedWebDirectory: (
     targetDirectoryPath: string,
     sourceDirectoryPath: string,
+    onProgress?: (progress: Omit<TaskProgressPayload, 'operation' | 'stage'>) => void,
   ) => Promise<unknown>;
   replaceManagedWebFile: (
     requestedPath: string,
     sourceFilePath: string,
   ) => Promise<unknown>;
+  renameManagedWebEntry: (
+    requestedPath: string,
+    newName: string,
+  ) => Promise<unknown> | unknown;
+  pasteManagedWebEntries: (
+    requestedPaths: string[],
+    destinationDirectoryPath: string,
+    operationType: 'copy' | 'move',
+  ) => Promise<unknown> | unknown;
+  migrateWebContentToManagedIpfs: (
+    onProgress?: (progress: Omit<TaskProgressPayload, 'operation' | 'stage'>) => void,
+  ) => Promise<unknown>;
   deleteManagedWebEntry: (requestedPath: string) => Promise<unknown> | unknown;
+  notifyTaskProgress: (payload: TaskProgressPayload) => void;
 }): void => {
   ipcMain.handle('wtb:web:getDir', async () => {
     try {
@@ -95,6 +123,20 @@ export const registerMiscIpc = (options: {
       }
     },
   );
+
+  ipcMain.handle('wtb:web:listAllEntries', async () => {
+    try {
+      return {
+        ok: true,
+        entries: options.listAllWebEntries(),
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
 
   ipcMain.handle(
     'wtb:web:convertFileToIpfsSource',
@@ -171,17 +213,52 @@ export const registerMiscIpc = (options: {
         if (selection.canceled || !selection.filePaths.length) {
           return { ok: false, canceled: true };
         }
+        options.notifyTaskProgress({
+          operation: 'import-files',
+          stage: 'running',
+          current: 0,
+          total: selection.filePaths.length,
+          message: '正在准备上传文件…',
+        });
         const result = await options.importManagedWebFiles(
           targetDirectoryPath,
           selection.filePaths,
+          (progress) => {
+            options.notifyTaskProgress({
+              operation: 'import-files',
+              stage: 'running',
+              ...progress,
+            });
+          },
         );
         const webStatus = options.getWebStatus();
         if (webStatus.state === 'running') {
+          options.notifyTaskProgress({
+            operation: 'import-files',
+            stage: 'running',
+            current: selection.filePaths.length,
+            total: selection.filePaths.length,
+            message: '文件已导入，正在重启 Web 服务…',
+          });
           await options.stopWebService();
           await options.startWebService();
         }
+        options.notifyTaskProgress({
+          operation: 'import-files',
+          stage: 'completed',
+          current: selection.filePaths.length,
+          total: selection.filePaths.length,
+          message: '文件上传完成。',
+        });
         return { ok: true, result };
       } catch (error) {
+        options.notifyTaskProgress({
+          operation: 'import-files',
+          stage: 'failed',
+          current: 0,
+          total: 0,
+          message: error instanceof Error ? error.message : String(error),
+        });
         return {
           ok: false,
           error: error instanceof Error ? error.message : String(error),
@@ -200,17 +277,52 @@ export const registerMiscIpc = (options: {
         if (selection.canceled || !selection.filePaths.length) {
           return { ok: false, canceled: true };
         }
+        options.notifyTaskProgress({
+          operation: 'import-directory',
+          stage: 'running',
+          current: 0,
+          total: 0,
+          message: '正在准备导入目录…',
+        });
         const result = await options.importManagedWebDirectory(
           targetDirectoryPath,
           selection.filePaths[0],
+          (progress) => {
+            options.notifyTaskProgress({
+              operation: 'import-directory',
+              stage: 'running',
+              ...progress,
+            });
+          },
         );
         const webStatus = options.getWebStatus();
         if (webStatus.state === 'running') {
+          options.notifyTaskProgress({
+            operation: 'import-directory',
+            stage: 'running',
+            current: 1,
+            total: 1,
+            message: '目录已导入，正在重启 Web 服务…',
+          });
           await options.stopWebService();
           await options.startWebService();
         }
+        options.notifyTaskProgress({
+          operation: 'import-directory',
+          stage: 'completed',
+          current: 1,
+          total: 1,
+          message: '目录导入完成。',
+        });
         return { ok: true, result };
       } catch (error) {
+        options.notifyTaskProgress({
+          operation: 'import-directory',
+          stage: 'failed',
+          current: 0,
+          total: 0,
+          message: error instanceof Error ? error.message : String(error),
+        });
         return {
           ok: false,
           error: error instanceof Error ? error.message : String(error),
@@ -258,6 +370,106 @@ export const registerMiscIpc = (options: {
       }
       return { ok: true, result };
     } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+  ipcMain.handle(
+    'wtb:web:renameEntry',
+    async (_event, requestedPath: string, newName: string) => {
+      try {
+        const result = await options.renameManagedWebEntry(requestedPath, newName);
+        const webStatus = options.getWebStatus();
+        if (webStatus.state === 'running') {
+          await options.stopWebService();
+          await options.startWebService();
+        }
+        return { ok: true, result };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'wtb:web:pasteEntries',
+    async (
+      _event,
+      requestedPaths: string[],
+      destinationDirectoryPath: string,
+      operationType: 'copy' | 'move',
+    ) => {
+      try {
+        const result = await options.pasteManagedWebEntries(
+          requestedPaths,
+          destinationDirectoryPath,
+          operationType,
+        );
+        const webStatus = options.getWebStatus();
+        if (webStatus.state === 'running') {
+          await options.stopWebService();
+          await options.startWebService();
+        }
+        return { ok: true, result };
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  );
+
+  ipcMain.handle('wtb:web:migrateToManagedIpfs', async () => {
+    try {
+      options.notifyTaskProgress({
+        operation: 'migrate-web-content',
+        stage: 'running',
+        current: 0,
+        total: 0,
+        message: '正在扫描本地站点内容…',
+      });
+      const result = await options.migrateWebContentToManagedIpfs((progress) => {
+        options.notifyTaskProgress({
+          operation: 'migrate-web-content',
+          stage: 'running',
+          ...progress,
+        });
+      });
+      const webStatus = options.getWebStatus();
+      if (webStatus.state === 'running') {
+        options.notifyTaskProgress({
+          operation: 'migrate-web-content',
+          stage: 'running',
+          current: 1,
+          total: 1,
+          message: '迁移完成，正在重启 Web 服务…',
+        });
+        await options.stopWebService();
+        await options.startWebService();
+      }
+      options.notifyTaskProgress({
+        operation: 'migrate-web-content',
+        stage: 'completed',
+        current: 1,
+        total: 1,
+        message: '站点内容迁移完成。',
+      });
+      return { ok: true, result };
+    } catch (error) {
+      options.notifyTaskProgress({
+        operation: 'migrate-web-content',
+        stage: 'failed',
+        current: 0,
+        total: 0,
+        message: error instanceof Error ? error.message : String(error),
+      });
       return {
         ok: false,
         error: error instanceof Error ? error.message : String(error),

@@ -90,9 +90,26 @@ export type ImportManagedWebContentResult = {
   paths: string[];
 };
 
+export type ManagedWebPasteOperation = 'copy' | 'move';
+
+export type PasteManagedWebContentResult = {
+  operationType: ManagedWebPasteOperation;
+  paths: string[];
+};
+
 const normalizeManifestPath = (inputPath: string): string => {
   const normalized = path.posix.normalize(inputPath || '/');
   return normalized.startsWith('/') ? normalized : `/${normalized}`;
+};
+
+const getParentPath = (inputPath: string): string => {
+  const normalizedPath = normalizeManifestPath(inputPath);
+  if (normalizedPath === '/') {
+    return '/';
+  }
+
+  const parentPath = path.posix.dirname(normalizedPath);
+  return normalizeManifestPath(parentPath === '.' ? '/' : parentPath);
 };
 
 const getManifestPath = (webRoot: string): string => {
@@ -103,6 +120,20 @@ const getUrlPathFromFsPath = (webRoot: string, fsPath: string): string => {
   const relativePath = path.relative(webRoot, fsPath);
   const posixPath = relativePath.split(path.sep).join('/');
   return normalizeManifestPath(`/${posixPath}`);
+};
+
+const ensureSafeManagedName = (name: string): string => {
+  const trimmed = (name || '').trim();
+  if (!trimmed) {
+    throw new Error('名称不能为空。');
+  }
+  if (trimmed.includes('/') || trimmed.includes('\\')) {
+    throw new Error('名称不能包含路径分隔符。');
+  }
+  if (trimmed === '.' || trimmed === '..') {
+    throw new Error('名称无效。');
+  }
+  return trimmed;
 };
 
 const listPhysicalFilesRecursively = (rootDir: string): string[] => {
@@ -418,6 +449,80 @@ export const listWebContentDirectoryEntries = (opts: {
   });
 };
 
+export const listAllWebContentEntries = (opts: {
+  webRoot: string;
+}): WebContentDirectoryEntry[] => {
+  const manifest = readWebContentSourceManifest(opts.webRoot);
+  const entriesByPath = new Map<string, WebContentDirectoryEntry>();
+
+  const visitPhysical = (currentDir: string): void => {
+    const dirEntries = fs.readdirSync(currentDir, { withFileTypes: true });
+    dirEntries.forEach((entry) => {
+      if (entry.name === MANIFEST_FILE_NAME) return;
+      const childPath = path.join(currentDir, entry.name);
+      const normalizedPath = getUrlPathFromFsPath(opts.webRoot, childPath);
+      const stat = fs.statSync(childPath);
+
+      entriesByPath.set(normalizedPath, {
+        name: entry.name,
+        path: normalizedPath,
+        isDirectory: entry.isDirectory(),
+        size: stat.isFile() ? stat.size : 0,
+        mtimeMs: stat.mtimeMs,
+        mime: stat.isFile() ? guessContentType(childPath) : undefined,
+        sourceMode: 'local',
+        fsPath: childPath,
+        localPresent: true,
+      });
+
+      if (entry.isDirectory()) {
+        visitPhysical(childPath);
+      }
+    });
+  };
+
+  if (fs.existsSync(opts.webRoot) && fs.statSync(opts.webRoot).isDirectory()) {
+    visitPhysical(opts.webRoot);
+  }
+
+  Object.values(manifest.entries).forEach((stored) => {
+    const localFsPath = urlPathToFsPath(opts.webRoot, stored.path);
+    const localExists = fs.existsSync(localFsPath);
+
+    if (isStoredWebContentDirectoryRecord(stored)) {
+      entriesByPath.set(stored.path, {
+        name: path.posix.basename(stored.path),
+        path: stored.path,
+        isDirectory: true,
+        size: 0,
+        mtimeMs: stored.mtimeMs,
+        sourceMode: 'local',
+        fsPath: localExists ? localFsPath : undefined,
+        localPresent: localExists,
+        virtual: !localExists,
+      });
+      return;
+    }
+
+    const localStat =
+      localExists && fs.statSync(localFsPath).isFile() ? fs.statSync(localFsPath) : null;
+    entriesByPath.set(stored.path, {
+      name: path.posix.basename(stored.path),
+      path: stored.path,
+      isDirectory: false,
+      size: stored.size || localStat?.size || 0,
+      mtimeMs: stored.mtimeMs || localStat?.mtimeMs || 0,
+      mime: stored.mime || guessContentType(localFsPath),
+      cid: stored.cid,
+      sourceMode: stored.sourceMode,
+      fsPath: localStat ? localFsPath : undefined,
+      localPresent: !!localStat,
+    });
+  });
+
+  return [...entriesByPath.values()].sort((a, b) => a.path.localeCompare(b.path));
+};
+
 export const resolveWebContentPath = (opts: {
   webRoot: string;
   requestedPath: string | undefined;
@@ -619,6 +724,40 @@ const removeLocalWebPathIfExists = (webRoot: string, normalizedPath: string): vo
   fs.unlinkSync(fsPath);
 };
 
+const removeEmptyPhysicalParents = (webRoot: string, normalizedPath: string): void => {
+  let currentPath = getParentPath(normalizedPath);
+  while (currentPath !== '/') {
+    const fsPath = urlPathToFsPath(webRoot, currentPath);
+    if (!fs.existsSync(fsPath) || !fs.statSync(fsPath).isDirectory()) return;
+    if (fs.readdirSync(fsPath).length > 0) return;
+    fs.rmdirSync(fsPath);
+    currentPath = getParentPath(currentPath);
+  }
+};
+
+const cloneManifestEntryToPath = (
+  entry: StoredWebContentEntry,
+  nextPath: string,
+): StoredWebContentEntry => {
+  if (isStoredWebContentDirectoryRecord(entry)) {
+    return {
+      kind: 'directory',
+      path: nextPath,
+      mtimeMs: Date.now(),
+    };
+  }
+
+  return {
+    kind: 'file',
+    path: nextPath,
+    sourceMode: entry.sourceMode,
+    cid: entry.cid,
+    size: entry.size,
+    mtimeMs: Date.now(),
+    mime: entry.mime,
+  };
+};
+
 const listSourceFilesRecursively = (rootDir: string): Array<{ fsPath: string; relativePath: string }> => {
   const files: Array<{ fsPath: string; relativePath: string }> = [];
 
@@ -682,6 +821,7 @@ export const importManagedWebFiles = async (opts: {
   targetDirectoryPath: string;
   sourceFilePaths: string[];
   ipfsManager: IpfsSidecarManager;
+  onProgress?: (progress: { current: number; total: number; message: string }) => void;
 }): Promise<ImportManagedWebContentResult> => {
   const normalizedTargetDirectoryPath = parseAndNormalizeUrlPath(
     opts.targetDirectoryPath || '/',
@@ -689,6 +829,13 @@ export const importManagedWebFiles = async (opts: {
   const manifest = readWebContentSourceManifest(opts.webRoot);
   const importedPaths: string[] = [];
   const overwrittenPaths: string[] = [];
+  const totalFiles = opts.sourceFilePaths.length;
+
+  opts.onProgress?.({
+    current: 0,
+    total: totalFiles,
+    message: totalFiles > 0 ? '正在准备上传文件…' : '没有可上传的文件。',
+  });
 
   if (normalizedTargetDirectoryPath !== '/') {
     ensureManagedDirectoryChain(
@@ -734,6 +881,11 @@ export const importManagedWebFiles = async (opts: {
       mime: guessContentType(resolvedSourcePath),
     };
     importedPaths.push(targetPath);
+    opts.onProgress?.({
+      current: importedPaths.length,
+      total: totalFiles,
+      message: `正在上传文件 ${importedPaths.length}/${totalFiles}：${path.basename(resolvedSourcePath)}`,
+    });
   }
 
   writeWebContentSourceManifest(opts.webRoot, manifest);
@@ -791,6 +943,7 @@ export const importManagedWebDirectory = async (opts: {
   targetDirectoryPath: string;
   sourceDirectoryPath: string;
   ipfsManager: IpfsSidecarManager;
+  onProgress?: (progress: { current: number; total: number; message: string }) => void;
 }): Promise<ImportManagedWebContentResult> => {
   const normalizedTargetDirectoryPath = parseAndNormalizeUrlPath(
     opts.targetDirectoryPath || '/',
@@ -825,6 +978,12 @@ export const importManagedWebDirectory = async (opts: {
   }
 
   const files = listSourceFilesRecursively(resolvedSourceDirectoryPath);
+  const totalFiles = files.length;
+  opts.onProgress?.({
+    current: 0,
+    total: totalFiles,
+    message: totalFiles > 0 ? '正在准备导入目录…' : '目录中没有可导入的文件。',
+  });
   for (const file of files) {
     const relativeDirectory = path.posix.dirname(file.relativePath);
     const targetDirectory =
@@ -867,6 +1026,11 @@ export const importManagedWebDirectory = async (opts: {
       mime: guessContentType(file.fsPath),
     };
     importedPaths.push(targetPath);
+    opts.onProgress?.({
+      current: importedPaths.length,
+      total: totalFiles,
+      message: `正在导入目录 ${importedPaths.length}/${totalFiles}：${file.relativePath}`,
+    });
   }
 
   writeWebContentSourceManifest(opts.webRoot, manifest);
@@ -898,7 +1062,221 @@ export const deleteManagedWebEntry = (opts: {
   });
   writeWebContentSourceManifest(opts.webRoot, manifest);
   removeLocalWebPathIfExists(opts.webRoot, normalizedPath);
+  removeEmptyPhysicalParents(opts.webRoot, normalizedPath);
   return { removedPaths };
+};
+
+export const renameManagedWebEntry = (opts: {
+  webRoot: string;
+  requestedPath: string;
+  newName: string;
+}): { fromPath: string; toPath: string; movedPaths: string[] } => {
+  const normalizedPath = parseAndNormalizeUrlPath(opts.requestedPath || '/');
+  if (normalizedPath === '/') {
+    throw new Error('不能重命名根目录。');
+  }
+
+  const safeName = ensureSafeManagedName(opts.newName);
+  const nextPath = parseAndNormalizeUrlPath(
+    path.posix.join(getParentPath(normalizedPath), safeName),
+  );
+  if (nextPath === normalizedPath) {
+    return { fromPath: normalizedPath, toPath: nextPath, movedPaths: [] };
+  }
+
+  const manifest = readWebContentSourceManifest(opts.webRoot);
+  if (manifest.entries[nextPath]) {
+    throw new Error('目标路径已存在。');
+  }
+
+  const prefix = `${normalizedPath}/`;
+  const movedPaths = Object.keys(manifest.entries).filter((entryPath) => {
+    return entryPath === normalizedPath || entryPath.startsWith(prefix);
+  });
+
+  const updates = movedPaths.map((entryPath) => {
+    const entry = manifest.entries[entryPath];
+    const suffix = entryPath.slice(normalizedPath.length);
+    const targetPath = `${nextPath}${suffix}`;
+    return { entryPath, targetPath, entry };
+  });
+  updates.forEach(({ entryPath }) => {
+    delete manifest.entries[entryPath];
+  });
+  updates.forEach(({ targetPath, entry }) => {
+    manifest.entries[targetPath] = cloneManifestEntryToPath(entry, targetPath);
+  });
+  writeWebContentSourceManifest(opts.webRoot, manifest);
+
+  const currentFsPath = urlPathToFsPath(opts.webRoot, normalizedPath);
+  const nextFsPath = urlPathToFsPath(opts.webRoot, nextPath);
+  if (fs.existsSync(currentFsPath)) {
+    fs.mkdirSync(path.dirname(nextFsPath), { recursive: true });
+    fs.renameSync(currentFsPath, nextFsPath);
+  }
+
+  return { fromPath: normalizedPath, toPath: nextPath, movedPaths };
+};
+
+export const pasteManagedWebEntries = (opts: {
+  webRoot: string;
+  requestedPaths: string[];
+  destinationDirectoryPath: string;
+  operationType: ManagedWebPasteOperation;
+}): PasteManagedWebContentResult => {
+  const manifest = readWebContentSourceManifest(opts.webRoot);
+  const destinationDirectoryPath = parseAndNormalizeUrlPath(
+    opts.destinationDirectoryPath || '/',
+  );
+  const createdPaths: string[] = [];
+
+  opts.requestedPaths.forEach((requestedPathRaw) => {
+    const requestedPath = parseAndNormalizeUrlPath(requestedPathRaw);
+    if (requestedPath === '/' || requestedPath === destinationDirectoryPath) {
+      return;
+    }
+
+    const basename = path.posix.basename(requestedPath);
+    const targetPath = parseAndNormalizeUrlPath(
+      path.posix.join(destinationDirectoryPath, basename),
+    );
+    if (targetPath === requestedPath) return;
+    if (targetPath.startsWith(`${requestedPath}/`)) {
+      throw new Error('不能把目录移动到自己的子目录中。');
+    }
+    if (manifest.entries[targetPath]) {
+      throw new Error(`目标路径已存在：${targetPath}`);
+    }
+
+    const prefix = `${requestedPath}/`;
+    const matchedPaths = Object.keys(manifest.entries).filter((entryPath) => {
+      return entryPath === requestedPath || entryPath.startsWith(prefix);
+    });
+
+    matchedPaths.forEach((entryPath) => {
+      const entry = manifest.entries[entryPath];
+      const suffix = entryPath.slice(requestedPath.length);
+      const nextPath = `${targetPath}${suffix}`;
+      manifest.entries[nextPath] = cloneManifestEntryToPath(entry, nextPath);
+      createdPaths.push(nextPath);
+    });
+
+    const sourceFsPath = urlPathToFsPath(opts.webRoot, requestedPath);
+    const targetFsPath = urlPathToFsPath(opts.webRoot, targetPath);
+    if (fs.existsSync(sourceFsPath)) {
+      if (opts.operationType === 'copy') {
+        fs.mkdirSync(path.dirname(targetFsPath), { recursive: true });
+        fs.cpSync(sourceFsPath, targetFsPath, { recursive: true, force: true });
+      } else {
+        fs.mkdirSync(path.dirname(targetFsPath), { recursive: true });
+        fs.renameSync(sourceFsPath, targetFsPath);
+      }
+    }
+
+    if (opts.operationType === 'move') {
+      matchedPaths.forEach((entryPath) => {
+        delete manifest.entries[entryPath];
+      });
+      removeEmptyPhysicalParents(opts.webRoot, requestedPath);
+    }
+  });
+
+  writeWebContentSourceManifest(opts.webRoot, manifest);
+  return {
+    operationType: opts.operationType,
+    paths: createdPaths,
+  };
+};
+
+export const migrateWebContentToManagedIpfs = async (opts: {
+  webRoot: string;
+  ipfsManager: IpfsSidecarManager;
+  onProgress?: (progress: { current: number; total: number; message: string }) => void;
+}): Promise<{ migratedFiles: number; migratedDirectories: number }> => {
+  const manifest = readWebContentSourceManifest(opts.webRoot);
+  let migratedFiles = 0;
+  let migratedDirectories = 0;
+  const physicalFiles =
+    fs.existsSync(opts.webRoot) && fs.statSync(opts.webRoot).isDirectory()
+      ? listPhysicalFilesRecursively(opts.webRoot)
+      : [];
+  const totalFiles = physicalFiles.length;
+
+  opts.onProgress?.({
+    current: 0,
+    total: totalFiles,
+    message:
+      totalFiles > 0 ? '正在将本地站点内容吸收进 IPFS 存储…' : '没有需要迁移的本地文件。',
+  });
+
+  const visit = async (currentDir: string): Promise<void> => {
+    const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name === MANIFEST_FILE_NAME) continue;
+      const childPath = path.join(currentDir, entry.name);
+      const normalizedPath = getUrlPathFromFsPath(opts.webRoot, childPath);
+
+      if (entry.isDirectory()) {
+        if (!manifest.entries[normalizedPath]) {
+          manifest.entries[normalizedPath] = {
+            kind: 'directory',
+            path: normalizedPath,
+            mtimeMs: fs.statSync(childPath).mtimeMs,
+          };
+          migratedDirectories += 1;
+        }
+        // eslint-disable-next-line no-await-in-loop
+        await visit(childPath);
+        continue;
+      }
+
+      if (!entry.isFile()) continue;
+      const stat = fs.statSync(childPath);
+      const existing = getStoredFileEntryForPath(manifest, normalizedPath);
+      if (
+        existing?.sourceMode === 'ipfs-backed' &&
+        existing.size === stat.size &&
+        existing.mtimeMs === stat.mtimeMs
+      ) {
+        fs.unlinkSync(childPath);
+        migratedFiles += 1;
+        opts.onProgress?.({
+          current: migratedFiles,
+          total: totalFiles,
+          message: `正在清理已托管文件 ${migratedFiles}/${totalFiles}：${entry.name}`,
+        });
+        continue;
+      }
+
+      // eslint-disable-next-line no-await-in-loop
+      const result = await opts.ipfsManager.ensurePathCached(childPath, {
+        wrapWithDirectory: false,
+      });
+      manifest.entries[normalizedPath] = {
+        kind: 'file',
+        path: normalizedPath,
+        sourceMode: 'ipfs-backed',
+        cid: result.cid,
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+        mime: guessContentType(childPath),
+      };
+      fs.unlinkSync(childPath);
+      migratedFiles += 1;
+      opts.onProgress?.({
+        current: migratedFiles,
+        total: totalFiles,
+        message: `正在迁移本地文件 ${migratedFiles}/${totalFiles}：${entry.name}`,
+      });
+    }
+  };
+
+  if (fs.existsSync(opts.webRoot) && fs.statSync(opts.webRoot).isDirectory()) {
+    await visit(opts.webRoot);
+  }
+
+  writeWebContentSourceManifest(opts.webRoot, manifest);
+  return { migratedFiles, migratedDirectories };
 };
 
 export const convertLocalFileToIpfsSource = async (opts: {

@@ -6,6 +6,8 @@ import { ensureDirAsync, pathExists } from './fs_utils';
 import { getWtbConfig } from './wtb_config';
 import { log } from 'console';
 
+const MANAGED_WEB_MANIFEST_NAME = '.wtb-content-sources.json';
+
 export const copyDirIfMissing = async (
   srcDir: string,
   dstDir: string,
@@ -135,6 +137,19 @@ export const ensureDefaultWebAssets = async (
   const bundledResolved = path.resolve(bundledDir).toLowerCase();
   const webRootResolved = path.resolve(webRoot).toLowerCase();
   if (bundledResolved === webRootResolved) return;
+
+  const manifestPath = path.join(webRoot, MANAGED_WEB_MANIFEST_NAME);
+  if (await pathExists(manifestPath)) {
+    try {
+      const raw = await fs.promises.readFile(manifestPath, { encoding: 'utf8' });
+      const parsed = JSON.parse(raw) as { entries?: Record<string, unknown> };
+      if (parsed.entries && Object.keys(parsed.entries).length > 0) {
+        return;
+      }
+    } catch {
+      // ignore and fall through to copy
+    }
+  }
 
   await copyDirContentsIfMissing(bundledDir, webRoot);
 };

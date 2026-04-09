@@ -41,7 +41,11 @@ import {
   convertLocalFileToIpfsSource,
   importManagedWebDirectory,
   importManagedWebFiles,
+  listAllWebContentEntries,
   listWebContentDirectoryEntries,
+  migrateWebContentToManagedIpfs,
+  pasteManagedWebEntries,
+  renameManagedWebEntry,
   replaceManagedWebFile,
   syncWebContentWithIpfs,
 } from './web_content_sources';
@@ -77,6 +81,18 @@ import { ServiceSyncHttpManager } from './service_sync_http';
 
 let mainWindow: BrowserWindow | null = null;
 
+type TaskProgressPayload = {
+  operation:
+    | 'import-files'
+    | 'import-directory'
+    | 'migrate-web-content'
+    | 'migrate-repo';
+  stage: 'running' | 'completed' | 'failed';
+  current: number;
+  total: number;
+  message: string;
+};
+
 // NOTE: Do NOT force a global Chromium locale via `--lang`.
 // It is process-wide and would override per-window Accept-Language settings,
 // which we rely on (e.g. Element prefers English UI while the rest of the app
@@ -86,6 +102,14 @@ const CHINESE_ACCEPT_LANGUAGES = 'zh-CN,zh;q=0.9,en;q=0.6';
 
 // Element: prefer English UI but keep Chinese as fallback.
 const ELEMENT_ACCEPT_LANGUAGES = 'en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7';
+
+const notifyTaskProgress = (payload: TaskProgressPayload): void => {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+
+  mainWindow.webContents.send('wtb:web:taskProgress', payload);
+};
 
 const forceAcceptLanguages = (
   s: Electron.Session,
@@ -375,12 +399,22 @@ registerIpfsIpc({
   getDetailedStatus: async () => {
     return await ipfsManager.getDetailedStatus();
   },
+  getStorageSummary: async () => {
+    return await ipfsManager.getStorageSummary();
+  },
   listSwarmPeers: async () => {
     return await ipfsManager.listSwarmPeers();
   },
   addPath: async (targetPath: string, options?: { wrapWithDirectory?: boolean }) => {
     return await ipfsManager.addPath(targetPath, options);
   },
+  migrateRepo: async (
+    targetDir: string,
+    onProgress?: (progress: { current: number; total: number; message: string }) => void,
+  ) => {
+    return await ipfsManager.migrateRepo(targetDir, onProgress);
+  },
+  notifyTaskProgress,
 });
 
 registerRemoteResourcesIpc({
@@ -409,6 +443,10 @@ registerMiscIpc({
       webRoot: getWebRootDir(),
       requestedPath,
     }),
+  listAllWebEntries: () =>
+    listAllWebContentEntries({
+      webRoot: getWebRootDir(),
+    }),
   convertWebFileToIpfsSource: async (
     requestedPath: string,
     options?: { removeLocalFile?: boolean },
@@ -434,22 +472,26 @@ registerMiscIpc({
   importManagedWebFiles: async (
     targetDirectoryPath: string,
     sourceFilePaths: string[],
+    onProgress?: (progress: { current: number; total: number; message: string }) => void,
   ) =>
     await importManagedWebFiles({
       webRoot: getWebRootDir(),
       targetDirectoryPath,
       sourceFilePaths,
       ipfsManager,
+      onProgress,
     }),
   importManagedWebDirectory: async (
     targetDirectoryPath: string,
     sourceDirectoryPath: string,
+    onProgress?: (progress: { current: number; total: number; message: string }) => void,
   ) =>
     await importManagedWebDirectory({
       webRoot: getWebRootDir(),
       targetDirectoryPath,
       sourceDirectoryPath,
       ipfsManager,
+      onProgress,
     }),
   replaceManagedWebFile: async (
     requestedPath: string,
@@ -461,11 +503,37 @@ registerMiscIpc({
       sourceFilePath,
       ipfsManager,
     }),
+  renameManagedWebEntry: (requestedPath: string, newName: string) =>
+    renameManagedWebEntry({
+      webRoot: getWebRootDir(),
+      requestedPath,
+      newName,
+    }),
+  pasteManagedWebEntries: (
+    requestedPaths: string[],
+    destinationDirectoryPath: string,
+    operationType: 'copy' | 'move',
+  ) =>
+    pasteManagedWebEntries({
+      webRoot: getWebRootDir(),
+      requestedPaths,
+      destinationDirectoryPath,
+      operationType,
+    }),
+  migrateWebContentToManagedIpfs: async (
+    onProgress?: (progress: { current: number; total: number; message: string }) => void,
+  ) =>
+    await migrateWebContentToManagedIpfs({
+      webRoot: getWebRootDir(),
+      ipfsManager,
+      onProgress,
+    }),
   deleteManagedWebEntry: (requestedPath: string) =>
     deleteManagedWebEntry({
       webRoot: getWebRootDir(),
       requestedPath,
     }),
+  notifyTaskProgress,
 });
 
 // registerChatIpc({

@@ -10,6 +10,7 @@ import {
 
 import { ensureDirExists } from './fs_utils';
 import type { ServiceStatus } from './service_types';
+import { getWtbConfig, setWtbIpfsRepoDir } from './wtb_config';
 import { debug, log } from 'console';
 
 type LoggerLike = {
@@ -38,6 +39,17 @@ export type IpfsSwarmPeer = {
   streams: string[];
 };
 
+export type IpfsStorageSummary = {
+  running: boolean;
+  repoDir: string;
+  repoSizeBytes: number;
+  storageMaxBytes: number | null;
+  numObjects: number | null;
+  diskAvailableBytes: number | null;
+  diskTotalBytes: number | null;
+  diskUsedBytes: number | null;
+};
+
 const DEFAULT_API_PORT = 5001;
 const DEFAULT_GATEWAY_PORT = 8080;
 
@@ -63,6 +75,13 @@ export class IpfsSidecarManager {
   ) {}
 
   getRepoDir(): string {
+    const configuredRepoDir = getWtbConfig().ipfs?.repoDir?.trim();
+    if (configuredRepoDir) {
+      return path.isAbsolute(configuredRepoDir)
+        ? configuredRepoDir
+        : path.resolve(this.options.getWtbDataDir(), configuredRepoDir);
+    }
+
     return path.join(this.options.getWtbDataDir(), 'ipfs');
   }
 
@@ -174,6 +193,135 @@ export class IpfsSidecarManager {
         streams,
       };
     }).filter((peer) => peer.peerId || peer.address);
+  }
+
+  async getStorageSummary(): Promise<IpfsStorageSummary> {
+    const repoDir = this.getRepoDir();
+    ensureDirExists(repoDir);
+
+    const repoStats = this.readRepoStats();
+    const diskStats = this.readDiskStats(repoDir);
+    const repoSizeBytes = repoStats.repoSizeBytes ?? this.getDirectorySizeBytes(repoDir);
+
+    return {
+      running: this.getServiceStatus().state === 'running',
+      repoDir,
+      repoSizeBytes,
+      storageMaxBytes: repoStats.storageMaxBytes,
+      numObjects: repoStats.numObjects,
+      diskAvailableBytes: diskStats?.availableBytes ?? null,
+      diskTotalBytes: diskStats?.totalBytes ?? null,
+      diskUsedBytes: diskStats?.usedBytes ?? null,
+    };
+  }
+
+  async migrateRepo(targetDir: string): Promise<{
+    fromDir: string;
+    toDir: string;
+    restarted: boolean;
+  }>;
+  async migrateRepo(
+    targetDir: string,
+    onProgress?: (progress: { current: number; total: number; message: string }) => void,
+  ): Promise<{
+    fromDir: string;
+    toDir: string;
+    restarted: boolean;
+  }> {
+    const currentDir = path.resolve(this.getRepoDir());
+    const nextDir = path.resolve(targetDir || '');
+    const totalSteps = 3;
+
+    if (!nextDir) {
+      throw new Error('目标目录不能为空。');
+    }
+    if (currentDir === nextDir) {
+      return { fromDir: currentDir, toDir: nextDir, restarted: false };
+    }
+    if (nextDir.startsWith(`${currentDir}${path.sep}`)) {
+      throw new Error('目标目录不能位于当前 IPFS 数据目录内部。');
+    }
+    if (currentDir.startsWith(`${nextDir}${path.sep}`)) {
+      throw new Error('目标目录不能是当前 IPFS 数据目录的上级目录。');
+    }
+
+    onProgress?.({
+      current: 0,
+      total: totalSteps,
+      message: '正在检查当前 IPFS 数据目录…',
+    });
+
+    const wasRunning = this.getServiceStatus().state === 'running';
+    if (wasRunning) {
+      onProgress?.({
+        current: 1,
+        total: totalSteps,
+        message: '正在停止 IPFS 服务…',
+      });
+      await this.stop();
+    }
+
+    ensureDirExists(path.dirname(nextDir));
+    if (fs.existsSync(nextDir)) {
+      const nextStats = fs.statSync(nextDir);
+      if (!nextStats.isDirectory()) {
+        throw new Error('目标路径必须是目录。');
+      }
+      if (fs.readdirSync(nextDir).length > 0) {
+        throw new Error('目标目录必须为空。');
+      }
+    }
+
+    try {
+      onProgress?.({
+        current: wasRunning ? 2 : 1,
+        total: totalSteps,
+        message: '正在迁移 IPFS 数据目录…',
+      });
+      if (fs.existsSync(currentDir)) {
+        try {
+          fs.renameSync(currentDir, nextDir);
+        } catch (error) {
+          const renameMessage = error instanceof Error ? error.message : String(error);
+          if (!/cross-device|exdev/i.test(renameMessage)) {
+            throw error;
+          }
+
+          fs.cpSync(currentDir, nextDir, {
+            recursive: true,
+            force: false,
+            errorOnExist: true,
+          });
+          fs.rmSync(currentDir, { recursive: true, force: true });
+        }
+      } else {
+        ensureDirExists(nextDir);
+      }
+
+      setWtbIpfsRepoDir(nextDir);
+      if (wasRunning) {
+        onProgress?.({
+          current: 3,
+          total: totalSteps,
+          message: '目录迁移完成，正在恢复 IPFS 服务…',
+        });
+        await this.start();
+      }
+
+      return { fromDir: currentDir, toDir: nextDir, restarted: wasRunning };
+    } catch (error) {
+      if (wasRunning) {
+        try {
+          await this.start();
+        } catch (restartError) {
+          this.options.logger.warn(
+            'Failed to restart ipfs after repo migration failure',
+            restartError,
+          );
+        }
+      }
+      throw error;
+    }
   }
 
   async start(): Promise<ServiceStatus> {
@@ -605,6 +753,116 @@ export class IpfsSidecarManager {
     config.Addresses = addresses;
 
     fs.writeFileSync(this.getConfigPath(), `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+  }
+
+  private readRepoStats(): {
+    repoSizeBytes: number | null;
+    storageMaxBytes: number | null;
+    numObjects: number | null;
+  } {
+    try {
+      if (!fs.existsSync(this.getConfigPath())) {
+        return {
+          repoSizeBytes: null,
+          storageMaxBytes: null,
+          numObjects: null,
+        };
+      }
+
+      const result = spawnSync(this.getExecutablePath(), ['repo', 'stat', '--enc=json'], {
+        cwd: path.dirname(this.getExecutablePath()),
+        env: {
+          ...process.env,
+          IPFS_PATH: this.getRepoDir(),
+        },
+        encoding: 'utf8',
+        windowsHide: true,
+      });
+      if (result.error || result.status !== 0) {
+        return {
+          repoSizeBytes: null,
+          storageMaxBytes: null,
+          numObjects: null,
+        };
+      }
+
+      const parsed = JSON.parse((result.stdout || '').toString()) as {
+        RepoSize?: number | string;
+        StorageMax?: number | string;
+        NumObjects?: number | string;
+      };
+      return {
+        repoSizeBytes: this.toFiniteNumber(parsed.RepoSize),
+        storageMaxBytes: this.toFiniteNumber(parsed.StorageMax),
+        numObjects: this.toFiniteNumber(parsed.NumObjects),
+      };
+    } catch {
+      return {
+        repoSizeBytes: null,
+        storageMaxBytes: null,
+        numObjects: null,
+      };
+    }
+  }
+
+  private readDiskStats(targetPath: string): {
+    availableBytes: number;
+    totalBytes: number;
+    usedBytes: number;
+  } | null {
+    try {
+      const fsWithStatFs = fs as typeof fs & {
+        statfsSync?: (path: string) => {
+          bavail: number;
+          blocks: number;
+          bsize: number;
+        };
+      };
+      if (typeof fsWithStatFs.statfsSync !== 'function') {
+        return null;
+      }
+
+      const existingPath = this.findNearestExistingPath(targetPath);
+      const statfs = fsWithStatFs.statfsSync(existingPath);
+      const totalBytes = statfs.blocks * statfs.bsize;
+      const availableBytes = statfs.bavail * statfs.bsize;
+      const usedBytes = Math.max(0, totalBytes - availableBytes);
+      return { totalBytes, availableBytes, usedBytes };
+    } catch {
+      return null;
+    }
+  }
+
+  private findNearestExistingPath(targetPath: string): string {
+    let currentPath = path.resolve(targetPath);
+    while (!fs.existsSync(currentPath)) {
+      const parentPath = path.dirname(currentPath);
+      if (parentPath === currentPath) {
+        return this.options.getWtbDataDir();
+      }
+      currentPath = parentPath;
+    }
+    return currentPath;
+  }
+
+  private getDirectorySizeBytes(targetPath: string): number {
+    if (!fs.existsSync(targetPath)) return 0;
+    const stats = fs.statSync(targetPath);
+    if (stats.isFile()) {
+      return stats.size;
+    }
+
+    let totalBytes = 0;
+    const entries = fs.readdirSync(targetPath, { withFileTypes: true });
+    entries.forEach((entry) => {
+      totalBytes += this.getDirectorySizeBytes(path.join(targetPath, entry.name));
+    });
+    return totalBytes;
+  }
+
+  private toFiniteNumber(value: number | string | undefined): number | null {
+    const nextValue = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(nextValue) ? nextValue : null;
   }
 
   private getCachedPathEntry(targetPath: string): PathCacheEntry | null {

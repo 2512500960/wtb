@@ -14,12 +14,6 @@ type IpfsDetailedStatus = {
   addresses: string[];
 };
 
-type PathResult = {
-  ok: boolean;
-  path?: string;
-  error?: string;
-};
-
 type IpfsSwarmPeer = {
   peerId: string;
   address: string;
@@ -158,7 +152,6 @@ export default function SiteServicesPage() {
   );
   const [webActivity, setWebActivity] =
     React.useState<WebActivitySnapshot>(EMPTY_WEB_ACTIVITY);
-  const [webRootDir, setWebRootDir] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState<ServiceName | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -173,13 +166,11 @@ export default function SiteServicesPage() {
       const [
         serviceList,
         detailedIpfs,
-        webDirResult,
         webActivityResult,
         ipfsPeerList,
       ] = await Promise.all([
         window.electron.ipcRenderer.invoke('services:getAll'),
         window.electron.ipcRenderer.invoke('ipfs:statusDetailed'),
-        window.electron.ipcRenderer.invoke('wtb:web:getDir'),
         window.electron.ipcRenderer
           .invoke('wtb:web:getActivity')
           .catch(() => EMPTY_WEB_ACTIVITY),
@@ -194,12 +185,6 @@ export default function SiteServicesPage() {
       setIpfsSwarmPeers(
         Array.isArray(ipfsPeerList) ? (ipfsPeerList as IpfsSwarmPeer[]) : [],
       );
-
-      const dirRes = webDirResult as PathResult;
-      setWebRootDir(dirRes.ok ? (dirRes.path ?? null) : null);
-      if (!dirRes.ok && dirRes.error) {
-        setError(dirRes.error);
-      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -254,21 +239,6 @@ export default function SiteServicesPage() {
       setBusy(null);
     }
   }, [refresh]);
-
-  const openDir = React.useCallback(async (name: ServiceName) => {
-    setError(null);
-    try {
-      const res = (await window.electron.ipcRenderer.invoke(
-        'services:openDir',
-        name,
-      )) as { ok: boolean; error?: string };
-      if (res && typeof res === 'object' && res.ok === false) {
-        throw new Error(res.error || '打开目录失败');
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }, []);
 
   const openExternal = React.useCallback((url: string) => {
     try {
@@ -365,13 +335,6 @@ export default function SiteServicesPage() {
                   <button
                     type="button"
                     className="ServiceGhostButton"
-                    onClick={() => openDir('web')}
-                  >
-                    查看目录
-                  </button>
-                  <button
-                    type="button"
-                    className="ServiceGhostButton"
                     disabled={!webRunning || !webUrl}
                     onClick={() => {
                       if (!webUrl) return;
@@ -426,10 +389,6 @@ export default function SiteServicesPage() {
                   </button>
                 </div>
                 <div className="SiteInfoRow">
-                  <div className="SiteInfoLabel">根目录</div>
-                  <div className="SiteInfoValue">{webRootDir ?? '—'}</div>
-                </div>
-                <div className="SiteInfoRow">
                   <div className="SiteInfoLabel">活跃客户端</div>
                   <div className="SiteInfoValue">
                     最近 {webActivity.activeWindowMinutes} 分钟内{' '}
@@ -476,13 +435,6 @@ export default function SiteServicesPage() {
                 </div>
 
                 <div className="ServiceActions SiteServiceActions">
-                  <button
-                    type="button"
-                    className="ServiceGhostButton"
-                    onClick={() => openDir('ipfs')}
-                  >
-                    查看目录
-                  </button>
                   <button
                     type="button"
                     className="ServiceGhostButton"

@@ -17,6 +17,7 @@ import type {
 import { ensureDefaultWebAssets } from './web_assets';
 import {
   listWebContentDirectoryEntries,
+  migrateWebContentToManagedIpfs,
   resolveWebContentPath,
 } from './web_content_sources';
 import { buildWebResourceManifest } from './web_resource_manifest';
@@ -196,6 +197,10 @@ export class WebServiceManager {
     ensureDirExists(webRoot);
     await ensureDefaultWebAssets(this.options.app, webRoot);
     ensureMediaDirs(webRoot);
+    await migrateWebContentToManagedIpfs({
+      webRoot,
+      ipfsManager: this.options.ipfsManager,
+    });
 
     const server = http.createServer(async (req, res) => {
       try {
@@ -331,6 +336,34 @@ export class WebServiceManager {
             res.setHeader('Location', `${urlPath}/`);
             res.end();
             return;
+          }
+
+          try {
+            const indexResolvedPath = resolveWebContentPath({
+              webRoot,
+              requestedPath: path.posix.join(urlPath, 'index.html'),
+            });
+            if (indexResolvedPath.kind === 'ipfs-file') {
+              await this.respondWithIpfsBackedFile(
+                req,
+                res,
+                method,
+                indexResolvedPath.cid,
+              );
+              return;
+            }
+            if (indexResolvedPath.kind === 'local-file') {
+              this.respondWithLocalFile(
+                req,
+                res,
+                method,
+                indexResolvedPath.fsPath,
+                indexResolvedPath.stat,
+              );
+              return;
+            }
+          } catch {
+            // ignore missing index.html and fall back to physical index or directory listing
           }
 
           if (resolvedPath.physical && resolvedPath.entry.fsPath) {
@@ -481,13 +514,19 @@ export class WebServiceManager {
     if (trimmedPath === '/health') return;
 
     const remoteAddress = this.normalizeRemoteAddress(req.socket.remoteAddress);
-    const rawUserAgent = req.headers['user-agent'];
-    const userAgent =
-      typeof rawUserAgent === 'string'
-        ? rawUserAgent.trim().slice(0, 160)
-        : Array.isArray(rawUserAgent) && typeof rawUserAgent[0] === 'string'
-          ? rawUserAgent[0].trim().slice(0, 160)
-          : '';
+    const rawUserAgent = req.headers['user-agent'] as
+      | string
+      | string[]
+      | undefined;
+    let userAgent = '';
+    if (typeof rawUserAgent === 'string') {
+      userAgent = rawUserAgent.trim().slice(0, 160);
+    } else if (Array.isArray(rawUserAgent)) {
+      const firstUserAgent = rawUserAgent.find(
+        (value): value is string => typeof value === 'string',
+      );
+      userAgent = firstUserAgent ? firstUserAgent.trim().slice(0, 160) : '';
+    }
     const method = (req.method || 'GET').toUpperCase();
     const pathText = trimmedPath.slice(0, 240);
 
