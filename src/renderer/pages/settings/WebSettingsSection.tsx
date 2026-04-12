@@ -41,6 +41,18 @@ type IpfsStorageSummary = {
   diskUsedBytes: number | null;
 };
 
+type LegacyWebCompatibilityStatus = {
+  bundledShellAvailable: boolean;
+  legacyPageReady: boolean;
+  hasLegacyIndex: boolean;
+  hasVendorDir: boolean;
+  hasVendorPlyrCss: boolean;
+  hasVendorPlyrJs: boolean;
+  hasFilesDir: boolean;
+  hasVideoDir: boolean;
+  missing: string[];
+};
+
 type RepoMigrationResult = {
   fromDir: string;
   toDir: string;
@@ -56,6 +68,8 @@ type TaskProgressPayload = {
   stage: 'running' | 'completed' | 'failed';
   current: number;
   total: number;
+  currentBytes?: number;
+  totalBytes?: number;
   message: string;
 };
 
@@ -123,13 +137,80 @@ const getProgressPercent = (
 ): number | null => {
   if (!taskProgress) return null;
   if (taskProgress.stage === 'completed') return 100;
+
+  if (
+    Number.isFinite(taskProgress.currentBytes) &&
+    taskProgress.currentBytes != null &&
+    Number.isFinite(taskProgress.totalBytes) &&
+    taskProgress.totalBytes != null &&
+    taskProgress.totalBytes > 0
+  ) {
+    const ratio = (taskProgress.currentBytes / taskProgress.totalBytes) * 100;
+    return Math.max(0, Math.min(100, ratio));
+  }
+
   if (taskProgress.total <= 0) return null;
   const ratio = (taskProgress.current / taskProgress.total) * 100;
   return Math.max(0, Math.min(100, ratio));
 };
 
+function ModalShell({
+  title,
+  open,
+  onClose,
+  children,
+}: {
+  title: string;
+  open: boolean;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="ChatModalOverlay"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <div className="ChatModal" role="dialog" aria-modal="true">
+        <div className="ChatModalHeader">
+          <div className="ChatModalTitle">{title}</div>
+          <button
+            type="button"
+            className="ServiceGhostButton"
+            onClick={onClose}
+          >
+            关闭
+          </button>
+        </div>
+        <div className="ChatModalBody">{children}</div>
+      </div>
+    </div>
+  );
+}
+
 export default function WebSettingsSection() {
   const fileManagerThemeRef = React.useRef<HTMLDivElement | null>(null);
+  const uploadMenuRef = React.useRef<HTMLDivElement | null>(null);
   const [loadingEntries, setLoadingEntries] = React.useState(false);
   const [storageBusy, setStorageBusy] = React.useState(false);
   const [operationBusy, setOperationBusy] = React.useState(false);
@@ -139,6 +220,8 @@ export default function WebSettingsSection() {
   const [entries, setEntries] = React.useState<ManagedWebEntry[]>([]);
   const [storageSummary, setStorageSummary] =
     React.useState<IpfsStorageSummary | null>(null);
+  const [compatibilityStatus, setCompatibilityStatus] =
+    React.useState<LegacyWebCompatibilityStatus | null>(null);
   const [currentManagerPath, setCurrentManagerPath] =
     React.useState(ROOT_MANAGER_PATH);
   const [selectedFiles, setSelectedFiles] = React.useState<ManagerFileItem[]>(
@@ -149,6 +232,7 @@ export default function WebSettingsSection() {
     React.useState<TaskProgressPayload | null>(null);
   const [toolbarActionsHost, setToolbarActionsHost] =
     React.useState<HTMLElement | null>(null);
+  const [uploadMenuOpen, setUploadMenuOpen] = React.useState(false);
 
   const refreshStorageSummary = React.useCallback(async () => {
     setStorageBusy(true);
@@ -161,6 +245,26 @@ export default function WebSettingsSection() {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setStorageBusy(false);
+    }
+  }, []);
+
+  const refreshCompatibilityStatus = React.useCallback(async () => {
+    try {
+      const res = (await window.electron.ipcRenderer.invoke(
+        'wtb:web:getCompatibilityStatus',
+      )) as {
+        ok?: boolean;
+        error?: string;
+        status?: LegacyWebCompatibilityStatus;
+      };
+      if (!res?.ok || !res.status) {
+        setError(res?.error ?? '读取旧静态页兼容状态失败');
+        return;
+      }
+
+      setCompatibilityStatus(res.status);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     }
   }, []);
 
@@ -219,8 +323,9 @@ export default function WebSettingsSection() {
       setError(null);
       await refreshEntries(options);
       await refreshStorageSummary();
+      await refreshCompatibilityStatus();
     },
-    [refreshEntries, refreshStorageSummary],
+    [refreshCompatibilityStatus, refreshEntries, refreshStorageSummary],
   );
 
   React.useEffect(() => {
@@ -288,6 +393,27 @@ export default function WebSettingsSection() {
     };
   }, [managerResetKey]);
 
+  React.useEffect(() => {
+    if (!uploadMenuOpen) {
+      return undefined;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (
+        uploadMenuRef.current &&
+        event.target instanceof Node &&
+        !uploadMenuRef.current.contains(event.target)
+      ) {
+        setUploadMenuOpen(false);
+      }
+    };
+
+    window.addEventListener('mousedown', handlePointerDown);
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown);
+    };
+  }, [uploadMenuOpen]);
+
   const managerFiles = React.useMemo(
     () => entries.map(toManagerFile),
     [entries],
@@ -354,7 +480,24 @@ export default function WebSettingsSection() {
     [storageSummary],
   );
 
+  const compatibilitySummary = React.useMemo(() => {
+    if (!compatibilityStatus) {
+      return '检查中';
+    }
+
+    if (compatibilityStatus.legacyPageReady) {
+      return '旧静态页可用';
+    }
+
+    if (!compatibilityStatus.bundledShellAvailable) {
+      return '内置旧页面模板缺失';
+    }
+
+    return `缺少 ${compatibilityStatus.missing.join('、')}`;
+  }, [compatibilityStatus]);
+
   const importFiles = React.useCallback(async () => {
+    setUploadMenuOpen(false);
     setError(null);
     setMessage(null);
     setOperationBusy(true);
@@ -389,6 +532,7 @@ export default function WebSettingsSection() {
   }, [currentWebPath, refreshAll]);
 
   const importDirectory = React.useCallback(async () => {
+    setUploadMenuOpen(false);
     setError(null);
     setMessage(null);
     setOperationBusy(true);
@@ -622,6 +766,32 @@ export default function WebSettingsSection() {
     taskProgress,
   });
   const progressPercent = getProgressPercent(taskProgress);
+  const importTaskProgress = React.useMemo(() => {
+    if (
+      taskProgress?.operation === 'import-files' ||
+      taskProgress?.operation === 'import-directory'
+    ) {
+      return taskProgress;
+    }
+
+    return null;
+  }, [taskProgress]);
+  const importTaskPercent = getProgressPercent(importTaskProgress);
+  const importTaskStageLabel = React.useMemo(() => {
+    if (!importTaskProgress) {
+      return '';
+    }
+
+    if (importTaskProgress.stage === 'running') {
+      return '处理中';
+    }
+
+    if (importTaskProgress.stage === 'completed') {
+      return '已完成';
+    }
+
+    return '失败';
+  }, [importTaskProgress]);
   const busy = storageBusy || loadingEntries || operationBusy;
 
   return (
@@ -670,13 +840,12 @@ export default function WebSettingsSection() {
 
       <div style={{ padding: '10px 0' }}>
         <div style={{ marginTop: 8, opacity: 0.82, lineHeight: 1.7 }}>
-          页面现在围绕统一 IPFS
-          存储工作：上传文件和上传目录已经并入文件管理器工具栏，但实际导入仍然走后台
-          IPC，避免把 Kubo 相关重活放在 renderer 线程里阻塞界面。
+          页面现在围绕统一 IPFS 存储工作展开，文件管理器里保留单一上传入口，
+          但实际导入仍然走 main 进程和后台 IPC 管道。
         </div>
         <div style={{ marginTop: 8, opacity: 0.82, lineHeight: 1.7 }}>
-          组件自带的删除确认已经保留，所以页面外层不再重复确认。文件管理器里看到的上传入口现在只是统一触发桌面端选择器和后台导入管道，不会退回浏览器内
-          HTTP 直传；导入和迁移任务的进度也继续沿着这条后台任务链回传到页面。
+          组件自带的删除确认已经保留，所以页面外层不再重复确认。上传入口展开后可选择导入文件或目录，
+          目录管理、进度显示和 CID 相关操作保持不变。
         </div>
 
         {error ? (
@@ -766,6 +935,20 @@ export default function WebSettingsSection() {
               {storageSummary?.running ? '运行中' : '未运行'}
             </div>
           </div>
+
+          <div
+            className="WebStorageCard WebStorageCardWide"
+            style={{ visibility: 'hidden' }}
+          >
+            <div className="WebStorageLabel">旧静态页兼容</div>
+            <div className="WebStorageValue">
+              {compatibilityStatus?.legacyPageReady ? '已就绪' : '待补齐'}
+            </div>
+            <div className="WebStorageMeta">{compatibilitySummary}</div>
+            <div className="WebStorageMeta" style={{ marginTop: 6 }}>
+              需要保留的壳文件：index.html、vendor/plyr.*、files/、video/
+            </div>
+          </div>
         </div>
       </div>
 
@@ -782,8 +965,8 @@ export default function WebSettingsSection() {
         </div>
 
         <div style={{ opacity: 0.8, lineHeight: 1.6 }}>
-          文件管理器负责目录浏览、重命名、删除、拖拽移动和复制。上传文件和上传目录现在也已经收进工具栏，依旧触发后台
-          IPC 任务，避免和当前的桌面端导入管道分叉。
+          文件管理器负责目录浏览、重命名、删除、拖拽移动和复制。工具栏里的上传入口会继续走后台
+          IPC 任务，并在菜单中区分导入文件还是目录，避免退回浏览器内 HTTP 直传。
         </div>
 
         <div
@@ -823,7 +1006,7 @@ export default function WebSettingsSection() {
             primaryColor="var(--primary-color, #000000)"
             permissions={{
               create: true,
-              upload: true,
+              upload: false,
               move: true,
               copy: true,
               rename: true,
@@ -844,37 +1027,108 @@ export default function WebSettingsSection() {
           />
           {toolbarActionsHost
             ? createPortal(
-                <>
+                <div ref={uploadMenuRef} className="WebFileManagerUploadEntry">
                   <button
                     type="button"
                     className="item-action WebFileManagerToolbarAction"
                     onClick={() => {
-                      importFiles().catch(() => {
-                        // ignore
-                      });
+                      setUploadMenuOpen((current) => !current);
                     }}
                     disabled={busy}
                   >
-                    <span>上传文件</span>
+                    <span>上传</span>
                   </button>
-                  <button
-                    type="button"
-                    className="item-action WebFileManagerToolbarAction"
-                    onClick={() => {
-                      importDirectory().catch(() => {
-                        // ignore
-                      });
-                    }}
-                    disabled={busy}
-                  >
-                    <span>上传目录</span>
-                  </button>
-                </>,
+                  {uploadMenuOpen ? (
+                    <div className="WebFileManagerUploadMenu">
+                      <button
+                        type="button"
+                        className="WebFileManagerUploadMenuItem"
+                        onClick={() => {
+                          importFiles().catch(() => {
+                            // ignore
+                          });
+                        }}
+                        disabled={busy}
+                      >
+                        上传文件
+                      </button>
+                      <button
+                        type="button"
+                        className="WebFileManagerUploadMenuItem"
+                        onClick={() => {
+                          importDirectory().catch(() => {
+                            // ignore
+                          });
+                        }}
+                        disabled={busy}
+                      >
+                        上传目录
+                      </button>
+                    </div>
+                  ) : null}
+                </div>,
                 toolbarActionsHost,
               )
             : null}
         </div>
       </div>
+
+      <ModalShell
+        title={
+          importTaskProgress?.operation === 'import-directory'
+            ? '导入目录'
+            : '上传文件'
+        }
+        open={!!importTaskProgress}
+        onClose={() => {
+          if (importTaskProgress?.stage === 'running') {
+            return;
+          }
+          setTaskProgress((current) => {
+            if (
+              current?.operation === 'import-files' ||
+              current?.operation === 'import-directory'
+            ) {
+              return null;
+            }
+            return current;
+          });
+        }}
+      >
+        {importTaskProgress ? (
+          <div className="WebImportProgressDialog">
+            <div className="WebImportProgressStatusRow">
+              <div className="WebImportProgressStage">
+                {importTaskStageLabel}
+              </div>
+              <div className="WebImportProgressCount">
+                {importTaskProgress.total > 0
+                  ? `${importTaskProgress.current}/${importTaskProgress.total}`
+                  : '等待中'}
+              </div>
+            </div>
+
+            <div
+              className={`WebStorageProgressBar${
+                importTaskPercent == null
+                  ? ' WebStorageProgressBarIndeterminate'
+                  : ''
+              }`}
+            >
+              {importTaskPercent != null ? (
+                <div
+                  className="WebStorageProgressBarFill"
+                  style={{ width: `${importTaskPercent}%` }}
+                />
+              ) : null}
+            </div>
+
+            <div className="WebImportProgressMessage">
+              {importTaskProgress.message}
+            </div>
+          </div>
+        ) : null}
+      </ModalShell>
     </div>
   );
 }

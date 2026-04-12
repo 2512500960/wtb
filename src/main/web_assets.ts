@@ -4,9 +4,20 @@ import path from 'path';
 
 import { ensureDirAsync, pathExists } from './fs_utils';
 import { getWtbConfig } from './wtb_config';
-import { log } from 'console';
 
 const MANAGED_WEB_MANIFEST_NAME = '.wtb-content-sources.json';
+
+export type LegacyWebCompatibilityStatus = {
+  bundledShellAvailable: boolean;
+  legacyPageReady: boolean;
+  hasLegacyIndex: boolean;
+  hasVendorDir: boolean;
+  hasVendorPlyrCss: boolean;
+  hasVendorPlyrJs: boolean;
+  hasFilesDir: boolean;
+  hasVideoDir: boolean;
+  missing: string[];
+};
 
 export const copyDirIfMissing = async (
   srcDir: string,
@@ -22,8 +33,6 @@ export const copyDirIfMissing = async (
     await cp(srcDir, dstDir, { recursive: true });
     return;
   }
-  // 日志输出srcDir和dstDir，帮助调试 --- IGNORE ---
-  log(`copyDirIfMissing: copying from ${srcDir} to ${dstDir}`);
   const entries = await fs.promises.readdir(srcDir, { withFileTypes: true });
   await ensureDirAsync(dstDir);
   await Promise.all(
@@ -105,7 +114,7 @@ export const getBundledElementDir = (app: App): string => {
 export const getBundledWebDir = (app: App): string => {
   return app.isPackaged
     ? path.join(process.resourcesPath, 'assets', 'web')
-    : path.join(__dirname, '../../wtb-data', 'web');
+    : path.join(__dirname, '../../assets', 'web');
 };
 
 export const getUserCinnyDir = (app: App): string => {
@@ -120,17 +129,6 @@ export const ensureDefaultWebAssets = async (
   app: App,
   webRoot: string,
 ): Promise<void> => {
-  try {
-    const cfg = getWtbConfig();
-    const override =
-      cfg?.web?.assetsDir && cfg.web.assetsDir.trim()
-        ? cfg.web.assetsDir.trim()
-        : '';
-    if (override) return;
-  } catch {
-    // ignore
-  }
-
   const bundledDir = getBundledWebDir(app);
   if (!(await pathExists(path.join(bundledDir, 'index.html')))) return;
 
@@ -138,20 +136,58 @@ export const ensureDefaultWebAssets = async (
   const webRootResolved = path.resolve(webRoot).toLowerCase();
   if (bundledResolved === webRootResolved) return;
 
+  await copyDirContentsIfMissing(bundledDir, webRoot);
+  await ensureDirAsync(path.join(webRoot, 'files'));
+  await ensureDirAsync(path.join(webRoot, 'video'));
+
   const manifestPath = path.join(webRoot, MANAGED_WEB_MANIFEST_NAME);
-  if (await pathExists(manifestPath)) {
-    try {
-      const raw = await fs.promises.readFile(manifestPath, { encoding: 'utf8' });
-      const parsed = JSON.parse(raw) as { entries?: Record<string, unknown> };
-      if (parsed.entries && Object.keys(parsed.entries).length > 0) {
-        return;
-      }
-    } catch {
-      // ignore and fall through to copy
-    }
+  if (!(await pathExists(manifestPath))) {
+    return;
   }
 
-  await copyDirContentsIfMissing(bundledDir, webRoot);
+  try {
+    const raw = await fs.promises.readFile(manifestPath, { encoding: 'utf8' });
+    const parsed = JSON.parse(raw) as { entries?: Record<string, unknown> };
+    if (parsed.entries && Object.keys(parsed.entries).length > 0) {
+      return;
+    }
+  } catch {
+    // ignore invalid manifests; static shell has already been seeded above
+  }
+};
+
+export const inspectLegacyWebCompatibility = async (
+  app: App,
+  webRoot: string,
+): Promise<LegacyWebCompatibilityStatus> => {
+  const bundledDir = getBundledWebDir(app);
+  const bundledShellAvailable = await pathExists(path.join(bundledDir, 'index.html'));
+  const hasLegacyIndex = await pathExists(path.join(webRoot, 'index.html'));
+  const hasVendorDir = await pathExists(path.join(webRoot, 'vendor'));
+  const hasVendorPlyrCss = await pathExists(path.join(webRoot, 'vendor', 'plyr.css'));
+  const hasVendorPlyrJs = await pathExists(path.join(webRoot, 'vendor', 'plyr.min.js'));
+  const hasFilesDir = await pathExists(path.join(webRoot, 'files'));
+  const hasVideoDir = await pathExists(path.join(webRoot, 'video'));
+
+  const missing: string[] = [];
+  if (!hasLegacyIndex) missing.push('index.html');
+  if (!hasVendorDir) missing.push('vendor/');
+  if (!hasVendorPlyrCss) missing.push('vendor/plyr.css');
+  if (!hasVendorPlyrJs) missing.push('vendor/plyr.min.js');
+  if (!hasFilesDir) missing.push('files/');
+  if (!hasVideoDir) missing.push('video/');
+
+  return {
+    bundledShellAvailable,
+    legacyPageReady: missing.length === 0,
+    hasLegacyIndex,
+    hasVendorDir,
+    hasVendorPlyrCss,
+    hasVendorPlyrJs,
+    hasFilesDir,
+    hasVideoDir,
+    missing,
+  };
 };
 
 export const ensureCinnyConfig = async (cinnyDir: string): Promise<void> => {

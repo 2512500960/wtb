@@ -35,6 +35,7 @@ import { registerMiscIpc } from './register_misc_ipc';
 import { registerRemoteResourcesIpc } from './register_remote_resources_ipc';
 import { registerServiceIpc } from './register_service_ipc';
 import { registerYggIpc } from './register_ygg_ipc';
+import { ensureDirExists } from './fs_utils';
 import {
   createManagedWebDirectory,
   deleteManagedWebEntry,
@@ -57,6 +58,11 @@ import {
   type ServiceStatus,
 } from './service_types';
 import { WebServiceManager } from './web_service_manager';
+import { ensureMediaDirs } from './mediaServer';
+import {
+  ensureDefaultWebAssets,
+  inspectLegacyWebCompatibility,
+} from './web_assets';
 import { YggdrasilManager } from './yggdrasil_manager';
 import { YggPeerCoordinator } from './ygg_peer_coordinator';
 import { WEBSITE_INDEX_ED25519_PUBLIC_KEY_PEM } from './website_index_pubkey';
@@ -358,6 +364,13 @@ const getWebRootDir = (): string => {
   return webServiceManager.getRootDir();
 };
 
+const prepareWebRootDir = async (): Promise<void> => {
+  const webRoot = getWebRootDir();
+  ensureDirExists(webRoot);
+  await ensureDefaultWebAssets(app, webRoot);
+  ensureMediaDirs(webRoot);
+};
+
 const startWebService = async (): Promise<ServiceStatus> => {
   return await webServiceManager.start();
 };
@@ -434,7 +447,10 @@ registerEmbeddedAppsIpc({
 registerMiscIpc({
   getWebRootDir,
   getWebActivity: () => webServiceManager.getActivitySnapshot(),
+  getWebCompatibilityStatus: async () =>
+    await inspectLegacyWebCompatibility(app, getWebRootDir()),
   setWebAssetsDir: setWtbWebAssetsDir,
+  prepareWebRootDir,
   getWebStatus,
   stopWebService,
   startWebService,
@@ -528,10 +544,11 @@ registerMiscIpc({
       ipfsManager,
       onProgress,
     }),
-  deleteManagedWebEntry: (requestedPath: string) =>
-    deleteManagedWebEntry({
+  deleteManagedWebEntry: async (requestedPath: string) =>
+    await deleteManagedWebEntry({
       webRoot: getWebRootDir(),
       requestedPath,
+      ipfsManager,
     }),
   notifyTaskProgress,
 });

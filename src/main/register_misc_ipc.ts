@@ -11,15 +11,19 @@ type TaskProgressPayload = {
   stage: 'running' | 'completed' | 'failed';
   current: number;
   total: number;
+  currentBytes?: number;
+  totalBytes?: number;
   message: string;
 };
 
 export const registerMiscIpc = (options: {
   getWebRootDir: () => string;
   getWebActivity: () => unknown;
+  getWebCompatibilityStatus: () => Promise<unknown>;
   setWebAssetsDir: (dir: string | null) => {
     web?: { assetsDir?: string | null };
   };
+  prepareWebRootDir: () => Promise<void>;
   getWebStatus: () => { state: 'running' | 'stopped'; details?: string };
   stopWebService: () => Promise<unknown>;
   startWebService: () => Promise<unknown>;
@@ -87,11 +91,26 @@ export const registerMiscIpc = (options: {
     }
   });
 
+  ipcMain.handle('wtb:web:getCompatibilityStatus', async () => {
+    try {
+      return {
+        ok: true,
+        status: await options.getWebCompatibilityStatus(),
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
   ipcMain.handle('wtb:web:setDir', async (_event, dir: string | null) => {
     try {
       const result = options.setWebAssetsDir(
         dir && typeof dir === 'string' ? dir : null,
       );
+      await options.prepareWebRootDir();
       const webStatus = options.getWebStatus();
       if (webStatus.state === 'running') {
         await options.stopWebService();

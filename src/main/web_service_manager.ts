@@ -18,6 +18,7 @@ import { ensureDefaultWebAssets } from './web_assets';
 import {
   listWebContentDirectoryEntries,
   migrateWebContentToManagedIpfs,
+  normalizeReservedLocalWebPaths,
   resolveWebContentPath,
 } from './web_content_sources';
 import { buildWebResourceManifest } from './web_resource_manifest';
@@ -69,6 +70,28 @@ export type WebServiceActivitySnapshot = {
 const WEB_ACTIVITY_MAX_RECORDS = 120;
 const WEB_ACTIVITY_ACTIVE_WINDOW_MS = 10 * 60 * 1000;
 const WTB_SERVICE_HEADER_VALUE = 'web; version=1';
+
+const isResponseClosed = (res: http.ServerResponse): boolean => {
+  return res.writableEnded || res.destroyed;
+};
+
+const endProxyErrorResponse = (
+  res: http.ServerResponse,
+  method: string,
+): void => {
+  if (isResponseClosed(res)) {
+    return;
+  }
+
+  if (res.headersSent) {
+    res.destroy();
+    return;
+  }
+
+  res.statusCode = 502;
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.end(method === 'HEAD' ? undefined : 'Bad Gateway');
+};
 
 export class WebServiceManager {
   private server: http.Server | null = null;
@@ -196,6 +219,10 @@ export class WebServiceManager {
 
     ensureDirExists(webRoot);
     await ensureDefaultWebAssets(this.options.app, webRoot);
+    await normalizeReservedLocalWebPaths({
+      webRoot,
+      ipfsManager: this.options.ipfsManager,
+    });
     ensureMediaDirs(webRoot);
     await migrateWebContentToManagedIpfs({
       webRoot,
@@ -349,6 +376,7 @@ export class WebServiceManager {
                 res,
                 method,
                 indexResolvedPath.cid,
+                indexResolvedPath.entry.mime,
               );
               return;
             }
@@ -396,7 +424,13 @@ export class WebServiceManager {
         }
 
         if (resolvedPath.kind === 'ipfs-file') {
-          await this.respondWithIpfsBackedFile(req, res, method, resolvedPath.cid);
+          await this.respondWithIpfsBackedFile(
+            req,
+            res,
+            method,
+            resolvedPath.cid,
+            resolvedPath.entry.mime,
+          );
           return;
         }
 
@@ -643,6 +677,7 @@ export class WebServiceManager {
     res: http.ServerResponse,
     method: string,
     cid: string,
+    contentType?: string,
   ): Promise<void> {
     this.applyWtbResponseHeaders(res);
     if (this.options.ipfsManager.getServiceStatus().state !== 'running') {
@@ -655,6 +690,25 @@ export class WebServiceManager {
     const gatewayUrl = new URL(`/ipfs/${encodeURIComponent(cid)}`, this.options.ipfsManager.getGatewayBaseUrl());
 
     await new Promise<void>((resolve) => {
+      let settled = false;
+      const resolveOnce = () => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        resolve();
+      };
+
+      const failProxyRequest = () => {
+        try {
+          endProxyErrorResponse(res, method);
+        } catch {
+          // ignore
+        }
+        resolveOnce();
+      };
+
       const upstream = http.request(
         {
           method,
@@ -669,48 +723,41 @@ export class WebServiceManager {
         },
         (upstreamRes) => {
           this.copyProxyHeaders(upstreamRes, res);
+          if (contentType) {
+            res.setHeader('Content-Type', contentType);
+          }
           res.statusCode = upstreamRes.statusCode || 502;
 
           if (method === 'HEAD') {
             upstreamRes.resume();
-            res.end();
-            resolve();
+            if (!isResponseClosed(res)) {
+              res.end();
+            }
+            resolveOnce();
             return;
           }
 
-          upstreamRes.on('error', () => {
-            try {
-              if (!res.headersSent) {
-                res.statusCode = 502;
-                res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-              }
-              res.end('Bad Gateway');
-            } catch {
-              // ignore
-            }
-            resolve();
+          upstreamRes.once('error', () => {
+            upstream.destroy();
+            failProxyRequest();
           });
 
           upstreamRes.pipe(res);
-          upstreamRes.on('end', () => resolve());
+          upstreamRes.once('end', () => resolveOnce());
         },
       );
+
+      res.once('close', () => {
+        upstream.destroy();
+        resolveOnce();
+      });
 
       upstream.on('timeout', () => {
         upstream.destroy(new Error('ipfs gateway request timed out'));
       });
 
-      upstream.on('error', () => {
-        try {
-          if (!res.headersSent) {
-            res.statusCode = 502;
-            res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-          }
-          res.end('Bad Gateway');
-        } catch {
-          // ignore
-        }
-        resolve();
+      upstream.once('error', () => {
+        failProxyRequest();
       });
 
       upstream.end();

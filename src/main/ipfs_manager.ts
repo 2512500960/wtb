@@ -11,7 +11,6 @@ import {
 import { ensureDirExists } from './fs_utils';
 import type { ServiceStatus } from './service_types';
 import { getWtbConfig, setWtbIpfsRepoDir } from './wtb_config';
-import { debug, log } from 'console';
 
 type LoggerLike = {
   info: (...args: unknown[]) => void;
@@ -50,6 +49,13 @@ export type IpfsStorageSummary = {
   diskUsedBytes: number | null;
 };
 
+export type IpfsCidReleaseResult = {
+  releasedCids: string[];
+  failedCids: Array<{ cid: string; error: string }>;
+  gcCompleted: boolean;
+  gcError?: string;
+};
+
 const DEFAULT_API_PORT = 5001;
 const DEFAULT_GATEWAY_PORT = 8080;
 
@@ -62,8 +68,75 @@ type PathCacheEntry = {
   wrapWithDirectory: boolean;
 };
 
+type AddPathProgress = {
+  loadedBytes: number;
+  totalBytes: number;
+};
+
+type ImportCandidate = {
+  path: string;
+  content?: NodeJS.ReadableStream;
+};
+
+type AddResult = {
+  cid: { toString(): string };
+};
+
+type KuboRPCClient = {
+  add: (
+    candidate: ImportCandidate,
+    options?: { pin?: boolean },
+  ) => Promise<AddResult>;
+  addAll: (
+    candidates: Iterable<ImportCandidate> | AsyncIterable<ImportCandidate>,
+    options?: { pin?: boolean; wrapWithDirectory?: boolean },
+  ) => AsyncIterable<AddResult>;
+};
+
+const toPosixRelativePath = (inputPath: string): string => {
+  return inputPath.split(path.sep).join('/');
+};
+
+function* createDirectoryImportCandidates(
+  rootPath: string,
+): Generator<ImportCandidate> {
+  const rootName = path.basename(rootPath);
+
+  yield { path: rootName };
+
+  const visit = function* (currentPath: string): Generator<ImportCandidate> {
+    const entries = fs.readdirSync(currentPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const childPath = path.join(currentPath, entry.name);
+      const relativePath = toPosixRelativePath(path.relative(rootPath, childPath));
+      const importPath = path.posix.join(rootName, relativePath);
+
+      if (entry.isDirectory()) {
+        yield { path: importPath };
+        yield* visit(childPath);
+        continue;
+      }
+
+      if (!entry.isFile()) {
+        continue;
+      }
+
+      yield {
+        path: importPath,
+        content: fs.createReadStream(childPath),
+      };
+    }
+  };
+
+  yield* visit(rootPath);
+}
+
 export class IpfsSidecarManager {
   private childProcess: ChildProcess | null = null;
+
+  private rpcClient: KuboRPCClient | null = null;
+
+  private resolvedRepoDir: string | null = null;
 
   constructor(
     private readonly options: {
@@ -75,14 +148,20 @@ export class IpfsSidecarManager {
   ) {}
 
   getRepoDir(): string {
-    const configuredRepoDir = getWtbConfig().ipfs?.repoDir?.trim();
-    if (configuredRepoDir) {
-      return path.isAbsolute(configuredRepoDir)
-        ? configuredRepoDir
-        : path.resolve(this.options.getWtbDataDir(), configuredRepoDir);
+    if (this.resolvedRepoDir) {
+      return this.resolvedRepoDir;
     }
 
-    return path.join(this.options.getWtbDataDir(), 'ipfs');
+    const configuredRepoDir = getWtbConfig().ipfs?.repoDir?.trim();
+    if (configuredRepoDir) {
+      this.resolvedRepoDir = path.isAbsolute(configuredRepoDir)
+        ? configuredRepoDir
+        : path.resolve(this.options.getWtbDataDir(), configuredRepoDir);
+      return this.resolvedRepoDir;
+    }
+
+    this.resolvedRepoDir = this.getDefaultRepoDir();
+    return this.resolvedRepoDir;
   }
 
   getApiBaseUrl(): string {
@@ -201,7 +280,18 @@ export class IpfsSidecarManager {
 
     const repoStats = this.readRepoStats();
     const diskStats = this.readDiskStats(repoDir);
-    const repoSizeBytes = repoStats.repoSizeBytes ?? this.getDirectorySizeBytes(repoDir);
+    let repoSizeBytes = repoStats.repoSizeBytes;
+    if (repoSizeBytes == null) {
+      try {
+        repoSizeBytes = this.getDirectorySizeBytes(repoDir);
+      } catch (error) {
+        this.options.logger.warn(
+          'Failed to estimate IPFS repo size from directory traversal',
+          error,
+        );
+        repoSizeBytes = 0;
+      }
+    }
 
     return {
       running: this.getServiceStatus().state === 'running',
@@ -431,7 +521,10 @@ export class IpfsSidecarManager {
 
   async addPath(
     targetPath: string,
-    options?: { wrapWithDirectory?: boolean },
+    options?: {
+      wrapWithDirectory?: boolean;
+      onProgress?: (progress: AddPathProgress) => void;
+    },
   ): Promise<{ cid: string; path: string }> {
     const missingBinaryHint = this.getMissingBinaryHint();
     if (missingBinaryHint) {
@@ -446,50 +539,19 @@ export class IpfsSidecarManager {
     await this.ensureRepoInitialized();
 
     const stat = fs.statSync(resolvedPath);
-    const args = ['add', '-Q'];
-    if (stat.isDirectory()) {
-      args.push('-r');
-      if (options?.wrapWithDirectory !== false) {
-        args.push('-w');
-      }
-    }
-    args.push(resolvedPath);
-
-    const result = spawnSync(this.getExecutablePath(), args, {
-      cwd: path.dirname(this.getExecutablePath()),
-      env: {
-        ...process.env,
-        IPFS_PATH: this.getRepoDir(),
-      },
-      encoding: 'utf8',
-      windowsHide: true,
-    });
-
-    if (result.error) {
-      throw result.error;
-    }
-
-    if (result.status !== 0) {
-      const stderr = (result.stderr || '').toString().trim();
-      throw new Error(stderr || `ipfs add failed with exit=${result.status}`);
-    }
-
-    const cid = (result.stdout || '')
-      .toString()
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .pop();
-
-    if (!cid) {
-      throw new Error('ipfs add returned no CID');
-    }
+    const wrapWithDirectory = options?.wrapWithDirectory !== false;
+    const cid = await this.addPathViaRpc(
+      resolvedPath,
+      stat,
+      wrapWithDirectory,
+      options?.onProgress,
+    );
 
     this.updatePathCache(
       resolvedPath,
       stat,
       cid,
-      options?.wrapWithDirectory !== false,
+      wrapWithDirectory,
     );
 
     return {
@@ -500,7 +562,10 @@ export class IpfsSidecarManager {
 
   async ensurePathCached(
     targetPath: string,
-    options?: { wrapWithDirectory?: boolean },
+    options?: {
+      wrapWithDirectory?: boolean;
+      onProgress?: (progress: AddPathProgress) => void;
+    },
   ): Promise<{ cid: string; path: string; cached: boolean }> {
     const resolvedPath = path.resolve(targetPath);
     if (!fs.existsSync(resolvedPath)) {
@@ -517,6 +582,13 @@ export class IpfsSidecarManager {
       cached.mtimeMs === stat.mtimeMs &&
       cached.wrapWithDirectory === wrapWithDirectory
     ) {
+      if (options?.onProgress && stat.isFile()) {
+        options.onProgress({
+          loadedBytes: stat.size,
+          totalBytes: stat.size,
+        });
+      }
+
       return {
         cid: cached.cid,
         path: resolvedPath,
@@ -524,7 +596,10 @@ export class IpfsSidecarManager {
       };
     }
 
-    const added = await this.addPath(resolvedPath, { wrapWithDirectory });
+    const added = await this.addPath(resolvedPath, {
+      wrapWithDirectory,
+      onProgress: options?.onProgress,
+    });
     return {
       ...added,
       cached: false,
@@ -570,6 +645,77 @@ export class IpfsSidecarManager {
     return { connected, failed };
   }
 
+  async releaseCids(cids: string[]): Promise<IpfsCidReleaseResult> {
+    const uniqueCids = Array.from(
+      new Set(cids.map((cid) => cid.trim()).filter(Boolean)),
+    );
+    if (!uniqueCids.length) {
+      return {
+        releasedCids: [],
+        failedCids: [],
+        gcCompleted: false,
+      };
+    }
+
+    try {
+      await this.ensureRpcClientReady();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        releasedCids: [],
+        failedCids: uniqueCids.map((cid) => ({ cid, error: message })),
+        gcCompleted: false,
+      };
+    }
+
+    const releasedCids: string[] = [];
+    const failedCids: Array<{ cid: string; error: string }> = [];
+
+    for (const cid of uniqueCids) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await this.apiPostArgs('pin/rm', [cid]);
+        releasedCids.push(cid);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (/not pinned|not recursively pinned|is not pinned|already unpinned/i.test(message)) {
+          releasedCids.push(cid);
+          continue;
+        }
+
+        failedCids.push({ cid, error: message });
+      }
+    }
+
+    if (releasedCids.length > 0) {
+      this.invalidatePathCacheForCids(releasedCids);
+    }
+
+    if (!releasedCids.length) {
+      return {
+        releasedCids,
+        failedCids,
+        gcCompleted: false,
+      };
+    }
+
+    try {
+      await this.apiPost('repo/gc');
+      return {
+        releasedCids,
+        failedCids,
+        gcCompleted: true,
+      };
+    } catch (error) {
+      return {
+        releasedCids,
+        failedCids,
+        gcCompleted: false,
+        gcError: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
   private getExecutablePath(): string {
     return path.join(this.getBaseDir(), 'ipfs.exe');
   }
@@ -606,6 +752,165 @@ export class IpfsSidecarManager {
 
   private getPathCachePath(): string {
     return path.join(this.getRepoDir(), 'wtb-path-cache.json');
+  }
+
+  private getDefaultRepoDir(): string {
+    const workspaceRepoDir = path.join(this.options.getWtbDataDir(), 'ipfs');
+    if (this.options.app.isPackaged) {
+      return workspaceRepoDir;
+    }
+
+    const userDataRepoDir = path.join(this.options.app.getPath('userData'), 'ipfs');
+    const preferredRepoDir = path.resolve(userDataRepoDir);
+    const legacyRepoDir = path.resolve(workspaceRepoDir);
+
+    if (preferredRepoDir.toLowerCase() === legacyRepoDir.toLowerCase()) {
+      return preferredRepoDir;
+    }
+
+    const migratedRepoDir = this.migrateLegacyDevRepoIfNeeded(
+      legacyRepoDir,
+      preferredRepoDir,
+    );
+    return migratedRepoDir;
+  }
+
+  private migrateLegacyDevRepoIfNeeded(
+    legacyRepoDir: string,
+    preferredRepoDir: string,
+  ): string {
+    if (!fs.existsSync(legacyRepoDir)) {
+      return preferredRepoDir;
+    }
+
+    if (fs.existsSync(preferredRepoDir)) {
+      return preferredRepoDir;
+    }
+
+    try {
+      ensureDirExists(path.dirname(preferredRepoDir));
+      try {
+        fs.renameSync(legacyRepoDir, preferredRepoDir);
+      } catch (error) {
+        const errorCode =
+          error && typeof error === 'object' && 'code' in error
+            ? String((error as NodeJS.ErrnoException).code || '')
+            : '';
+        if (!/cross-device|exdev/i.test(errorCode) && !/cross-device|exdev/i.test(
+          error instanceof Error ? error.message : String(error),
+        )) {
+          throw error;
+        }
+
+        fs.cpSync(legacyRepoDir, preferredRepoDir, {
+          recursive: true,
+          force: false,
+          errorOnExist: true,
+        });
+        fs.rmSync(legacyRepoDir, { recursive: true, force: true });
+      }
+
+      this.options.logger.info('Moved development IPFS repo outside the workspace', {
+        fromDir: legacyRepoDir,
+        toDir: preferredRepoDir,
+      });
+      return preferredRepoDir;
+    } catch (error) {
+      this.options.logger.warn(
+        'Failed to move development IPFS repo outside the workspace; keeping legacy path',
+        error,
+      );
+      return legacyRepoDir;
+    }
+  }
+
+  private async getRpcClient(): Promise<KuboRPCClient> {
+    if (!this.rpcClient) {
+      const kuboRpcClient = (await import('kubo-rpc-client')) as {
+        create: (options: { url: string }) => KuboRPCClient;
+      };
+      this.rpcClient = kuboRpcClient.create({ url: this.getApiUrl() });
+    }
+
+    return this.rpcClient;
+  }
+
+  private async ensureRpcClientReady(): Promise<KuboRPCClient> {
+    await this.ensureRepoInitialized();
+
+    if (this.getServiceStatus().state !== 'running') {
+      await this.start();
+    } else {
+      await this.waitForApiReady(5_000);
+    }
+
+    return await this.getRpcClient();
+  }
+
+  private async addPathViaRpc(
+    resolvedPath: string,
+    stat: fs.Stats,
+    wrapWithDirectory: boolean,
+    onProgress?: (progress: AddPathProgress) => void,
+  ): Promise<string> {
+    const client = await this.ensureRpcClientReady();
+
+    if (stat.isFile()) {
+      const totalBytes = stat.size;
+      let loadedBytes = 0;
+      const content = fs.createReadStream(resolvedPath);
+
+      content.on('data', (chunk: Buffer | string) => {
+        const nextLoadedBytes =
+          loadedBytes +
+          (Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk));
+        loadedBytes = Math.min(nextLoadedBytes, totalBytes);
+        onProgress?.({
+          loadedBytes,
+          totalBytes,
+        });
+      });
+
+      content.on('end', () => {
+        onProgress?.({
+          loadedBytes: totalBytes,
+          totalBytes,
+        });
+      });
+
+      const result = await client.add(
+        {
+          path: path.basename(resolvedPath),
+          content,
+        },
+        {
+          pin: true,
+        },
+      );
+
+      return result.cid.toString();
+    }
+
+    if (!stat.isDirectory()) {
+      throw new Error(`Only files and directories are supported: ${resolvedPath}`);
+    }
+
+    let finalResult: AddResult | null = null;
+    for await (const result of client.addAll(
+      createDirectoryImportCandidates(resolvedPath),
+      {
+        pin: true,
+        wrapWithDirectory,
+      },
+    )) {
+      finalResult = result;
+    }
+
+    if (!finalResult) {
+      throw new Error('kubo-rpc-client addAll returned no CID');
+    }
+
+    return finalResult.cid.toString();
   }
 
   private getApiUrl(): string {
@@ -845,17 +1150,74 @@ export class IpfsSidecarManager {
     return currentPath;
   }
 
+  private shouldSkipRepoSizeEntry(targetPath: string): boolean {
+    return path.basename(targetPath) === '.temp';
+  }
+
+  private isIgnorableRepoSizeError(error: unknown): boolean {
+    const errorCode =
+      error && typeof error === 'object' && 'code' in error
+        ? String((error as NodeJS.ErrnoException).code || '')
+        : '';
+
+    return (
+      errorCode === 'ENOENT'
+      || errorCode === 'EPERM'
+      || errorCode === 'EACCES'
+      || errorCode === 'EBUSY'
+    );
+  }
+
   private getDirectorySizeBytes(targetPath: string): number {
+    if (this.shouldSkipRepoSizeEntry(targetPath)) {
+      return 0;
+    }
+
     if (!fs.existsSync(targetPath)) return 0;
-    const stats = fs.statSync(targetPath);
+
+    let stats: fs.Stats;
+    try {
+      stats = fs.statSync(targetPath);
+    } catch (error) {
+      if (this.isIgnorableRepoSizeError(error)) {
+        return 0;
+      }
+      throw error;
+    }
+
     if (stats.isFile()) {
       return stats.size;
     }
 
+    if (!stats.isDirectory()) {
+      return 0;
+    }
+
     let totalBytes = 0;
-    const entries = fs.readdirSync(targetPath, { withFileTypes: true });
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(targetPath, { withFileTypes: true });
+    } catch (error) {
+      if (this.isIgnorableRepoSizeError(error)) {
+        return 0;
+      }
+      throw error;
+    }
+
     entries.forEach((entry) => {
-      totalBytes += this.getDirectorySizeBytes(path.join(targetPath, entry.name));
+      const childPath = path.join(targetPath, entry.name);
+      if (this.shouldSkipRepoSizeEntry(childPath)) {
+        return;
+      }
+
+      try {
+        totalBytes += this.getDirectorySizeBytes(childPath);
+      } catch (error) {
+        if (this.isIgnorableRepoSizeError(error)) {
+          return;
+        }
+        throw error;
+      }
     });
     return totalBytes;
   }
@@ -889,6 +1251,35 @@ export class IpfsSidecarManager {
       mtimeMs: stat.mtimeMs,
       wrapWithDirectory,
     };
+    fs.writeFileSync(
+      this.getPathCachePath(),
+      `${JSON.stringify(cache, null, 2)}\n`,
+      'utf8',
+    );
+  }
+
+  private invalidatePathCacheForCids(cids: string[]): void {
+    if (!cids.length) {
+      return;
+    }
+
+    const staleCids = new Set(cids);
+    const cache = this.readPathCache();
+    let changed = false;
+
+    Object.entries(cache).forEach(([cacheKey, entry]) => {
+      if (!staleCids.has(entry.cid)) {
+        return;
+      }
+
+      delete cache[cacheKey];
+      changed = true;
+    });
+
+    if (!changed) {
+      return;
+    }
+
     fs.writeFileSync(
       this.getPathCachePath(),
       `${JSON.stringify(cache, null, 2)}\n`,

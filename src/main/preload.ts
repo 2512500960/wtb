@@ -17,6 +17,7 @@ export type InvokeChannels =
   | 'remote-resources:fetchManifest'
   | 'wtb:web:getDir'
   | 'wtb:web:getActivity'
+  | 'wtb:web:getCompatibilityStatus'
   | 'wtb:web:setDir'
   | 'wtb:web:listEntries'
   | 'wtb:web:listAllEntries'

@@ -1410,9 +1410,38 @@ a:hover {
   opacity: 0.84;
 }
 
+.WebImportProgressDialog {
+  display: grid;
+  gap: 12px;
+}
+
+.WebImportProgressStatusRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.WebImportProgressStage {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.WebImportProgressCount {
+  font-size: 12px;
+  opacity: 0.78;
+}
+
+.WebImportProgressMessage {
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .WebFileManagerTheme {
   background: transparent;
-  color: rgba(52, 208, 29, 0.683);
+  color: rgb(115, 241, 12);
 }
 .WebFileManagerTheme .item-action {
   background: rgba(52, 208, 29, 0.1);
@@ -1421,10 +1450,49 @@ a:hover {
   background-color: #c9e0c3;
   margin-right: 5px;
 }
+.WebFileManagerUploadEntry {
+  position: relative;
+}
+.WebFileManagerToolbarAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 72px;
+}
+.WebFileManagerUploadMenu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  min-width: 132px;
+  padding: 6px;
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(52, 208, 29, 0.35);
+  background: #e8f2e4;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
+}
+.WebFileManagerUploadMenuItem {
+  border: 0;
+  padding: 8px 10px;
+  text-align: left;
+  font: inherit;
+  color: black;
+  background: transparent;
+}
+.WebFileManagerUploadMenuItem:hover:not(:disabled) {
+  cursor: pointer;
+  background: rgba(52, 208, 29, 0.12);
+}
+.WebFileManagerUploadMenuItem:disabled {
+  opacity: 0.6;
+}
 .WebFileManagerTheme .toolbar .fm-toolbar .toggle-view ul li {
   width: 80px;
 }
-
+.WebFileManagerTheme .fm-context-menu .file-context-menu-list ul li {
+  width: 130px;
+}
 
 @keyframes WebStorageProgressSlide {
   0% {

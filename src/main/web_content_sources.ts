@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { isUnderDir } from './fs_utils';
-import type { IpfsSidecarManager } from './ipfs_manager';
+import type { IpfsCidReleaseResult, IpfsSidecarManager } from './ipfs_manager';
 import {
   guessContentType,
   parseAndNormalizeUrlPath,
@@ -70,6 +70,8 @@ export type ResolvedWebContentPath =
 
 const MANIFEST_FILE_NAME = '.wtb-content-sources.json';
 const SIMPLE_MODE_AUTO_CONVERT_THRESHOLD_BYTES = 5 * 1024 * 1024;
+const RESERVED_LOCAL_WEB_FILE_PATHS = new Set(['/index.html']);
+const RESERVED_LOCAL_WEB_DIRECTORY_PATH = '/vendor';
 
 export type SyncWebContentWithIpfsResult = {
   thresholdBytes: number;
@@ -88,6 +90,21 @@ export type ImportManagedWebContentResult = {
   importedDirectories: number;
   overwrittenPaths: string[];
   paths: string[];
+  releasedCids?: string[];
+  cleanupIssues?: string[];
+};
+
+type ManagedWebCidCleanupResult = {
+  releasedCids: string[];
+  cleanupIssues: string[];
+};
+
+type ManagedWebImportProgress = {
+  current: number;
+  total: number;
+  message: string;
+  currentBytes?: number;
+  totalBytes?: number;
 };
 
 export type ManagedWebPasteOperation = 'copy' | 'move';
@@ -100,6 +117,15 @@ export type PasteManagedWebContentResult = {
 const normalizeManifestPath = (inputPath: string): string => {
   const normalized = path.posix.normalize(inputPath || '/');
   return normalized.startsWith('/') ? normalized : `/${normalized}`;
+};
+
+export const isReservedLocalWebPath = (inputPath: string): boolean => {
+  const normalizedPath = normalizeManifestPath(inputPath);
+  return (
+    RESERVED_LOCAL_WEB_FILE_PATHS.has(normalizedPath)
+    || normalizedPath === RESERVED_LOCAL_WEB_DIRECTORY_PATH
+    || normalizedPath.startsWith(`${RESERVED_LOCAL_WEB_DIRECTORY_PATH}/`)
+  );
 };
 
 const getParentPath = (inputPath: string): string => {
@@ -177,6 +203,11 @@ const getDefaultManifest = (): WebContentSourceManifest => ({
   version: 2,
   entries: {},
 });
+
+const EMPTY_MANAGED_WEB_CID_CLEANUP_RESULT: ManagedWebCidCleanupResult = {
+  releasedCids: [],
+  cleanupIssues: [],
+};
 
 const isStoredWebContentFileEntry = (
   entry: StoredWebContentEntry | null | undefined,
@@ -724,6 +755,123 @@ const removeLocalWebPathIfExists = (webRoot: string, normalizedPath: string): vo
   fs.unlinkSync(fsPath);
 };
 
+const writeLocalWebFileFromSource = (
+  webRoot: string,
+  normalizedPath: string,
+  sourceFilePath: string,
+): void => {
+  const targetPath = urlPathToFsPath(webRoot, normalizedPath);
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  fs.copyFileSync(sourceFilePath, targetPath);
+};
+
+const getEntryCid = (
+  entry: StoredWebContentEntry | undefined | null,
+): string | null => {
+  if (!entry || !isStoredWebContentFileEntry(entry) || !entry.cid) {
+    return null;
+  }
+
+  return entry.cid;
+};
+
+const collectReferencedCids = (manifest: WebContentSourceManifest): Set<string> => {
+  const referencedCids = new Set<string>();
+
+  Object.values(manifest.entries).forEach((entry) => {
+    const cid = getEntryCid(entry);
+    if (cid) {
+      referencedCids.add(cid);
+    }
+  });
+
+  return referencedCids;
+};
+
+const mapCidReleaseResultToCleanup = (
+  result: IpfsCidReleaseResult,
+): ManagedWebCidCleanupResult => {
+  const cleanupIssues = result.failedCids.map(({ cid, error }) => `${cid}: ${error}`);
+  if (result.gcError) {
+    cleanupIssues.push(`repo gc: ${result.gcError}`);
+  }
+
+  return {
+    releasedCids: result.releasedCids,
+    cleanupIssues,
+  };
+};
+
+const releaseOrphanedManagedWebCids = async (opts: {
+  manifest: WebContentSourceManifest;
+  candidateCids: Iterable<string>;
+  ipfsManager: IpfsSidecarManager;
+}): Promise<ManagedWebCidCleanupResult> => {
+  const referencedCids = collectReferencedCids(opts.manifest);
+  const orphanedCids = Array.from(
+    new Set(
+      Array.from(opts.candidateCids)
+        .map((cid) => cid.trim())
+        .filter((cid) => !!cid && !referencedCids.has(cid)),
+    ),
+  );
+
+  if (!orphanedCids.length) {
+    return EMPTY_MANAGED_WEB_CID_CLEANUP_RESULT;
+  }
+
+  const releaseResult = await opts.ipfsManager.releaseCids(orphanedCids);
+  return mapCidReleaseResultToCleanup(releaseResult);
+};
+
+export const normalizeReservedLocalWebPaths = async (opts: {
+  webRoot: string;
+  ipfsManager: IpfsSidecarManager;
+}): Promise<{
+  normalizedPaths: string[];
+  releasedCids: string[];
+  cleanupIssues: string[];
+}> => {
+  const manifest = readWebContentSourceManifest(opts.webRoot);
+  const candidateReleasedCids = new Set<string>();
+  const normalizedPaths: string[] = [];
+
+  Object.keys(manifest.entries).forEach((entryPath) => {
+    if (!isReservedLocalWebPath(entryPath)) {
+      return;
+    }
+
+    const previousCid = getEntryCid(manifest.entries[entryPath]);
+    if (previousCid) {
+      candidateReleasedCids.add(previousCid);
+    }
+
+    delete manifest.entries[entryPath];
+    normalizedPaths.push(entryPath);
+  });
+
+  if (!normalizedPaths.length) {
+    return {
+      normalizedPaths: [],
+      releasedCids: [],
+      cleanupIssues: [],
+    };
+  }
+
+  writeWebContentSourceManifest(opts.webRoot, manifest);
+  const cleanup = await releaseOrphanedManagedWebCids({
+    manifest,
+    candidateCids: candidateReleasedCids,
+    ipfsManager: opts.ipfsManager,
+  });
+
+  return {
+    normalizedPaths,
+    releasedCids: cleanup.releasedCids,
+    cleanupIssues: cleanup.cleanupIssues,
+  };
+};
+
 const removeEmptyPhysicalParents = (webRoot: string, normalizedPath: string): void => {
   let currentPath = getParentPath(normalizedPath);
   while (currentPath !== '/') {
@@ -821,7 +969,7 @@ export const importManagedWebFiles = async (opts: {
   targetDirectoryPath: string;
   sourceFilePaths: string[];
   ipfsManager: IpfsSidecarManager;
-  onProgress?: (progress: { current: number; total: number; message: string }) => void;
+  onProgress?: (progress: ManagedWebImportProgress) => void;
 }): Promise<ImportManagedWebContentResult> => {
   const normalizedTargetDirectoryPath = parseAndNormalizeUrlPath(
     opts.targetDirectoryPath || '/',
@@ -829,11 +977,29 @@ export const importManagedWebFiles = async (opts: {
   const manifest = readWebContentSourceManifest(opts.webRoot);
   const importedPaths: string[] = [];
   const overwrittenPaths: string[] = [];
-  const totalFiles = opts.sourceFilePaths.length;
+  const candidateReleasedCids = new Set<string>();
+  const sourceFiles = opts.sourceFilePaths.map((sourceFilePath) => {
+    const resolvedSourcePath = path.resolve(sourceFilePath);
+    if (!fs.existsSync(resolvedSourcePath) || !fs.statSync(resolvedSourcePath).isFile()) {
+      throw new Error(`源文件不存在或不是普通文件：${resolvedSourcePath}`);
+    }
+
+    const stat = fs.statSync(resolvedSourcePath);
+    return {
+      resolvedSourcePath,
+      stat,
+      basename: path.basename(resolvedSourcePath),
+    };
+  });
+  const totalFiles = sourceFiles.length;
+  const totalBytes = sourceFiles.reduce((sum, file) => sum + file.stat.size, 0);
+  let completedBytes = 0;
 
   opts.onProgress?.({
     current: 0,
     total: totalFiles,
+    currentBytes: 0,
+    totalBytes,
     message: totalFiles > 0 ? '正在准备上传文件…' : '没有可上传的文件。',
   });
 
@@ -851,26 +1017,53 @@ export const importManagedWebFiles = async (opts: {
     }
   }
 
-  for (const sourceFilePath of opts.sourceFilePaths) {
-    const resolvedSourcePath = path.resolve(sourceFilePath);
-    if (!fs.existsSync(resolvedSourcePath) || !fs.statSync(resolvedSourcePath).isFile()) {
-      throw new Error(`源文件不存在或不是普通文件：${resolvedSourcePath}`);
-    }
-
+  for (const sourceFile of sourceFiles) {
+    const { resolvedSourcePath, stat, basename } = sourceFile;
     const targetPath = parseAndNormalizeUrlPath(
-      path.posix.join(normalizedTargetDirectoryPath, path.basename(resolvedSourcePath)),
+      path.posix.join(normalizedTargetDirectoryPath, basename),
     );
     const targetEntry = manifest.entries[targetPath];
     if (targetEntry) {
       overwrittenPaths.push(targetPath);
+    }
+    const previousCid = getEntryCid(targetEntry);
+    if (previousCid) {
+      candidateReleasedCids.add(previousCid);
+    }
+
+    if (isReservedLocalWebPath(targetPath)) {
+      writeLocalWebFileFromSource(opts.webRoot, targetPath, resolvedSourcePath);
+      delete manifest.entries[targetPath];
+      importedPaths.push(targetPath);
+      completedBytes += stat.size;
+      opts.onProgress?.({
+        current: importedPaths.length,
+        total: totalFiles,
+        currentBytes: completedBytes,
+        totalBytes,
+        message: `正在上传文件 ${importedPaths.length}/${totalFiles}：${basename}`,
+      });
+      continue;
     }
 
     removeLocalWebPathIfExists(opts.webRoot, targetPath);
     // eslint-disable-next-line no-await-in-loop
     const result = await opts.ipfsManager.ensurePathCached(resolvedSourcePath, {
       wrapWithDirectory: false,
+      onProgress: ({ loadedBytes, totalBytes: fileTotalBytes }) => {
+        opts.onProgress?.({
+          current: importedPaths.length,
+          total: totalFiles,
+          currentBytes: completedBytes + loadedBytes,
+          totalBytes,
+          message: `正在上传文件 ${importedPaths.length + 1}/${totalFiles}：${basename}`,
+        });
+
+        if (fileTotalBytes <= 0) {
+          return;
+        }
+      },
     });
-    const stat = fs.statSync(resolvedSourcePath);
     manifest.entries[targetPath] = {
       kind: 'file',
       path: targetPath,
@@ -881,19 +1074,29 @@ export const importManagedWebFiles = async (opts: {
       mime: guessContentType(resolvedSourcePath),
     };
     importedPaths.push(targetPath);
+    completedBytes += stat.size;
     opts.onProgress?.({
       current: importedPaths.length,
       total: totalFiles,
-      message: `正在上传文件 ${importedPaths.length}/${totalFiles}：${path.basename(resolvedSourcePath)}`,
+      currentBytes: completedBytes,
+      totalBytes,
+      message: `正在上传文件 ${importedPaths.length}/${totalFiles}：${basename}`,
     });
   }
 
   writeWebContentSourceManifest(opts.webRoot, manifest);
+  const cleanup = await releaseOrphanedManagedWebCids({
+    manifest,
+    candidateCids: candidateReleasedCids,
+    ipfsManager: opts.ipfsManager,
+  });
   return {
     importedFiles: importedPaths.length,
     importedDirectories: 0,
     overwrittenPaths,
     paths: importedPaths,
+    releasedCids: cleanup.releasedCids,
+    cleanupIssues: cleanup.cleanupIssues,
   };
 };
 
@@ -913,6 +1116,28 @@ export const replaceManagedWebFile = async (opts: {
   const overwrittenPaths = manifest.entries[normalizedTargetPath]
     ? [normalizedTargetPath]
     : [];
+  const previousCid = getEntryCid(manifest.entries[normalizedTargetPath]);
+
+  if (isReservedLocalWebPath(normalizedTargetPath)) {
+    writeLocalWebFileFromSource(opts.webRoot, normalizedTargetPath, resolvedSourcePath);
+    delete manifest.entries[normalizedTargetPath];
+    writeWebContentSourceManifest(opts.webRoot, manifest);
+    const cleanup = await releaseOrphanedManagedWebCids({
+      manifest,
+      candidateCids: previousCid ? [previousCid] : [],
+      ipfsManager: opts.ipfsManager,
+    });
+
+    return {
+      importedFiles: 1,
+      importedDirectories: 0,
+      overwrittenPaths,
+      paths: [normalizedTargetPath],
+      releasedCids: cleanup.releasedCids,
+      cleanupIssues: cleanup.cleanupIssues,
+    };
+  }
+
   ensureManagedDirectoryChain(manifest, normalizedTargetPath);
   removeLocalWebPathIfExists(opts.webRoot, normalizedTargetPath);
   const result = await opts.ipfsManager.ensurePathCached(resolvedSourcePath, {
@@ -929,12 +1154,19 @@ export const replaceManagedWebFile = async (opts: {
     mime: guessContentType(resolvedSourcePath),
   };
   writeWebContentSourceManifest(opts.webRoot, manifest);
+  const cleanup = await releaseOrphanedManagedWebCids({
+    manifest,
+    candidateCids: previousCid ? [previousCid] : [],
+    ipfsManager: opts.ipfsManager,
+  });
 
   return {
     importedFiles: 1,
     importedDirectories: 0,
     overwrittenPaths,
     paths: [normalizedTargetPath],
+    releasedCids: cleanup.releasedCids,
+    cleanupIssues: cleanup.cleanupIssues,
   };
 };
 
@@ -943,7 +1175,7 @@ export const importManagedWebDirectory = async (opts: {
   targetDirectoryPath: string;
   sourceDirectoryPath: string;
   ipfsManager: IpfsSidecarManager;
-  onProgress?: (progress: { current: number; total: number; message: string }) => void;
+  onProgress?: (progress: ManagedWebImportProgress) => void;
 }): Promise<ImportManagedWebContentResult> => {
   const normalizedTargetDirectoryPath = parseAndNormalizeUrlPath(
     opts.targetDirectoryPath || '/',
@@ -959,12 +1191,16 @@ export const importManagedWebDirectory = async (opts: {
   const manifest = readWebContentSourceManifest(opts.webRoot);
   const importedPaths: string[] = [];
   const overwrittenPaths: string[] = [];
+  const candidateReleasedCids = new Set<string>();
   let importedDirectories = 0;
 
   const rootTargetPath = parseAndNormalizeUrlPath(
     path.posix.join(normalizedTargetDirectoryPath, path.basename(resolvedSourceDirectoryPath)),
   );
-  if (!getStoredDirectoryEntryForPath(manifest, rootTargetPath)) {
+  if (
+    !isReservedLocalWebPath(rootTargetPath)
+    && !getStoredDirectoryEntryForPath(manifest, rootTargetPath)
+  ) {
     ensureManagedDirectoryChain(
       manifest,
       path.posix.join(rootTargetPath, '__placeholder__'),
@@ -977,11 +1213,21 @@ export const importManagedWebDirectory = async (opts: {
     importedDirectories += 1;
   }
 
-  const files = listSourceFilesRecursively(resolvedSourceDirectoryPath);
+  const files = listSourceFilesRecursively(resolvedSourceDirectoryPath).map((file) => {
+    const stat = fs.statSync(file.fsPath);
+    return {
+      ...file,
+      stat,
+    };
+  });
   const totalFiles = files.length;
+  const totalBytes = files.reduce((sum, file) => sum + file.stat.size, 0);
+  let completedBytes = 0;
   opts.onProgress?.({
     current: 0,
     total: totalFiles,
+    currentBytes: 0,
+    totalBytes,
     message: totalFiles > 0 ? '正在准备导入目录…' : '目录中没有可导入的文件。',
   });
   for (const file of files) {
@@ -991,7 +1237,10 @@ export const importManagedWebDirectory = async (opts: {
         ? rootTargetPath
         : parseAndNormalizeUrlPath(path.posix.join(rootTargetPath, relativeDirectory));
 
-    if (!getStoredDirectoryEntryForPath(manifest, targetDirectory)) {
+    if (
+      !isReservedLocalWebPath(targetDirectory)
+      && !getStoredDirectoryEntryForPath(manifest, targetDirectory)
+    ) {
       ensureManagedDirectoryChain(
         manifest,
         path.posix.join(targetDirectory, '__placeholder__'),
@@ -1010,42 +1259,85 @@ export const importManagedWebDirectory = async (opts: {
     if (manifest.entries[targetPath]) {
       overwrittenPaths.push(targetPath);
     }
+    const previousCid = getEntryCid(manifest.entries[targetPath]);
+    if (previousCid) {
+      candidateReleasedCids.add(previousCid);
+    }
+
+    if (isReservedLocalWebPath(targetPath)) {
+      writeLocalWebFileFromSource(opts.webRoot, targetPath, file.fsPath);
+      delete manifest.entries[targetPath];
+      importedPaths.push(targetPath);
+      completedBytes += file.stat.size;
+      opts.onProgress?.({
+        current: importedPaths.length,
+        total: totalFiles,
+        currentBytes: completedBytes,
+        totalBytes,
+        message: `正在导入目录 ${importedPaths.length}/${totalFiles}：${file.relativePath}`,
+      });
+      continue;
+    }
+
     removeLocalWebPathIfExists(opts.webRoot, targetPath);
     // eslint-disable-next-line no-await-in-loop
     const result = await opts.ipfsManager.ensurePathCached(file.fsPath, {
       wrapWithDirectory: false,
+      onProgress: ({ loadedBytes }) => {
+        opts.onProgress?.({
+          current: importedPaths.length,
+          total: totalFiles,
+          currentBytes: completedBytes + loadedBytes,
+          totalBytes,
+          message: `正在导入目录 ${importedPaths.length + 1}/${totalFiles}：${file.relativePath}`,
+        });
+      },
     });
-    const stat = fs.statSync(file.fsPath);
     manifest.entries[targetPath] = {
       kind: 'file',
       path: targetPath,
       sourceMode: 'ipfs-backed',
       cid: result.cid,
-      size: stat.size,
-      mtimeMs: stat.mtimeMs,
+      size: file.stat.size,
+      mtimeMs: file.stat.mtimeMs,
       mime: guessContentType(file.fsPath),
     };
     importedPaths.push(targetPath);
+    completedBytes += file.stat.size;
     opts.onProgress?.({
       current: importedPaths.length,
       total: totalFiles,
+      currentBytes: completedBytes,
+      totalBytes,
       message: `正在导入目录 ${importedPaths.length}/${totalFiles}：${file.relativePath}`,
     });
   }
 
   writeWebContentSourceManifest(opts.webRoot, manifest);
+  const cleanup = await releaseOrphanedManagedWebCids({
+    manifest,
+    candidateCids: candidateReleasedCids,
+    ipfsManager: opts.ipfsManager,
+  });
   return {
     importedFiles: importedPaths.length,
     importedDirectories,
     overwrittenPaths,
     paths: importedPaths,
+    releasedCids: cleanup.releasedCids,
+    cleanupIssues: cleanup.cleanupIssues,
   };
 };
 
-export const deleteManagedWebEntry = (opts: {
+export const deleteManagedWebEntry = async (opts: {
   webRoot: string;
   requestedPath: string;
-}): { removedPaths: string[] } => {
+  ipfsManager: IpfsSidecarManager;
+}): Promise<{
+  removedPaths: string[];
+  releasedCids: string[];
+  cleanupIssues: string[];
+}> => {
   const normalizedPath = parseAndNormalizeUrlPath(opts.requestedPath || '/');
   if (normalizedPath === '/') {
     throw new Error('不能删除根目录。');
@@ -1056,14 +1348,28 @@ export const deleteManagedWebEntry = (opts: {
   const removedPaths = Object.keys(manifest.entries).filter((entryPath) => {
     return entryPath === normalizedPath || entryPath.startsWith(prefix);
   });
+  const candidateReleasedCids = new Set<string>();
 
   removedPaths.forEach((entryPath) => {
+    const cid = getEntryCid(manifest.entries[entryPath]);
+    if (cid) {
+      candidateReleasedCids.add(cid);
+    }
     delete manifest.entries[entryPath];
   });
   writeWebContentSourceManifest(opts.webRoot, manifest);
   removeLocalWebPathIfExists(opts.webRoot, normalizedPath);
   removeEmptyPhysicalParents(opts.webRoot, normalizedPath);
-  return { removedPaths };
+  const cleanup = await releaseOrphanedManagedWebCids({
+    manifest,
+    candidateCids: candidateReleasedCids,
+    ipfsManager: opts.ipfsManager,
+  });
+  return {
+    removedPaths,
+    releasedCids: cleanup.releasedCids,
+    cleanupIssues: cleanup.cleanupIssues,
+  };
 };
 
 export const renameManagedWebEntry = (opts: {
@@ -1198,7 +1504,9 @@ export const migrateWebContentToManagedIpfs = async (opts: {
   let migratedDirectories = 0;
   const physicalFiles =
     fs.existsSync(opts.webRoot) && fs.statSync(opts.webRoot).isDirectory()
-      ? listPhysicalFilesRecursively(opts.webRoot)
+      ? listPhysicalFilesRecursively(opts.webRoot).filter(
+          (fsPath) => !isReservedLocalWebPath(getUrlPathFromFsPath(opts.webRoot, fsPath)),
+        )
       : [];
   const totalFiles = physicalFiles.length;
 
@@ -1217,7 +1525,10 @@ export const migrateWebContentToManagedIpfs = async (opts: {
       const normalizedPath = getUrlPathFromFsPath(opts.webRoot, childPath);
 
       if (entry.isDirectory()) {
-        if (!manifest.entries[normalizedPath]) {
+        if (
+          !isReservedLocalWebPath(normalizedPath)
+          && !manifest.entries[normalizedPath]
+        ) {
           manifest.entries[normalizedPath] = {
             kind: 'directory',
             path: normalizedPath,
@@ -1231,6 +1542,10 @@ export const migrateWebContentToManagedIpfs = async (opts: {
       }
 
       if (!entry.isFile()) continue;
+      if (isReservedLocalWebPath(normalizedPath)) {
+        continue;
+      }
+
       const stat = fs.statSync(childPath);
       const existing = getStoredFileEntryForPath(manifest, normalizedPath);
       if (
@@ -1298,30 +1613,42 @@ export const convertLocalFileToIpfsSource = async (opts: {
   if (!fs.existsSync(fsPath)) {
     throw new Error('Not Found');
   }
+  if (isReservedLocalWebPath(normalizedPath)) {
+    throw new Error('静态壳文件必须保留为本地文件。');
+  }
 
   const stat = fs.statSync(fsPath);
   if (!stat.isFile()) {
     throw new Error('仅支持将文件转换为 IPFS 内容源。');
   }
 
+  const manifest = readWebContentSourceManifest(opts.webRoot);
+  const previousCid = getEntryCid(manifest.entries[normalizedPath]);
   const result = await opts.ipfsManager.ensurePathCached(fsPath, {
     wrapWithDirectory: false,
   });
   const sourceMode = opts.removeLocalFile ? 'ipfs-backed' : 'dual';
 
-  upsertWebContentSourceEntry({
-    webRoot: opts.webRoot,
+  manifest.entries[normalizedPath] = {
+    kind: 'file',
     path: normalizedPath,
     sourceMode,
     cid: result.cid,
     size: stat.size,
     mtimeMs: stat.mtimeMs,
     mime: guessContentType(fsPath),
-  });
+  };
+  writeWebContentSourceManifest(opts.webRoot, manifest);
 
   if (opts.removeLocalFile) {
     fs.unlinkSync(fsPath);
   }
+
+  await releaseOrphanedManagedWebCids({
+    manifest,
+    candidateCids: previousCid && previousCid !== result.cid ? [previousCid] : [],
+    ipfsManager: opts.ipfsManager,
+  });
 
   return {
     path: normalizedPath,
@@ -1339,7 +1666,9 @@ export const syncWebContentWithIpfs = async (opts: {
   const thresholdBytes =
     opts.thresholdBytes ?? SIMPLE_MODE_AUTO_CONVERT_THRESHOLD_BYTES;
   const manifest = readWebContentSourceManifest(opts.webRoot);
-  const physicalFiles = listPhysicalFilesRecursively(opts.webRoot);
+  const physicalFiles = listPhysicalFilesRecursively(opts.webRoot).filter(
+    (fsPath) => !isReservedLocalWebPath(getUrlPathFromFsPath(opts.webRoot, fsPath)),
+  );
   const syncedPaths: string[] = [];
   const stalePaths: string[] = [];
   const failures: Array<{ path: string; error: string }> = [];
@@ -1349,6 +1678,7 @@ export const syncWebContentWithIpfs = async (opts: {
   let syncedFiles = 0;
   let unchangedManagedFiles = 0;
   let skippedSmallFiles = 0;
+  const candidateReleasedCids = new Set<string>();
 
   Object.values(manifest.entries).forEach((stored) => {
     if (!isStoredWebContentFileEntry(stored)) return;
@@ -1391,6 +1721,7 @@ export const syncWebContentWithIpfs = async (opts: {
       const result = await opts.ipfsManager.ensurePathCached(fsPath, {
         wrapWithDirectory: false,
       });
+      const previousCid = getEntryCid(stored);
       manifest.entries[normalizedPath] = {
         kind: 'file',
         path: normalizedPath,
@@ -1400,6 +1731,9 @@ export const syncWebContentWithIpfs = async (opts: {
         mtimeMs: stat.mtimeMs,
         mime,
       };
+      if (previousCid && previousCid !== result.cid) {
+        candidateReleasedCids.add(previousCid);
+      }
       manifestChanged = true;
       syncedFiles += 1;
       syncedPaths.push(normalizedPath);
@@ -1413,6 +1747,11 @@ export const syncWebContentWithIpfs = async (opts: {
 
   if (manifestChanged) {
     writeWebContentSourceManifest(opts.webRoot, manifest);
+    await releaseOrphanedManagedWebCids({
+      manifest,
+      candidateCids: candidateReleasedCids,
+      ipfsManager: opts.ipfsManager,
+    });
   }
 
   return {

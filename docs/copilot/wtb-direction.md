@@ -1,0 +1,21 @@
+- WTB 当前不把 TypeScript 里的 libp2p 作为主路径；聊天/服务公告方向暂时弱化。
+- 后续方案优先围绕 Yggdrasil 上直接跑站点注册网站和 Matrix 体验来设计。
+- 讨论 IPFS 集成时，不依赖 libp2p 发现层。
+- `src/main/yggdrasil_manager.ts` 现在承载 Yggdrasil 的进程、配置、ctl 和 IPv6 地址获取；`main.ts` 只保留上层编排与薄包装。
+- `src/main/web_service_manager.ts` 现在承载 Web 服务的根目录解析、HTTP 路由、端口/防火墙检查与 stop/dispose；`main.ts` 只保留包装调用。
+- `src/main/website_index_service.ts` 现在承载网站索引下载、验签和旧格式回退；`main.ts` 只保留 Ygg 运行态判断与调用。
+- `src/main/announcements_coordinator.ts` 现在承载服务公告的启动、自动拉起、停止和状态委托；`main.ts` 不再直接编排 `announcementsManager + groupChat`。
+- `src/main/ygg_peer_coordinator.ts` 现在承载 Ygg 运行时 peer 列表解析、手动 peer 同步、auto peer manager 模式切换，以及 Ygg 相关 IPC 配置写入后的重同步；`main.ts` 只保留组装与委托。
+- `src/main/app_lifecycle.ts` 现在承载 Electron 主进程的 before-quit、window-all-closed、whenReady 和 activate 生命周期编排；`main.ts` 只保留生命周期依赖组装。
+- `src/main/main_window.ts` 需要在 `loadURL()` 之前注册 `ready-to-show`，并保留 post-load show 兜底；否则主窗口可能因竞态保持隐藏。
+- Web/IPFS 后续不做进程级硬合并，改为“统一内容架构 + HTTP 控制面 + IPFS 内容面”：HTTP 负责清单/发现/兼容回退，IPFS 负责大文件和媒体优先分发。
+- IPFS 服务应默认自动启动，逐步弱化为底层能力；UI 上可保留状态与诊断，但不再要求用户手动先启动后使用。
+- WTB 原生远程资源页应成为主入口；浏览器直开静态目录入口先隐藏但保留，用于无 IPFS/纯浏览器兼容场景。
+- 资源访问策略采用 fallback/elevate：目录清单始终先走 HTTP；大文件/媒体优先 IPFS；IPFS 失败立即回退 HTTP；连续成功后对站点/目录/类型提升 IPFS 优先级。
+- 存储模型优先采用“路径 + 元数据映射”的多源设计，不以 `ipfs-<cid>` 文件名约定作为主事实来源；后续可支持 `local`、`dual`、`ipfs-backed` 三种后端。
+- 若条目处于 `ipfs-backed` 模式，HTTP 文件访问应可由 WTB 服务端转读本地 IPFS gateway，避免用户必须理解 CID 或维护双份物理文件。
+- `src/main/web_content_sources.ts` 现在承载 Web 目录的内容源元数据层：统一目录枚举、虚拟目录、`local/dual/ipfs-backed` 条目解析，以及本地文件转换到 IPFS-backed/dual 的写入逻辑。
+- `src/main/web_service_manager.ts` 现在通过内容源层解析路径；对 `ipfs-backed` 文件会通过本地 IPFS gateway 反代输出，目录清单与静态访问不再只依赖物理文件是否存在。
+- `src/main/register_misc_ipc.ts` 与设置页现在已有本地 Web 内容管理入口，可浏览 Web 目录并把文件转换为 `dual` 或 `ipfs-backed`；远端浏览页仍保持只读。
+- 远端浏览页面必须只读；本地转换为 IPFS、移除源文件、重扫描等管理动作只能在本地管理界面开放。
+- `src/renderer/pages/settings/WebSettingsSection.tsx` 已开始转为站内文件管理入口：默认管理模式支持新建目录、上传文件、导入目录、替换、删除；新导入内容默认写成 `ipfs-backed`，本地仅保留 manifest/control plane。
