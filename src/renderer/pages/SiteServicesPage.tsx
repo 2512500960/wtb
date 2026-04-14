@@ -48,10 +48,52 @@ type WebActivitySnapshot = {
   error?: string;
 };
 
+type YggSitePreheaterStatus = {
+  enabled: boolean;
+  running: boolean;
+  activeWorkers: number;
+  knownTargets: number;
+  queuedTargets: number;
+  seedTargets: number;
+  staticTargets: number;
+  discoveredTargets: number;
+  lastDiscoveryAt: number | null;
+  lastProbeAt: number | null;
+  lastSuccessAt: number | null;
+  lastError: string | null;
+};
+
+type WebRuntimeSettings = {
+  autoStartEnabled: boolean;
+  preheaterEnabled: boolean;
+  preheaterStatus: YggSitePreheaterStatus;
+};
+
 const EMPTY_WEB_ACTIVITY: WebActivitySnapshot = {
   activeWindowMinutes: 10,
   activeClients: [],
   recentRequests: [],
+};
+
+const EMPTY_PREHEATER_STATUS: YggSitePreheaterStatus = {
+  enabled: false,
+  running: false,
+  activeWorkers: 0,
+  knownTargets: 0,
+  queuedTargets: 0,
+  seedTargets: 0,
+  staticTargets: 0,
+  discoveredTargets: 0,
+  lastDiscoveryAt: null,
+  lastProbeAt: null,
+  lastSuccessAt: null,
+  lastError: null,
+};
+
+const EMPTY_RUNTIME_SETTINGS: WebRuntimeSettings = {
+  autoStartEnabled: false,
+  preheaterEnabled: false,
+  preheaterStatus: EMPTY_PREHEATER_STATUS,
 };
 
 const formatDateTime = (value: string): string => {
@@ -152,12 +194,18 @@ export default function SiteServicesPage() {
   );
   const [webActivity, setWebActivity] =
     React.useState<WebActivitySnapshot>(EMPTY_WEB_ACTIVITY);
+  const [runtimeSettings, setRuntimeSettings] =
+    React.useState<WebRuntimeSettings>(EMPTY_RUNTIME_SETTINGS);
   const [busy, setBusy] = React.useState<ServiceName | null>(null);
+  const [settingsBusy, setSettingsBusy] = React.useState<
+    'webAutoStart' | 'preheater' | null
+  >(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [copyHint, setCopyHint] = React.useState<string | null>(null);
   const [showWebClients, setShowWebClients] = React.useState(false);
   const [showIpfsPeers, setShowIpfsPeers] = React.useState(false);
+  const [showIpfsAddresses, setShowIpfsAddresses] = React.useState(false);
 
   const refresh = React.useCallback(async () => {
     setLoading(true);
@@ -168,6 +216,7 @@ export default function SiteServicesPage() {
         detailedIpfs,
         webActivityResult,
         ipfsPeerList,
+        runtimeSettingsResult,
       ] = await Promise.all([
         window.electron.ipcRenderer.invoke('services:getAll'),
         window.electron.ipcRenderer.invoke('ipfs:statusDetailed'),
@@ -175,6 +224,9 @@ export default function SiteServicesPage() {
           .invoke('wtb:web:getActivity')
           .catch(() => EMPTY_WEB_ACTIVITY),
         window.electron.ipcRenderer.invoke('ipfs:swarmPeers').catch(() => []),
+        window.electron.ipcRenderer
+          .invoke('wtb:web:getRuntimeSettings')
+          .catch(() => ({ ok: true, data: EMPTY_RUNTIME_SETTINGS })),
       ]);
 
       setServices(serviceList as ServiceStatus[]);
@@ -185,6 +237,15 @@ export default function SiteServicesPage() {
       setIpfsSwarmPeers(
         Array.isArray(ipfsPeerList) ? (ipfsPeerList as IpfsSwarmPeer[]) : [],
       );
+      const parsedRuntimeSettings = runtimeSettingsResult as {
+        ok?: boolean;
+        data?: WebRuntimeSettings;
+      };
+      if (parsedRuntimeSettings?.ok && parsedRuntimeSettings.data) {
+        setRuntimeSettings(parsedRuntimeSettings.data);
+      } else {
+        setRuntimeSettings(EMPTY_RUNTIME_SETTINGS);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -248,6 +309,64 @@ export default function SiteServicesPage() {
     }
   }, []);
 
+  const updateWebAutoStart = React.useCallback(
+    async (enabled: boolean) => {
+      setSettingsBusy('webAutoStart');
+      setError(null);
+      try {
+        const response = (await window.electron.ipcRenderer.invoke(
+          'wtb:web:setAutoStartEnabled',
+          enabled,
+        )) as {
+          ok?: boolean;
+          data?: WebRuntimeSettings;
+          error?: string;
+        };
+        if (!response?.ok) {
+          throw new Error(response?.error || '更新 Web 自动启动设置失败');
+        }
+        if (response.data) {
+          setRuntimeSettings(response.data);
+        }
+        await refresh();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setSettingsBusy(null);
+      }
+    },
+    [refresh],
+  );
+
+  const updatePreheaterEnabled = React.useCallback(
+    async (enabled: boolean) => {
+      setSettingsBusy('preheater');
+      setError(null);
+      try {
+        const response = (await window.electron.ipcRenderer.invoke(
+          'wtb:web:setPreheaterEnabled',
+          enabled,
+        )) as {
+          ok?: boolean;
+          data?: WebRuntimeSettings;
+          error?: string;
+        };
+        if (!response?.ok) {
+          throw new Error(response?.error || '更新预热设置失败');
+        }
+        if (response.data) {
+          setRuntimeSettings(response.data);
+        }
+        await refresh();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setSettingsBusy(null);
+      }
+    },
+    [refresh],
+  );
+
   const yggRunning =
     services.find((service) => service.name === 'yggdrasil')?.state ===
     'running';
@@ -269,9 +388,128 @@ export default function SiteServicesPage() {
       ? webService.details
       : null;
   const webBusy = busy === 'web';
+  const webAutoStartEnabled = runtimeSettings.autoStartEnabled;
+  const preheaterEnabled = runtimeSettings.preheaterEnabled;
+  const preheaterStatus =
+    runtimeSettings.preheaterStatus ?? EMPTY_PREHEATER_STATUS;
+  const webAutoStartBusy = settingsBusy === 'webAutoStart';
+  const preheaterBusy = settingsBusy === 'preheater';
   const ipfsGatewayUrl = ipfsDetails?.gatewayUrl ?? null;
   const activeClients = webActivity.activeClients ?? [];
   const recentRequests = webActivity.recentRequests ?? [];
+  const ipfsAddresses = ipfsDetails?.addresses ?? [];
+  const preheaterStateText = preheaterEnabled
+    ? preheaterStatus.running
+      ? `运行中，待处理 ${preheaterStatus.queuedTargets} 个，并发 ${preheaterStatus.activeWorkers}`
+      : '已启用，等待 Yggdrasil 可用'
+    : '未启用';
+
+  let ipfsPeersContent: React.ReactNode;
+  if (ipfsService.state !== 'running') {
+    ipfsPeersContent = (
+      <div className="ServiceHint">IPFS 未运行，暂无 peer 记录。</div>
+    );
+  } else if (ipfsSwarmPeers.length > 0) {
+    ipfsPeersContent = (
+      <div className="WebsiteIndexTableWrapper" style={{ marginTop: 0 }}>
+        <table className="WebsiteIndexTable">
+          <thead>
+            <tr>
+              <th className="WebsiteIndexHeadCell">Peer ID</th>
+              <th className="WebsiteIndexHeadCell">地址</th>
+              <th className="WebsiteIndexHeadCell">方向</th>
+              <th className="WebsiteIndexHeadCell">延迟</th>
+              <th className="WebsiteIndexHeadCell">Muxer</th>
+              <th className="WebsiteIndexHeadCell">Streams</th>
+            </tr>
+          </thead>
+          <tbody>
+            {ipfsSwarmPeers.slice(0, 50).map((peer) => (
+              <tr key={`${peer.peerId}|${peer.address}`}>
+                <td
+                  className="WebsiteIndexCell"
+                  style={{ wordBreak: 'break-all' }}
+                >
+                  {peer.peerId || '—'}
+                </td>
+                <td
+                  className="WebsiteIndexCell"
+                  style={{ wordBreak: 'break-all' }}
+                >
+                  {peer.address || '—'}
+                </td>
+                <td className="WebsiteIndexCell">{peer.direction || '—'}</td>
+                <td className="WebsiteIndexCell">{peer.latency || '—'}</td>
+                <td className="WebsiteIndexCell">{peer.muxer || '—'}</td>
+                <td
+                  className="WebsiteIndexCell"
+                  style={{
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                  }}
+                >
+                  {peer.streams.length ? peer.streams.join('\n') : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  } else {
+    ipfsPeersContent = (
+      <div className="ServiceHint">IPFS 正在运行，但当前没有已连接 peers。</div>
+    );
+  }
+
+  let ipfsAddressesContent: React.ReactNode;
+  if (ipfsService.state !== 'running') {
+    ipfsAddressesContent = (
+      <div className="ServiceHint">IPFS 未运行，暂无节点地址。</div>
+    );
+  } else if (ipfsAddresses.length > 0) {
+    ipfsAddressesContent = (
+      <div className="WebsiteIndexTableWrapper" style={{ marginTop: 0 }}>
+        <table className="WebsiteIndexTable">
+          <thead>
+            <tr>
+              <th className="WebsiteIndexHeadCell">地址</th>
+              <th className="WebsiteIndexHeadCell">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {ipfsAddresses.map((address) => (
+              <tr key={address}>
+                <td
+                  className="WebsiteIndexCell"
+                  style={{ wordBreak: 'break-all' }}
+                >
+                  {address}
+                </td>
+                <td className="WebsiteIndexCell">
+                  <button
+                    type="button"
+                    className="ServiceGhostButton"
+                    onClick={() => {
+                      showCopyHint('IPFS 节点地址', address).catch(() => {
+                        // ignore
+                      });
+                    }}
+                  >
+                    复制
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  } else {
+    ipfsAddressesContent = (
+      <div className="ServiceHint">当前没有可展示的节点地址。</div>
+    );
+  }
 
   return (
     <div className="PageRoot">
@@ -370,6 +608,11 @@ export default function SiteServicesPage() {
                 服务暴露给其他 Yggdrasil 节点访问。
               </div>
 
+              <div className="ServiceHint">
+                主窗口关闭后程序会保留在系统托盘。启用自动启动后，只要 Yggdrasil
+                可用，程序启动时会自动拉起 Web 服务。
+              </div>
+
               <div className="SiteInfoList">
                 <div className="SiteInfoRow">
                   <div className="SiteInfoLabel">访问地址</div>
@@ -409,6 +652,84 @@ export default function SiteServicesPage() {
                     {webService.details ?? '—'}
                   </div>
                 </div>
+                <div className="SiteInfoRow">
+                  <div className="SiteInfoLabel">自动启动</div>
+                  <div className="SiteInfoValue">
+                    {webAutoStartEnabled ? '已启用' : '未启用'}
+                  </div>
+                  <button
+                    type="button"
+                    className="ServiceGhostButton SiteInfoButton"
+                    disabled={webAutoStartBusy}
+                    onClick={() => {
+                      updateWebAutoStart(!webAutoStartEnabled).catch(() => {
+                        // ignore
+                      });
+                    }}
+                  >
+                    {webAutoStartBusy
+                      ? '处理中…'
+                      : webAutoStartEnabled
+                        ? '禁用'
+                        : '启用'}
+                  </button>
+                </div>
+                <div className="SiteInfoRow">
+                  <div className="SiteInfoLabel">路由预热</div>
+                  <div className="SiteInfoValue">{preheaterStateText}</div>
+                  <button
+                    type="button"
+                    className="ServiceGhostButton SiteInfoButton"
+                    disabled={preheaterBusy}
+                    onClick={() => {
+                      updatePreheaterEnabled(!preheaterEnabled).catch(() => {
+                        // ignore
+                      });
+                    }}
+                  >
+                    {preheaterBusy
+                      ? '处理中…'
+                      : preheaterEnabled
+                        ? '禁用'
+                        : '启用'}
+                  </button>
+                </div>
+                <div className="SiteInfoRow">
+                  <div className="SiteInfoLabel">预热目标</div>
+                  <div className="SiteInfoValue">
+                    {`${preheaterStatus.knownTargets} 个（索引种子 ${preheaterStatus.seedTargets} / 默认页面 ${preheaterStatus.staticTargets} / 索引发现 ${preheaterStatus.discoveredTargets}）`}
+                  </div>
+                </div>
+                <div className="SiteInfoRow">
+                  <div className="SiteInfoLabel">最近发现</div>
+                  <div className="SiteInfoValue">
+                    {preheaterStatus.lastDiscoveryAt
+                      ? formatDateTime(
+                          new Date(
+                            preheaterStatus.lastDiscoveryAt,
+                          ).toISOString(),
+                        )
+                      : '—'}
+                  </div>
+                </div>
+                <div className="SiteInfoRow">
+                  <div className="SiteInfoLabel">最近成功预热</div>
+                  <div className="SiteInfoValue">
+                    {preheaterStatus.lastSuccessAt
+                      ? formatDateTime(
+                          new Date(preheaterStatus.lastSuccessAt).toISOString(),
+                        )
+                      : '—'}
+                  </div>
+                </div>
+                {preheaterStatus.lastError ? (
+                  <div className="SiteInfoRow">
+                    <div className="SiteInfoLabel">最近错误</div>
+                    <div className="SiteInfoValue">
+                      {preheaterStatus.lastError}
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </section>
 
@@ -519,13 +840,21 @@ export default function SiteServicesPage() {
                     查看
                   </button>
                 </div>
-                <div className="SiteInfoRow SiteInfoColumnRow">
-                  <div className="SiteInfoLabel">监听地址</div>
-                  <div className="SiteInfoValue SiteInfoColumnValue">
-                    {ipfsDetails?.addresses?.length
-                      ? ipfsDetails.addresses.join('\n')
-                      : '—'}
+                <div className="SiteInfoRow">
+                  <div className="SiteInfoLabel">节点地址</div>
+                  <div className="SiteInfoValue">
+                    {ipfsAddresses.length ? `${ipfsAddresses.length} 个` : '—'}
                   </div>
+                  <button
+                    type="button"
+                    className="ServiceGhostButton SiteInfoButton"
+                    disabled={
+                      ipfsService.state !== 'running' || !ipfsAddresses.length
+                    }
+                    onClick={() => setShowIpfsAddresses(true)}
+                  >
+                    查看
+                  </button>
                 </div>
               </div>
             </section>
@@ -554,14 +883,21 @@ export default function SiteServicesPage() {
                 <tbody>
                   {activeClients.map((client) => (
                     <tr key={`${client.remoteAddress}:${client.lastSeenAt}`}>
-                      <td className="WebsiteIndexCell">{client.remoteAddress}</td>
+                      <td className="WebsiteIndexCell">
+                        {client.remoteAddress}
+                      </td>
                       <td className="WebsiteIndexCell">
                         {formatDateTime(client.lastSeenAt)}
                       </td>
-                      <td className="WebsiteIndexCell">{client.requestCount}</td>
+                      <td className="WebsiteIndexCell">
+                        {client.requestCount}
+                      </td>
                       <td
                         className="WebsiteIndexCell"
-                        style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
+                        style={{
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-all',
+                        }}
                       >
                         {client.recentPaths.length
                           ? client.recentPaths.join('\n')
@@ -601,7 +937,9 @@ export default function SiteServicesPage() {
                       <td className="WebsiteIndexCell">
                         {formatDateTime(record.at)}
                       </td>
-                      <td className="WebsiteIndexCell">{record.remoteAddress}</td>
+                      <td className="WebsiteIndexCell">
+                        {record.remoteAddress}
+                      </td>
                       <td className="WebsiteIndexCell">{record.method}</td>
                       <td
                         className="WebsiteIndexCell"
@@ -627,53 +965,15 @@ export default function SiteServicesPage() {
           onClose={() => setShowIpfsPeers(false)}
           title={`IPFS 连接详情（${ipfsSwarmPeers.length}）`}
         >
-          {ipfsService.state !== 'running' ? (
-            <div className="ServiceHint">IPFS 未运行，暂无 peer 记录。</div>
-          ) : ipfsSwarmPeers.length > 0 ? (
-            <div className="WebsiteIndexTableWrapper" style={{ marginTop: 0 }}>
-              <table className="WebsiteIndexTable">
-                <thead>
-                  <tr>
-                    <th className="WebsiteIndexHeadCell">Peer ID</th>
-                    <th className="WebsiteIndexHeadCell">地址</th>
-                    <th className="WebsiteIndexHeadCell">方向</th>
-                    <th className="WebsiteIndexHeadCell">延迟</th>
-                    <th className="WebsiteIndexHeadCell">Muxer</th>
-                    <th className="WebsiteIndexHeadCell">Streams</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {ipfsSwarmPeers.slice(0, 50).map((peer) => (
-                    <tr key={`${peer.peerId}|${peer.address}`}>
-                      <td
-                        className="WebsiteIndexCell"
-                        style={{ wordBreak: 'break-all' }}
-                      >
-                        {peer.peerId || '—'}
-                      </td>
-                      <td
-                        className="WebsiteIndexCell"
-                        style={{ wordBreak: 'break-all' }}
-                      >
-                        {peer.address || '—'}
-                      </td>
-                      <td className="WebsiteIndexCell">{peer.direction || '—'}</td>
-                      <td className="WebsiteIndexCell">{peer.latency || '—'}</td>
-                      <td className="WebsiteIndexCell">{peer.muxer || '—'}</td>
-                      <td
-                        className="WebsiteIndexCell"
-                        style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
-                      >
-                        {peer.streams.length ? peer.streams.join('\n') : '—'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="ServiceHint">IPFS 正在运行，但当前没有已连接 peers。</div>
-          )}
+          {ipfsPeersContent}
+        </ModalShell>
+
+        <ModalShell
+          open={showIpfsAddresses}
+          onClose={() => setShowIpfsAddresses(false)}
+          title={`IPFS 节点地址（${ipfsAddresses.length}）`}
+        >
+          {ipfsAddressesContent}
         </ModalShell>
       </div>
     </div>

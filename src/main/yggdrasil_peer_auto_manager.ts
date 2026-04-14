@@ -1397,9 +1397,9 @@ export class YggdrasilPeerAutoManager {
       if (!sample) continue;
       if (sample.up) {
         samples.push(sample);
-        log.info(
-          `ygg-peer-auto-manager: probe sample success uri=${uri} attempt=${attempt + 1}/${cfg.probeAttempts} ${formatProbeMetric('latencyMs', sample.latencyMs)}`,
-        );
+        // log.info(
+        //   `ygg-peer-auto-manager: probe sample success uri=${uri} attempt=${attempt + 1}/${cfg.probeAttempts} ${formatProbeMetric('latencyMs', sample.latencyMs)}`,
+        // );
         continue;
       }
       log.info(
@@ -1498,7 +1498,7 @@ export class YggdrasilPeerAutoManager {
       });
     }
     if (result.ok) {
-      log.info(`ygg-peer-auto-manager: added peer uri=${uri} successfully`);
+      // log.info(`ygg-peer-auto-manager: added peer uri=${uri} successfully`);
     }
   }
 

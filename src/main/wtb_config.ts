@@ -67,12 +67,24 @@ export type WtbConfigV1 = {
   web?: {
     /** Optional: override base assets directory used for bundled web apps (cinny/element) */
     assetsDir?: string;
+
+    /** Optional: auto-start local web service when Yggdrasil is running */
+    autoStartEnabled?: boolean;
+  };
+
+  /** Optional: Yggdrasil site route preheater */
+  yggSitePreheater?: {
+    /** Optional: whether to pre-warm known website routes in the background */
+    enabled?: boolean;
   };
 
   /** Optional: IPFS repository configuration */
   ipfs?: {
     /** Optional: override the default Kubo repo directory */
     repoDir?: string;
+
+    /** Optional: whether remote resource manifests may expose private LAN/ULA peer addresses. Default: true */
+    allowPrivateAddressesInResourceManifest?: boolean;
   };
 };
 
@@ -244,6 +256,15 @@ const defaultConfigV1 = (): WtbConfigV1 => {
         enableDht: true,
         bootstrapIntervalMs: 60_000,
       },
+    },
+    ipfs: {
+      allowPrivateAddressesInResourceManifest: true,
+    },
+    web: {
+      autoStartEnabled: false,
+    },
+    yggSitePreheater: {
+      enabled: true,
     },
   };
 };
@@ -449,12 +470,52 @@ const normalizeConfigV1 = (raw: unknown): WtbConfigV1 => {
     web: (() => {
       const webObj = obj?.web && typeof obj.web === 'object' ? obj.web : {};
       const assetsRaw = typeof webObj.assetsDir === 'string' ? webObj.assetsDir.trim() : '';
-      return assetsRaw ? { assetsDir: assetsRaw } : undefined;
+      const autoStartEnabled = normalizeBoolean(
+        webObj.autoStartEnabled,
+        def.web?.autoStartEnabled ?? false,
+      );
+      if (!assetsRaw && autoStartEnabled === (def.web?.autoStartEnabled ?? false)) {
+        return undefined;
+      }
+      return {
+        ...(assetsRaw ? { assetsDir: assetsRaw } : {}),
+        autoStartEnabled,
+      };
+    })(),
+    yggSitePreheater: (() => {
+      const rawPreheater =
+        obj?.yggSitePreheater && typeof obj.yggSitePreheater === 'object'
+          ? obj.yggSitePreheater
+          : {};
+      const enabled = normalizeBoolean(
+        rawPreheater.enabled,
+        def.yggSitePreheater?.enabled ?? false,
+      );
+      if (enabled === (def.yggSitePreheater?.enabled ?? false)) {
+        return undefined;
+      }
+      return { enabled };
     })(),
     ipfs: (() => {
       const ipfsObj = obj?.ipfs && typeof obj.ipfs === 'object' ? obj.ipfs : {};
       const repoRaw = typeof ipfsObj.repoDir === 'string' ? ipfsObj.repoDir.trim() : '';
-      return repoRaw ? { repoDir: repoRaw } : undefined;
+      const allowPrivateAddressesInResourceManifest = normalizeBoolean(
+        ipfsObj.allowPrivateAddressesInResourceManifest,
+        def.ipfs?.allowPrivateAddressesInResourceManifest ?? true,
+      );
+
+      if (
+        !repoRaw &&
+        allowPrivateAddressesInResourceManifest ===
+          (def.ipfs?.allowPrivateAddressesInResourceManifest ?? true)
+      ) {
+        return undefined;
+      }
+
+      return {
+        ...(repoRaw ? { repoDir: repoRaw } : {}),
+        allowPrivateAddressesInResourceManifest,
+      };
     })(),
   };
 };
@@ -478,6 +539,10 @@ const renderYamlWithHeader = (cfg: WtbConfigV1): string => {
     + '#   - sampleSize / probeAttempts / probeIntervalMs / probeTimeoutMs：探测参数。\n'
     + '#   - lastSelectedPeers / probeState：自动调度内部状态，会由程序自动维护。\n'
     + '# - ipfs.repoDir：可选，覆盖默认的 IPFS Repo 存储目录。\n'
+    + '# - web.autoStartEnabled：是否在 Yggdrasil 可用时自动启动 Web 服务。默认 false。\n'
+    + '# - yggSitePreheater.enabled：是否在后台低频预热已知 Ygg 网站路由。默认 true。\n'
+    + '# - ipfs.allowPrivateAddressesInResourceManifest：远程资源清单里是否允许暴露内网 IPFS 地址。默认 true。\n'
+    + '#   - 无论该值为何，loopback 和 link-local 地址都会被过滤。\n'
     + '#\n';
 
   const yamlBody = YAML.stringify(cfg);
@@ -694,6 +759,44 @@ export const setWtbWebAssetsDir = (assetsDir: string | null): WtbConfigV1 => {
   // Clean up if web is empty
   try {
     if (!parsed.web || Object.keys(parsed.web).length === 0) delete parsed.web;
+  } catch {
+    // ignore
+  }
+
+  return persistMutableConfigObject(parsed);
+};
+
+export const setWtbWebAutoStartEnabled = (enabled: boolean): WtbConfigV1 => {
+  const parsed = loadMutableConfigObject();
+
+  if (!parsed.web || typeof parsed.web !== 'object') parsed.web = {};
+  parsed.web.autoStartEnabled = Boolean(enabled);
+
+  try {
+    if (!parsed.web || Object.keys(parsed.web).length === 0) delete parsed.web;
+  } catch {
+    // ignore
+  }
+
+  return persistMutableConfigObject(parsed);
+};
+
+export const setWtbYggSitePreheaterEnabled = (enabled: boolean): WtbConfigV1 => {
+  const parsed = loadMutableConfigObject();
+
+  if (!parsed.yggSitePreheater || typeof parsed.yggSitePreheater !== 'object') {
+    parsed.yggSitePreheater = {};
+  }
+
+  parsed.yggSitePreheater.enabled = Boolean(enabled);
+
+  try {
+    if (
+      parsed.yggSitePreheater &&
+      Object.keys(parsed.yggSitePreheater).length === 0
+    ) {
+      delete parsed.yggSitePreheater;
+    }
   } catch {
     // ignore
   }

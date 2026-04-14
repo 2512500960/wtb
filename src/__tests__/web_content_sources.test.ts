@@ -4,9 +4,13 @@ import path from 'path';
 
 import type { IpfsCidReleaseResult, IpfsSidecarManager } from '../main/ipfs_manager';
 import {
+  createManagedWebDirectory,
   deleteManagedWebEntry,
   migrateWebContentToManagedIpfs,
   normalizeReservedLocalWebPaths,
+  pasteManagedWebEntries,
+  renameManagedWebEntry,
+  replaceManagedWebFile,
 } from '../main/web_content_sources';
 
 const MANIFEST_FILE_NAME = '.wtb-content-sources.json';
@@ -273,5 +277,108 @@ describe('deleteManagedWebEntry', () => {
         mtimeMs: 1,
       },
     });
+  });
+
+  test('keeps the fixed /video directory when its last child file is removed', async () => {
+    fs.mkdirSync(path.join(webRoot, 'video'), { recursive: true });
+    fs.writeFileSync(path.join(webRoot, 'video', 'movie.mp4'), Buffer.alloc(4));
+    const { ipfsManager } = createMockIpfsManager();
+
+    await deleteManagedWebEntry({
+      webRoot,
+      requestedPath: '/video/movie.mp4',
+      ipfsManager,
+    });
+
+    expect(fs.existsSync(path.join(webRoot, 'video'))).toBe(true);
+    expect(fs.existsSync(path.join(webRoot, 'video', 'movie.mp4'))).toBe(false);
+  });
+
+  test('blocks deleting the fixed /files directory', async () => {
+    fs.mkdirSync(path.join(webRoot, 'files'), { recursive: true });
+    const { ipfsManager } = createMockIpfsManager();
+
+    await expect(
+      deleteManagedWebEntry({
+        webRoot,
+        requestedPath: '/files',
+        ipfsManager,
+      }),
+    ).rejects.toThrow('固定目录 /files 不可删除或移动。');
+  });
+});
+
+describe('managed web protection rules', () => {
+  let webRoot: string;
+
+  beforeEach(() => {
+    webRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'wtb-web-protected-'));
+    writeManifest(webRoot, {});
+  });
+
+  afterEach(() => {
+    fs.rmSync(webRoot, { recursive: true, force: true });
+  });
+
+  test('blocks renaming the fixed /index.html file', () => {
+    fs.writeFileSync(path.join(webRoot, 'index.html'), '<html></html>\n', 'utf8');
+
+    expect(() =>
+      renameManagedWebEntry({
+        webRoot,
+        requestedPath: '/index.html',
+        newName: 'index-old.html',
+      }),
+    ).toThrow('固定文件 /index.html 不可通过文件管理器修改。');
+  });
+
+  test('blocks creating the fixed /vendor directory from the file manager', () => {
+    expect(() =>
+      createManagedWebDirectory({
+        webRoot,
+        parentPath: '/',
+        directoryName: 'vendor',
+      }),
+    ).toThrow('固定目录 /vendor 不可通过文件管理器修改。');
+  });
+
+  test('blocks replacing files inside /vendor', async () => {
+    fs.mkdirSync(path.join(webRoot, 'vendor'), { recursive: true });
+    const tempFile = path.join(webRoot, 'replacement.css');
+    fs.writeFileSync(tempFile, 'body {}\n', 'utf8');
+    const { ipfsManager } = createMockIpfsManager();
+
+    await expect(
+      replaceManagedWebFile({
+        webRoot,
+        targetPath: '/vendor/plyr.css',
+        sourceFilePath: tempFile,
+        ipfsManager,
+      }),
+    ).rejects.toThrow('固定目录 /vendor 不可通过文件管理器修改。');
+  });
+
+  test('blocks moving the fixed /video directory', () => {
+    writeManifest(webRoot, {
+      '/video': {
+        kind: 'directory',
+        path: '/video',
+        mtimeMs: 1,
+      },
+      '/archive': {
+        kind: 'directory',
+        path: '/archive',
+        mtimeMs: 1,
+      },
+    });
+
+    expect(() =>
+      pasteManagedWebEntries({
+        webRoot,
+        requestedPaths: ['/video'],
+        destinationDirectoryPath: '/archive',
+        operationType: 'move',
+      }),
+    ).toThrow('固定目录 /video 不可删除或移动。');
   });
 });

@@ -72,6 +72,7 @@ const MANIFEST_FILE_NAME = '.wtb-content-sources.json';
 const SIMPLE_MODE_AUTO_CONVERT_THRESHOLD_BYTES = 5 * 1024 * 1024;
 const RESERVED_LOCAL_WEB_FILE_PATHS = new Set(['/index.html']);
 const RESERVED_LOCAL_WEB_DIRECTORY_PATH = '/vendor';
+const DELETE_PROTECTED_LOCAL_WEB_DIRECTORY_PATHS = new Set(['/video', '/files']);
 
 export type SyncWebContentWithIpfsResult = {
   thresholdBytes: number;
@@ -119,13 +120,44 @@ const normalizeManifestPath = (inputPath: string): string => {
   return normalized.startsWith('/') ? normalized : `/${normalized}`;
 };
 
+const isReservedLocalWebDirectoryPath = (inputPath: string): boolean => {
+  const normalizedPath = normalizeManifestPath(inputPath);
+  return (
+    normalizedPath === RESERVED_LOCAL_WEB_DIRECTORY_PATH
+    || normalizedPath.startsWith(`${RESERVED_LOCAL_WEB_DIRECTORY_PATH}/`)
+  );
+};
+
+const isDeleteProtectedLocalWebDirectoryPath = (inputPath: string): boolean => {
+  return DELETE_PROTECTED_LOCAL_WEB_DIRECTORY_PATHS.has(
+    normalizeManifestPath(inputPath),
+  );
+};
+
 export const isReservedLocalWebPath = (inputPath: string): boolean => {
   const normalizedPath = normalizeManifestPath(inputPath);
   return (
     RESERVED_LOCAL_WEB_FILE_PATHS.has(normalizedPath)
-    || normalizedPath === RESERVED_LOCAL_WEB_DIRECTORY_PATH
-    || normalizedPath.startsWith(`${RESERVED_LOCAL_WEB_DIRECTORY_PATH}/`)
+    || isReservedLocalWebDirectoryPath(normalizedPath)
   );
+};
+
+const assertManagedWebTargetWritable = (inputPath: string): void => {
+  const normalizedPath = normalizeManifestPath(inputPath);
+  if (RESERVED_LOCAL_WEB_FILE_PATHS.has(normalizedPath)) {
+    throw new Error('固定文件 /index.html 不可通过文件管理器修改。');
+  }
+  if (isReservedLocalWebDirectoryPath(normalizedPath)) {
+    throw new Error('固定目录 /vendor 不可通过文件管理器修改。');
+  }
+};
+
+const assertManagedWebStructureChangeAllowed = (inputPath: string): void => {
+  const normalizedPath = normalizeManifestPath(inputPath);
+  assertManagedWebTargetWritable(normalizedPath);
+  if (isDeleteProtectedLocalWebDirectoryPath(normalizedPath)) {
+    throw new Error(`固定目录 ${normalizedPath} 不可删除或移动。`);
+  }
 };
 
 const getParentPath = (inputPath: string): string => {
@@ -875,6 +907,12 @@ export const normalizeReservedLocalWebPaths = async (opts: {
 const removeEmptyPhysicalParents = (webRoot: string, normalizedPath: string): void => {
   let currentPath = getParentPath(normalizedPath);
   while (currentPath !== '/') {
+    if (
+      isReservedLocalWebPath(currentPath)
+      || isDeleteProtectedLocalWebDirectoryPath(currentPath)
+    ) {
+      return;
+    }
     const fsPath = urlPathToFsPath(webRoot, currentPath);
     if (!fs.existsSync(fsPath) || !fs.statSync(fsPath).isDirectory()) return;
     if (fs.readdirSync(fsPath).length > 0) return;
@@ -947,6 +985,7 @@ export const createManagedWebDirectory = (opts: {
   const targetPath = parseAndNormalizeUrlPath(
     path.posix.join(normalizedParentPath, name),
   );
+  assertManagedWebTargetWritable(targetPath);
 
   const manifest = readWebContentSourceManifest(opts.webRoot);
   const existing = getStoredDirectoryEntryForPath(manifest, targetPath);
@@ -1017,6 +1056,13 @@ export const importManagedWebFiles = async (opts: {
     }
   }
 
+  sourceFiles.forEach(({ basename }) => {
+    const targetPath = parseAndNormalizeUrlPath(
+      path.posix.join(normalizedTargetDirectoryPath, basename),
+    );
+    assertManagedWebTargetWritable(targetPath);
+  });
+
   for (const sourceFile of sourceFiles) {
     const { resolvedSourcePath, stat, basename } = sourceFile;
     const targetPath = parseAndNormalizeUrlPath(
@@ -1029,21 +1075,6 @@ export const importManagedWebFiles = async (opts: {
     const previousCid = getEntryCid(targetEntry);
     if (previousCid) {
       candidateReleasedCids.add(previousCid);
-    }
-
-    if (isReservedLocalWebPath(targetPath)) {
-      writeLocalWebFileFromSource(opts.webRoot, targetPath, resolvedSourcePath);
-      delete manifest.entries[targetPath];
-      importedPaths.push(targetPath);
-      completedBytes += stat.size;
-      opts.onProgress?.({
-        current: importedPaths.length,
-        total: totalFiles,
-        currentBytes: completedBytes,
-        totalBytes,
-        message: `正在上传文件 ${importedPaths.length}/${totalFiles}：${basename}`,
-      });
-      continue;
     }
 
     removeLocalWebPathIfExists(opts.webRoot, targetPath);
@@ -1112,31 +1143,12 @@ export const replaceManagedWebFile = async (opts: {
     throw new Error('替换源文件不存在。');
   }
 
+  assertManagedWebTargetWritable(normalizedTargetPath);
   const manifest = readWebContentSourceManifest(opts.webRoot);
   const overwrittenPaths = manifest.entries[normalizedTargetPath]
     ? [normalizedTargetPath]
     : [];
   const previousCid = getEntryCid(manifest.entries[normalizedTargetPath]);
-
-  if (isReservedLocalWebPath(normalizedTargetPath)) {
-    writeLocalWebFileFromSource(opts.webRoot, normalizedTargetPath, resolvedSourcePath);
-    delete manifest.entries[normalizedTargetPath];
-    writeWebContentSourceManifest(opts.webRoot, manifest);
-    const cleanup = await releaseOrphanedManagedWebCids({
-      manifest,
-      candidateCids: previousCid ? [previousCid] : [],
-      ipfsManager: opts.ipfsManager,
-    });
-
-    return {
-      importedFiles: 1,
-      importedDirectories: 0,
-      overwrittenPaths,
-      paths: [normalizedTargetPath],
-      releasedCids: cleanup.releasedCids,
-      cleanupIssues: cleanup.cleanupIssues,
-    };
-  }
 
   ensureManagedDirectoryChain(manifest, normalizedTargetPath);
   removeLocalWebPathIfExists(opts.webRoot, normalizedTargetPath);
@@ -1197,6 +1209,7 @@ export const importManagedWebDirectory = async (opts: {
   const rootTargetPath = parseAndNormalizeUrlPath(
     path.posix.join(normalizedTargetDirectoryPath, path.basename(resolvedSourceDirectoryPath)),
   );
+  assertManagedWebTargetWritable(rootTargetPath);
   if (
     !isReservedLocalWebPath(rootTargetPath)
     && !getStoredDirectoryEntryForPath(manifest, rootTargetPath)
@@ -1264,21 +1277,6 @@ export const importManagedWebDirectory = async (opts: {
       candidateReleasedCids.add(previousCid);
     }
 
-    if (isReservedLocalWebPath(targetPath)) {
-      writeLocalWebFileFromSource(opts.webRoot, targetPath, file.fsPath);
-      delete manifest.entries[targetPath];
-      importedPaths.push(targetPath);
-      completedBytes += file.stat.size;
-      opts.onProgress?.({
-        current: importedPaths.length,
-        total: totalFiles,
-        currentBytes: completedBytes,
-        totalBytes,
-        message: `正在导入目录 ${importedPaths.length}/${totalFiles}：${file.relativePath}`,
-      });
-      continue;
-    }
-
     removeLocalWebPathIfExists(opts.webRoot, targetPath);
     // eslint-disable-next-line no-await-in-loop
     const result = await opts.ipfsManager.ensurePathCached(file.fsPath, {
@@ -1342,6 +1340,7 @@ export const deleteManagedWebEntry = async (opts: {
   if (normalizedPath === '/') {
     throw new Error('不能删除根目录。');
   }
+  assertManagedWebStructureChangeAllowed(normalizedPath);
 
   const manifest = readWebContentSourceManifest(opts.webRoot);
   const prefix = `${normalizedPath}/`;
@@ -1381,11 +1380,13 @@ export const renameManagedWebEntry = (opts: {
   if (normalizedPath === '/') {
     throw new Error('不能重命名根目录。');
   }
+  assertManagedWebStructureChangeAllowed(normalizedPath);
 
   const safeName = ensureSafeManagedName(opts.newName);
   const nextPath = parseAndNormalizeUrlPath(
     path.posix.join(getParentPath(normalizedPath), safeName),
   );
+  assertManagedWebTargetWritable(nextPath);
   if (nextPath === normalizedPath) {
     return { fromPath: normalizedPath, toPath: nextPath, movedPaths: [] };
   }
@@ -1441,11 +1442,15 @@ export const pasteManagedWebEntries = (opts: {
     if (requestedPath === '/' || requestedPath === destinationDirectoryPath) {
       return;
     }
+    if (opts.operationType === 'move') {
+      assertManagedWebStructureChangeAllowed(requestedPath);
+    }
 
     const basename = path.posix.basename(requestedPath);
     const targetPath = parseAndNormalizeUrlPath(
       path.posix.join(destinationDirectoryPath, basename),
     );
+    assertManagedWebTargetWritable(targetPath);
     if (targetPath === requestedPath) return;
     if (targetPath.startsWith(`${requestedPath}/`)) {
       throw new Error('不能把目录移动到自己的子目录中。');

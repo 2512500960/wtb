@@ -24,6 +24,14 @@ function isPdf(mime?: string): boolean {
   return (mime || '') === 'application/pdf';
 }
 
+function shouldHideRemoteEntry(entry: RemoteResourcePreparedEntry): boolean {
+  return (
+    entry.path === '/index.html' ||
+    entry.path === '/vendor' ||
+    entry.path.startsWith('/vendor/')
+  );
+}
+
 async function copyText(text: string): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(text);
@@ -47,6 +55,62 @@ function getEntrySourceBucket(entry: RemoteResourcePreparedEntry): string {
 
 function getSourceLabel(source: RemoteResourceSource): string {
   return source === 'ipfs' ? 'IPFS' : 'HTTP';
+}
+
+function ModalShell({
+  title,
+  open,
+  onClose,
+  children,
+}: {
+  title: string;
+  open: boolean;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="ChatModalOverlay"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        className="ChatModal"
+        role="dialog"
+        aria-modal="true"
+        style={{
+          width: 'min(960px, calc(100vw - 32px))',
+          maxHeight: 'min(84vh, 860px)',
+          overflow: 'auto',
+        }}
+      >
+        <div className="ChatModalHeader">
+          <div className="ChatModalTitle">{title}</div>
+          <button
+            type="button"
+            className="ServiceGhostButton"
+            onClick={onClose}
+          >
+            关闭
+          </button>
+        </div>
+        <div className="ChatModalBody">{children}</div>
+      </div>
+    </div>
+  );
 }
 
 export default function RemoteResourcesPage({
@@ -75,6 +139,7 @@ export default function RemoteResourcesPage({
   const [copyHint, setCopyHint] = React.useState<string | null>(null);
   const [sessionSourcePreferences, setSessionSourcePreferences] =
     React.useState<Record<string, RemoteResourceSource>>({});
+  const [showConnectedPeers, setShowConnectedPeers] = React.useState(false);
   const autoLoadedRef = React.useRef(false);
 
   const getSourcePreferenceKey = React.useCallback(
@@ -223,6 +288,13 @@ export default function RemoteResourcesPage({
     return up ? `${up}/`.replace(/\/\/+/, '/') : '/';
   }, [currentPath]);
 
+  const visibleEntries = React.useMemo(() => {
+    return result
+      ? result.entries.filter((entry) => !shouldHideRemoteEntry(entry))
+      : [];
+  }, [result]);
+  const connectedPeers = result?.localIpfs.connected ?? [];
+
   React.useEffect(() => {
     if (autoLoadedRef.current) return;
     if (!initialBaseUrl) return;
@@ -246,6 +318,7 @@ export default function RemoteResourcesPage({
             <button
               type="button"
               className="ServiceGhostButton"
+              style={{ width: '140px' }}
               onClick={() =>
                 window.electron.ipcRenderer.invoke(
                   'open-external',
@@ -304,11 +377,20 @@ export default function RemoteResourcesPage({
             清单地址：{result.manifestUrl}
             <br />
             本地 IPFS：{result.localIpfs.running ? '运行中' : '未运行'}
-            {result.localIpfs.connected.length > 0 ? (
+            {connectedPeers.length > 0 ? (
               <>
                 <br />
                 已尝试接入远端声明的 IPFS peer 地址：
-                {result.localIpfs.connected.length} 条成功
+                {connectedPeers.length} 条成功
+                {' · '}
+                <button
+                  type="button"
+                  className="ServiceGhostButton"
+                  style={{ width: '140px' }}
+                  onClick={() => setShowConnectedPeers(true)}
+                >
+                  查看peer地址
+                </button>
               </>
             ) : null}
             {result.localIpfs.failed.length > 0 ? (
@@ -328,14 +410,14 @@ export default function RemoteResourcesPage({
                 <button
                   type="button"
                   className="ServiceGhostButton"
-                  style={{ marginTop: 10 }}
+                  style={{ marginTop: 10, width: '140px' }}
                   onClick={() => loadManifest(baseUrlInput, parentPath)}
                 >
                   返回上级目录
                 </button>
               ) : null}
               <div className="ResourceList">
-                {result.entries.map((entry) => (
+                {visibleEntries.map((entry) => (
                   <div
                     key={`${entry.path}-${entry.name}`}
                     className="ResourceRow"
@@ -370,6 +452,7 @@ export default function RemoteResourcesPage({
                         <button
                           type="button"
                           className="ServiceGhostButton"
+                          style={{ width: '100px' }}
                           onClick={() => loadManifest(baseUrlInput, entry.path)}
                         >
                           打开目录
@@ -427,6 +510,11 @@ export default function RemoteResourcesPage({
                     </div>
                   </div>
                 ))}
+                {visibleEntries.length === 0 ? (
+                  <div className="ServiceHint">
+                    当前目录没有需要展示的资源。
+                  </div>
+                ) : null}
               </div>
             </div>
 
@@ -504,6 +592,52 @@ export default function RemoteResourcesPage({
           </div>
         </>
       ) : null}
+
+      <ModalShell
+        open={showConnectedPeers}
+        onClose={() => setShowConnectedPeers(false)}
+        title={`已接入的 IPFS peer 地址（${connectedPeers.length}）`}
+      >
+        {connectedPeers.length > 0 ? (
+          <div className="WebsiteIndexTableWrapper" style={{ marginTop: 0 }}>
+            <table className="WebsiteIndexTable">
+              <thead>
+                <tr>
+                  <th className="WebsiteIndexHeadCell">地址</th>
+                  <th className="WebsiteIndexHeadCell">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {connectedPeers.map((peer) => (
+                  <tr key={peer}>
+                    <td
+                      className="WebsiteIndexCell"
+                      style={{ wordBreak: 'break-all' }}
+                    >
+                      {peer}
+                    </td>
+                    <td className="WebsiteIndexCell">
+                      <button
+                        type="button"
+                        className="ServiceGhostButton"
+                        onClick={async () => {
+                          const ok = await copyText(peer);
+                          setCopyHint(ok ? 'Peer 地址已复制' : '复制失败');
+                          window.setTimeout(() => setCopyHint(null), 1200);
+                        }}
+                      >
+                        复制
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="ServiceHint">当前没有已接入的 peer 地址。</div>
+        )}
+      </ModalShell>
     </div>
   );
 }

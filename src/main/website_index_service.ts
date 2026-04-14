@@ -20,6 +20,44 @@ export type WebsiteIndexLoadResult = {
   data: unknown;
 };
 
+type IndexItem = Record<string, unknown>;
+
+const pickString = (value: unknown): string =>
+  typeof value === 'string' ? value.trim() : '';
+
+const readIndexArray = (data: unknown): IndexItem[] => {
+  if (Array.isArray(data)) {
+    return data.filter((item) => item && typeof item === 'object') as IndexItem[];
+  }
+
+  if (data && typeof data === 'object') {
+    const obj = data as Record<string, unknown>;
+    const rows = obj.rows ?? obj.items ?? obj.data ?? obj.list;
+    if (Array.isArray(rows)) {
+      return rows.filter((item) => item && typeof item === 'object') as IndexItem[];
+    }
+  }
+
+  return [];
+};
+
+export const extractWebsiteIndexUrls = (data: unknown): string[] => {
+  const rows = readIndexArray(data);
+  const urls = rows
+    .map((item) => {
+      return (
+        pickString(item.url)
+        || pickString(item.href)
+        || pickString(item.URL)
+        || pickString(item['地址'])
+        || pickString(item['链接'])
+      );
+    })
+    .filter(Boolean);
+
+  return Array.from(new Set(urls));
+};
+
 const httpGetText = async (
   url: string,
   timeoutMs: number,

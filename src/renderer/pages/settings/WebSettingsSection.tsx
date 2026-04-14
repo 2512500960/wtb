@@ -4,6 +4,9 @@ import { createPortal } from 'react-dom';
 import '@cubone/react-file-manager/dist/style.css';
 
 const ROOT_MANAGER_PATH = '';
+const IMMUTABLE_MANAGER_FILE_PATHS = new Set(['/index.html']);
+const IMMUTABLE_MANAGER_DIRECTORY_PATH = '/vendor';
+const DELETE_PROTECTED_MANAGER_DIRECTORY_PATHS = new Set(['/video', '/files']);
 
 type ManagedWebEntry = {
   name: string;
@@ -80,7 +83,45 @@ const toManagerPath = (webPath: string): string => {
 const fromManagerPath = (managerPath: string | null | undefined): string => {
   const value = (managerPath || '').trim();
   if (!value) return '/';
-  return value.startsWith('/') ? value : `/${value}`;
+  const normalizedValue = value.replace(/\/+/g, '/');
+  return normalizedValue.startsWith('/')
+    ? normalizedValue
+    : `/${normalizedValue}`;
+};
+
+const isImmutableManagerPath = (inputPath: string): boolean => {
+  const normalizedPath = fromManagerPath(inputPath);
+  return (
+    IMMUTABLE_MANAGER_FILE_PATHS.has(normalizedPath) ||
+    normalizedPath === IMMUTABLE_MANAGER_DIRECTORY_PATH ||
+    normalizedPath.startsWith(`${IMMUTABLE_MANAGER_DIRECTORY_PATH}/`)
+  );
+};
+
+const isDeleteProtectedManagerDirectory = (inputPath: string): boolean => {
+  return DELETE_PROTECTED_MANAGER_DIRECTORY_PATHS.has(
+    fromManagerPath(inputPath),
+  );
+};
+
+const getManagerProtectionMessage = (
+  inputPath: string,
+  action: 'modify' | 'delete' | 'move',
+): string => {
+  const normalizedPath = fromManagerPath(inputPath);
+  if (IMMUTABLE_MANAGER_FILE_PATHS.has(normalizedPath)) {
+    return '固定文件 /index.html 不可通过文件管理器修改。';
+  }
+  if (
+    normalizedPath === IMMUTABLE_MANAGER_DIRECTORY_PATH ||
+    normalizedPath.startsWith(`${IMMUTABLE_MANAGER_DIRECTORY_PATH}/`)
+  ) {
+    return '固定目录 /vendor 不可通过文件管理器修改。';
+  }
+  if (DELETE_PROTECTED_MANAGER_DIRECTORY_PATHS.has(normalizedPath)) {
+    return `固定目录 ${normalizedPath} 不可${action === 'delete' ? '删除' : '移动'}。`;
+  }
+  return '该路径不允许当前操作。';
 };
 
 const toManagerFile = (entry: ManagedWebEntry): ManagerFileItem => ({
@@ -500,6 +541,10 @@ export default function WebSettingsSection() {
     setUploadMenuOpen(false);
     setError(null);
     setMessage(null);
+    if (isImmutableManagerPath(currentWebPath)) {
+      setError(getManagerProtectionMessage(currentWebPath, 'modify'));
+      return;
+    }
     setOperationBusy(true);
     try {
       const res = (await window.electron.ipcRenderer.invoke(
@@ -535,6 +580,10 @@ export default function WebSettingsSection() {
     setUploadMenuOpen(false);
     setError(null);
     setMessage(null);
+    if (isImmutableManagerPath(currentWebPath)) {
+      setError(getManagerProtectionMessage(currentWebPath, 'modify'));
+      return;
+    }
     setOperationBusy(true);
     try {
       const res = (await window.electron.ipcRenderer.invoke(
@@ -625,11 +674,19 @@ export default function WebSettingsSection() {
     async (name: string, parentFolder?: { path?: string }) => {
       setError(null);
       setMessage(null);
+      const parentPath = fromManagerPath(
+        parentFolder?.path || currentManagerPath,
+      );
+      const targetPath = fromManagerPath(`${parentPath}/${name}`);
+      if (isImmutableManagerPath(targetPath)) {
+        setError(getManagerProtectionMessage(targetPath, 'modify'));
+        return;
+      }
       setOperationBusy(true);
       try {
         const res = (await window.electron.ipcRenderer.invoke(
           'wtb:web:createDirectory',
-          fromManagerPath(parentFolder?.path || currentManagerPath),
+          parentPath,
           name,
         )) as {
           ok?: boolean;
@@ -659,11 +716,30 @@ export default function WebSettingsSection() {
     async (file: { path: string }, newName: string) => {
       setError(null);
       setMessage(null);
+      const sourcePath = fromManagerPath(file.path);
+      const parentPath = sourcePath.split('/').slice(0, -1).join('/') || '/';
+      const targetPath = fromManagerPath(`${parentPath}/${newName}`);
+      if (
+        isImmutableManagerPath(sourcePath) ||
+        isDeleteProtectedManagerDirectory(sourcePath)
+      ) {
+        setError(
+          getManagerProtectionMessage(
+            sourcePath,
+            isDeleteProtectedManagerDirectory(sourcePath) ? 'move' : 'modify',
+          ),
+        );
+        return;
+      }
+      if (isImmutableManagerPath(targetPath)) {
+        setError(getManagerProtectionMessage(targetPath, 'modify'));
+        return;
+      }
       setOperationBusy(true);
       try {
         const res = (await window.electron.ipcRenderer.invoke(
           'wtb:web:renameEntry',
-          fromManagerPath(file.path),
+          sourcePath,
           newName,
         )) as {
           ok?: boolean;
@@ -691,6 +767,25 @@ export default function WebSettingsSection() {
 
       setError(null);
       setMessage(null);
+      const blockedFile = files.find((file) => {
+        const normalizedPath = fromManagerPath(file.path);
+        return (
+          isImmutableManagerPath(normalizedPath) ||
+          isDeleteProtectedManagerDirectory(normalizedPath)
+        );
+      });
+      if (blockedFile) {
+        const normalizedPath = fromManagerPath(blockedFile.path);
+        setError(
+          getManagerProtectionMessage(
+            normalizedPath,
+            isDeleteProtectedManagerDirectory(normalizedPath)
+              ? 'delete'
+              : 'modify',
+          ),
+        );
+        return;
+      }
       setOperationBusy(true);
       try {
         await Promise.all(
@@ -728,12 +823,40 @@ export default function WebSettingsSection() {
 
       setError(null);
       setMessage(null);
+      const destinationPath = fromManagerPath(
+        destinationFolder?.path || currentManagerPath,
+      );
+      if (isImmutableManagerPath(destinationPath)) {
+        setError(getManagerProtectionMessage(destinationPath, 'modify'));
+        return;
+      }
+      if (operationType === 'move') {
+        const blockedFile = files.find((file) => {
+          const normalizedPath = fromManagerPath(file.path);
+          return (
+            isImmutableManagerPath(normalizedPath) ||
+            isDeleteProtectedManagerDirectory(normalizedPath)
+          );
+        });
+        if (blockedFile) {
+          const normalizedPath = fromManagerPath(blockedFile.path);
+          setError(
+            getManagerProtectionMessage(
+              normalizedPath,
+              isDeleteProtectedManagerDirectory(normalizedPath)
+                ? 'move'
+                : 'modify',
+            ),
+          );
+          return;
+        }
+      }
       setOperationBusy(true);
       try {
         const res = (await window.electron.ipcRenderer.invoke(
           'wtb:web:pasteEntries',
           files.map((file) => fromManagerPath(file.path)),
-          fromManagerPath(destinationFolder?.path || currentManagerPath),
+          destinationPath,
           operationType,
         )) as {
           ok?: boolean;
@@ -846,6 +969,10 @@ export default function WebSettingsSection() {
         <div style={{ marginTop: 8, opacity: 0.82, lineHeight: 1.7 }}>
           组件自带的删除确认已经保留，所以页面外层不再重复确认。上传入口展开后可选择导入文件或目录，
           目录管理、进度显示和 CID 相关操作保持不变。
+        </div>
+        <div style={{ marginTop: 8, opacity: 0.82, lineHeight: 1.7 }}>
+          固定资源会被保护：/index.html 和 /vendor 不允许通过文件管理器修改，
+          /video 与 /files 目录不允许删除或移动。
         </div>
 
         {error ? (
@@ -1010,7 +1137,7 @@ export default function WebSettingsSection() {
               move: true,
               copy: true,
               rename: true,
-              download: true,
+              download: false,
               delete: true,
             }}
             onError={(nextError: { message?: string }) => {

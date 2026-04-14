@@ -15,17 +15,11 @@ import SiteServicesPage from './pages/SiteServicesPage';
 import StatusPage from './pages/StatusPage';
 import { FEATURES } from './features/flags';
 import type { YggdrasilCtlResult } from './types/yggdrasilctl';
-
-const YGG_WEBSITE_INDEX_URL = 'http://[21e:a51c:885b:7db0:166e:927:98cd:d186]/';
-
-// 临时：弃用内置的 YggWebsiteIndexPage，改为在 WTB 内弹窗打开索引站点
-// const YGG_WEBSITE_INDEX_IN_APP_URL =
-//   'http://[200:5948:48e2:97e3:8afb:40aa:b3ac:4d94]/';
-const YGG_WEBSITE_INDEX_IN_APP_URL =
-  'http://[200:5948:48e2:97e3:8afb:40aa:b3ac:4d94]';
-
-const YGG_MINI_WIKI_URL =
-  'http://[200:85b:60c4:e7b5:c33b:959f:9b52:6783]/?lang=zh';
+import {
+  YGG_MINI_WIKI_URL,
+  YGG_WEBSITE_INDEX_IN_APP_URL,
+  YGG_WEBSITE_INDEX_URL,
+} from '../common/ygg_urls';
 
 type StandaloneRemoteResourcesConfig = {
   baseUrl: string;
