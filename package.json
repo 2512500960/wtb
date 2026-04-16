@@ -52,6 +52,7 @@
     "start:preload": "cross-env NODE_ENV=development TS_NODE_TRANSPILE_ONLY=true NODE_OPTIONS=\"-r ts-node/register --no-warnings\" webpack --config ./.erb/configs/webpack.config.preload.dev.ts",
     "start:renderer": "cross-env NODE_ENV=development TS_NODE_TRANSPILE_ONLY=true NODE_OPTIONS=\"-r ts-node/register --no-warnings\" webpack serve --config ./.erb/configs/webpack.config.renderer.dev.ts",
     "test": "jest",
+    "generate:icons": "node ./build_tools/generate_icons.js",
     "p2p:bootstrap": "ts-node ./build_tools/p2p_bootstrap_node.ts",
     "cinny:fetch": "powershell -ExecutionPolicy Bypass -File ./build_tools/fetch_cinny_release.ps1",
     "element:fetch": "powershell -ExecutionPolicy Bypass -File ./build_tools/fetch_element_release.ps1"
@@ -178,6 +179,7 @@
     "eslint-plugin-react-hooks": "^5.2.0",
     "file-loader": "^6.2.0",
     "html-webpack-plugin": "^5.6.3",
+    "icon-gen": "^5.0.0",
     "identity-obj-proxy": "^3.0.0",
     "jest": "^29.7.0",
     "jest-environment-jsdom": "^29.7.0",

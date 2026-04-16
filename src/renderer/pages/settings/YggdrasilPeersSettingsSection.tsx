@@ -76,6 +76,8 @@ type AutoConfigField = {
   setter: React.Dispatch<React.SetStateAction<string>>;
 };
 
+type PeerMode = 'auto' | 'manual' | 'p2p';
+
 const TARGET_PEER_OPTIONS = ['3', '4', '5', '6'] as const;
 
 const normalizeAddr = (s: string): string => s.trim();
@@ -121,11 +123,11 @@ export default function YggdrasilPeersSettingsSection() {
   const [error, setError] = React.useState<string | null>(null);
   const [candidates, setCandidates] = React.useState<PublicPeerNode[]>([]);
   const [selected, setSelected] = React.useState<string[]>([]);
+  const [mode, setMode] = React.useState<PeerMode>('auto');
   const [autoStatus, setAutoStatus] = React.useState<AutoPeerStatus | null>(
     null,
   );
 
-  const [autoEnabled, setAutoEnabled] = React.useState(true);
   const [targetPeerCount, setTargetPeerCount] = React.useState('6');
   const [initialDelayMs, setInitialDelayMs] = React.useState('20000');
   const [reconcileIntervalMs, setReconcileIntervalMs] =
@@ -150,8 +152,6 @@ export default function YggdrasilPeersSettingsSection() {
 
   const applyConfigToForm = React.useCallback(
     (cfg: AutoPeerConfig | undefined) => {
-      const enabled = cfg?.enabled !== false;
-      setAutoEnabled(enabled);
       setTargetPeerCount(String(cfg?.targetPeerCount ?? 6));
       setInitialDelayMs(String(cfg?.initialDelayMs ?? 20000));
       setReconcileIntervalMs(String(cfg?.reconcileIntervalMs ?? 900000));
@@ -200,11 +200,19 @@ export default function YggdrasilPeersSettingsSection() {
           : null;
 
       setCandidates(list);
-      setSelected(
-        Array.from(new Set(selection)).filter((x) => candidateAddrSet.has(x)),
+      const persistedSelection = Array.from(new Set(selection));
+      const normalizedSelection = persistedSelection.filter((x) =>
+        candidateAddrSet.has(x),
       );
+      let resolvedMode: PeerMode = 'auto';
+      if (status?.config?.enabled === false) {
+        resolvedMode = persistedSelection.length > 0 ? 'manual' : 'p2p';
+      }
+
+      setSelected(normalizedSelection);
       setAutoStatus(status);
       applyConfigToForm(status?.config);
+      setMode(resolvedMode);
 
       if (!list.length) {
         setError(
@@ -238,7 +246,7 @@ export default function YggdrasilPeersSettingsSection() {
 
   const buildAutoConfigPayload = (): AutoPeerConfig => {
     return {
-      enabled: autoEnabled,
+      enabled: mode === 'auto',
       targetPeerCount: clampNumber(targetPeerCount, 6, 3, 6),
       initialDelayMs: clampNumber(initialDelayMs, 20000, 0, 600000),
       reconcileIntervalMs: clampNumber(
@@ -272,13 +280,16 @@ export default function YggdrasilPeersSettingsSection() {
         applyConfigToForm(configResult.status.config);
       }
 
-      if (!autoEnabled) {
-        if (selected.length < 1 || selected.length > 10) {
+      if (mode !== 'auto') {
+        if (
+          mode === 'manual' &&
+          (selected.length < 1 || selected.length > 10)
+        ) {
           throw new Error('手动模式请选择 1~10 个 peer');
         }
         await window.electron.ipcRenderer.invoke(
           'ygg:publicPeers:setSelection',
-          selected,
+          mode === 'p2p' ? [] : selected,
         );
       }
     } catch (e) {
@@ -362,14 +373,26 @@ export default function YggdrasilPeersSettingsSection() {
   );
 
   const atMax = selected.length >= 10;
-  const autoPageActive = autoEnabled;
-  const manualPageActive = !autoEnabled;
+  const autoPageActive = mode === 'auto';
+  const manualPageActive = mode === 'manual';
+  const p2pPageActive = mode === 'p2p';
   const canSaveSelection = selected.length >= 1 && selected.length <= 10;
-  const saveButtonLabel = autoEnabled ? '保存自动模式' : '保存手动模式';
+  let saveButtonLabel = '保存纯 P2P 模式';
+  if (mode === 'auto') {
+    saveButtonLabel = '保存自动模式';
+  } else if (mode === 'manual') {
+    saveButtonLabel = '保存手动模式';
+  }
   const manualSelectionHint =
     manualPageActive && !canSaveSelection ? '需选择 1 到 10 个节点' : null;
   const controlsDisabled = saving;
   let runningStatusLabel = '未运行';
+  let currentModeLabel = '纯 P2P 模式';
+  if (mode === 'auto') {
+    currentModeLabel = '自动调度模式';
+  } else if (mode === 'manual') {
+    currentModeLabel = '手动固定模式';
+  }
   if (autoStatus?.cycleInFlight) {
     runningStatusLabel = '调度中';
   } else if (autoStatus?.running) {
@@ -383,21 +406,22 @@ export default function YggdrasilPeersSettingsSection() {
         <div className="ChatTopActions">
           <select
             className="ChatInput"
-            value={autoEnabled ? 'auto' : 'manual'}
+            value={mode}
             onChange={(e) => {
-              setAutoEnabled(e.target.value === 'auto');
+              setMode(e.target.value as PeerMode);
             }}
-            style={{ width: '100px' }}
+            style={{ width: '120px' }}
             disabled={saving}
           >
             <option value="auto">自动模式</option>
             <option value="manual">手动模式</option>
+            <option value="p2p">纯 P2P</option>
           </select>
           <button
             type="button"
             className="ServicePrimaryButton"
             onClick={saveCurrentMode}
-            style={{ width: '130px' }}
+            style={{ width: '140px' }}
             disabled={saving || (manualPageActive && !canSaveSelection)}
           >
             {saving ? '保存中...' : saveButtonLabel}
@@ -414,9 +438,7 @@ export default function YggdrasilPeersSettingsSection() {
         <div className="ChatTopItem">
           <div className="ChatTopLabel">当前模式</div>
           <div className="ChatStack">
-            <div className="ChatTopValue">
-              {autoEnabled ? '自动调度模式' : '手动固定模式'}
-            </div>
+            <div className="ChatTopValue">{currentModeLabel}</div>
             <div className="ChatTinyHint">
               模式切换请使用顶部下拉框，再点击顶部保存按钮生效。
             </div>
@@ -431,7 +453,7 @@ export default function YggdrasilPeersSettingsSection() {
         <div className="ChatTopItem">
           <div className="ChatTopLabel">手动固定 Peer</div>
           <div className="ChatTopValue">
-            {autoEnabled
+            {mode === 'auto'
               ? '自动模式下不启用'
               : `${autoStatus?.pinnedPeers.length ?? selected.length}`}
           </div>
@@ -530,8 +552,8 @@ export default function YggdrasilPeersSettingsSection() {
             </div>
 
             <div className="ChatTinyHint">
-              自动模式会从 public_peers.json
-              中动态挑选节点。手动模式里保存的节点在自动模式下只会被排除，不会被自动调度直接采用。
+              自动模式会从 public_peers.json 中动态挑选节点。手动模式和纯 P2P
+              模式里保存的节点在自动模式下只会被排除，不会被自动调度直接采用。
             </div>
           </div>
         ) : null}
@@ -661,6 +683,21 @@ export default function YggdrasilPeersSettingsSection() {
               </div>
             </div>
           </>
+        ) : null}
+
+        {p2pPageActive ? (
+          <div className="ChatTopItem ChatTopItemWide">
+            <div className="ChatTopLabel">纯 P2P 模式页面</div>
+            <div className="ChatStack">
+              <div className="ChatTopValue">
+                纯 P2P 模式当前等价于 0 个手动固定 public peer。
+              </div>
+              <div className="ChatTinyHint">
+                保存后会停止自动 public peer 调度，并清空当前保存的手动 public
+                peer 选择；运行中的 public 连接也会同步移除，仅保留 P2P 侧连接。
+              </div>
+            </div>
+          </div>
         ) : null}
       </div>
     </div>
