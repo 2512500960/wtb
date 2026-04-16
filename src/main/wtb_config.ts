@@ -68,6 +68,12 @@ export type WtbConfigV1 = {
     /** Optional: override base assets directory used for bundled web apps (cinny/element) */
     assetsDir?: string;
   };
+
+  /** Optional: IPFS repository configuration */
+  ipfs?: {
+    /** Optional: override the default Kubo repo directory */
+    repoDir?: string;
+  };
 };
 
 export type YggdrasilAutoPeerManagerConfig = NonNullable<
@@ -445,6 +451,11 @@ const normalizeConfigV1 = (raw: unknown): WtbConfigV1 => {
       const assetsRaw = typeof webObj.assetsDir === 'string' ? webObj.assetsDir.trim() : '';
       return assetsRaw ? { assetsDir: assetsRaw } : undefined;
     })(),
+    ipfs: (() => {
+      const ipfsObj = obj?.ipfs && typeof obj.ipfs === 'object' ? obj.ipfs : {};
+      const repoRaw = typeof ipfsObj.repoDir === 'string' ? ipfsObj.repoDir.trim() : '';
+      return repoRaw ? { repoDir: repoRaw } : undefined;
+    })(),
   };
 };
 
@@ -466,6 +477,7 @@ const renderYamlWithHeader = (cfg: WtbConfigV1): string => {
     + '#   - reconcileIntervalMs：后台重平衡周期。\n'
     + '#   - sampleSize / probeAttempts / probeIntervalMs / probeTimeoutMs：探测参数。\n'
     + '#   - lastSelectedPeers / probeState：自动调度内部状态，会由程序自动维护。\n'
+    + '# - ipfs.repoDir：可选，覆盖默认的 IPFS Repo 存储目录。\n'
     + '#\n';
 
   const yamlBody = YAML.stringify(cfg);
@@ -682,6 +694,33 @@ export const setWtbWebAssetsDir = (assetsDir: string | null): WtbConfigV1 => {
   // Clean up if web is empty
   try {
     if (!parsed.web || Object.keys(parsed.web).length === 0) delete parsed.web;
+  } catch {
+    // ignore
+  }
+
+  return persistMutableConfigObject(parsed);
+};
+
+export const setWtbIpfsRepoDir = (repoDir: string | null): WtbConfigV1 => {
+  const parsed = loadMutableConfigObject();
+
+  if (!parsed.ipfs || typeof parsed.ipfs !== 'object') parsed.ipfs = {};
+
+  if (repoDir == null || (typeof repoDir === 'string' && !repoDir.trim())) {
+    try {
+      log.info('Clearing ipfs repoDir override');
+      delete parsed.ipfs.repoDir;
+    } catch {
+      // ignore
+    }
+  } else if (typeof repoDir === 'string') {
+    const resolvedRepoDir = path.resolve(repoDir.trim());
+    log.info('Setting ipfs repoDir override: %s', resolvedRepoDir);
+    parsed.ipfs.repoDir = resolvedRepoDir;
+  }
+
+  try {
+    if (!parsed.ipfs || Object.keys(parsed.ipfs).length === 0) delete parsed.ipfs;
   } catch {
     // ignore
   }

@@ -3,13 +3,15 @@ import { MemoryRouter as Router, Routes, Route } from 'react-router-dom';
 import './App.css';
 import { ServiceName, ServiceStatus } from './types/services';
 import LauncherTileLink from './components/Launcher/LauncherTileLink';
-import ServiceCard from './components/ServiceCard/ServiceCard';
+import ServiceCardYggdrasil from './components/ServiceCard/ServiceCardYggdrasil';
 import ChatPage from './pages/ChatPage';
 import SettingsPage from './pages/SettingsPage';
 // import YggWebsiteIndexPage from './pages/YggWebsiteIndexPage';
 // import ServiceAnnouncementsPage from './pages/ServiceAnnouncementsPage';
 // import ServiceSyncPage from './pages/ServiceSyncPage';
 import PeersPage from './pages/PeersPage';
+import RemoteResourcesPage from './pages/RemoteResourcesPage';
+import SiteServicesPage from './pages/SiteServicesPage';
 import StatusPage from './pages/StatusPage';
 import { FEATURES } from './features/flags';
 import type { YggdrasilCtlResult } from './types/yggdrasilctl';
@@ -24,6 +26,30 @@ const YGG_WEBSITE_INDEX_IN_APP_URL =
 
 const YGG_MINI_WIKI_URL =
   'http://[200:85b:60c4:e7b5:c33b:959f:9b52:6783]/?lang=zh';
+
+type StandaloneRemoteResourcesConfig = {
+  baseUrl: string;
+  path: string;
+};
+
+function getStandaloneRemoteResourcesConfig(): StandaloneRemoteResourcesConfig | null {
+  if (typeof window === 'undefined') return null;
+
+  const params = new URLSearchParams(window.location.search || '');
+  if (params.get('wtbView') !== 'remote-resources') {
+    return null;
+  }
+
+  const baseUrl = (params.get('baseUrl') || '').trim();
+  if (!baseUrl) {
+    return null;
+  }
+
+  return {
+    baseUrl,
+    path: (params.get('path') || '/').trim() || '/',
+  };
+}
 
 function ModalShell({
   title,
@@ -94,16 +120,6 @@ function Home() {
   const [yggAddress, setYggAddress] = React.useState<string | null>(null);
   const [showPeers, setShowPeers] = React.useState(false);
 
-  const openExternal = React.useCallback((url: string) => {
-    try {
-      // Open via system default browser (fast UX for slow/unreliable links)
-      window.electron.ipcRenderer.invoke('open-external', url);
-    } catch {
-      // Fallback to external browser
-      window.open(url, '_blank', 'noopener,noreferrer');
-    }
-  }, []);
-
   const openInApp = React.useCallback((url: string) => {
     try {
       window.electron.ipcRenderer.invoke('open-in-app', url);
@@ -126,24 +142,32 @@ function Home() {
 
   const ygg = services.find((s) => s.name === 'yggdrasil');
   const yggRunning = ygg?.state === 'running';
+  const yggService: ServiceStatus = ygg ?? {
+    name: 'yggdrasil',
+    state: 'stopped',
+  };
 
   React.useEffect(() => {
+    let cancelled = false;
+
     if (!yggRunning) {
       setYggAddress(null);
-      return;
+    } else {
+      (async () => {
+        try {
+          const addr = (await window.electron.ipcRenderer.invoke(
+            'ygg:getIPv6',
+          )) as string;
+          if (!cancelled) setYggAddress(addr);
+        } catch {
+          if (!cancelled) setYggAddress(null);
+        }
+      })();
     }
 
-    const cancelled = false;
-    (async () => {
-      try {
-        const addr = (await window.electron.ipcRenderer.invoke(
-          'ygg:getIPv6',
-        )) as string;
-        if (!cancelled) setYggAddress(addr);
-      } catch {
-        if (!cancelled) setYggAddress(null);
-      }
-    })();
+    return () => {
+      cancelled = true;
+    };
   }, [yggRunning]);
 
   const tryParseJson = React.useCallback((input: string) => {
@@ -262,21 +286,6 @@ function Home() {
     }
   };
 
-  const openDir = async (name: ServiceName) => {
-    setError(null);
-    try {
-      const res = (await window.electron.ipcRenderer.invoke(
-        'services:openDir',
-        name,
-      )) as { ok: boolean; error?: string };
-      if (res && typeof res === 'object' && res.ok === false) {
-        throw new Error(res.error || '打开目录失败');
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  };
-
   return (
     <div className="LauncherRoot">
       <div className="LauncherHeader">
@@ -284,41 +293,58 @@ function Home() {
         <div className="LauncherSubtitle">
           YGGDRASIL网络连接能需要时间，网页打不开需要耐心
         </div>
-        <div>
-          {/* 显示连接成功的Peer数量和P2PPeers数量，（自动刷新功能） */}
-          <div className="LauncherSubtitle">
-            已连接 Peer：{connectedPeerCount ?? '—'}，P2P Peers：
-            {p2pPeerCount ?? '—'}
-            <button
-              type="button"
-              className="ServiceGhostButton"
-              style={{ marginLeft: 8, width: 120 }}
-              disabled={!yggRunning}
-              onClick={() => setShowPeers(true)}
-            >
-              查看 peers
-            </button>
-          </div>
-          <div className="LauncherSubtitle">
-            Yggdrasil IPv6：
-            {yggAddress ?? '—'}
-            {yggAddress ? (
+        <div className="LauncherStatusRow">
+          <div className="LauncherNetworkPanel">
+            <div className="LauncherPanelTitle">网络状态</div>
+            <div className="LauncherMetricRow">
+              <div className="LauncherMetricBlock">
+                <div className="LauncherMetricLabel">已连接 Peer</div>
+                <div className="LauncherMetricValue">
+                  {connectedPeerCount ?? '—'}
+                </div>
+              </div>
+              <div className="LauncherMetricBlock">
+                <div className="LauncherMetricLabel">P2P Peers</div>
+                <div className="LauncherMetricValue">{p2pPeerCount ?? '—'}</div>
+              </div>
               <button
                 type="button"
-                className="ServiceGhostButton"
-                style={{ marginLeft: 8 }}
-                onClick={() => {
-                  if (!yggAddress) return;
-                  try {
-                    navigator.clipboard.writeText(yggAddress);
-                  } catch {
-                    // ignore clipboard errors
-                  }
-                }}
+                className="ServiceGhostButton LauncherInlineButton"
+                disabled={!yggRunning}
+                onClick={() => setShowPeers(true)}
               >
-                复制
+                查看 peers
               </button>
-            ) : null}
+            </div>
+            <div className="LauncherAddressRow">
+              <div className="LauncherMetricLabel">Yggdrasil IPv6</div>
+              <div className="LauncherAddressValue">{yggAddress ?? '—'}</div>
+              {yggAddress ? (
+                <button
+                  type="button"
+                  className="ServiceGhostButton LauncherInlineButton"
+                  onClick={() => {
+                    if (!yggAddress) return;
+                    try {
+                      navigator.clipboard.writeText(yggAddress);
+                    } catch {
+                      // ignore clipboard errors
+                    }
+                  }}
+                >
+                  复制
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="LauncherYggCard">
+            <ServiceCardYggdrasil
+              svc={yggService}
+              busyName={busy}
+              start={start}
+              stop={stop}
+            />
           </div>
         </div>
       </div>
@@ -436,6 +462,20 @@ function Home() {
           />
         ) : null}
         {/* <LauncherTileLink
+          to="/resources"
+          label="远程资源"
+          icon="🎞️"
+          disabled={false}
+          disabledHint=""
+        /> */}
+        <LauncherTileLink
+          to="/site-services"
+          label="站点管理"
+          icon="🛰️"
+          disabled={false}
+          disabledHint=""
+        />
+        {/* <LauncherTileLink
           to="/announcements"
           label="服务公告"
           icon="📢"
@@ -449,47 +489,32 @@ function Home() {
         />
       </div>
 
-      <div className="ServiceSection">
-        <div className="ServiceHeader">
-          <div className="ServiceTitle">服务状态</div>
-          <button
-            className="ServiceGhostButton"
-            type="button"
-            onClick={refresh}
-          >
-            刷新
-          </button>
-        </div>
-
-        {error ? <div className="ServiceError">{error}</div> : null}
-
-        <div className="ServiceGrid">
-          {services.map((svc) => (
-            <ServiceCard
-              key={svc.name}
-              svc={svc}
-              yggRunning={yggRunning}
-              busyName={busy}
-              start={start}
-              stop={stop}
-              openDir={openDir}
-              openExternal={openExternal}
-            />
-          ))}
-        </div>
-      </div>
+      {error ? <div className="ServiceError">{error}</div> : null}
     </div>
   );
 }
 
 export default function App() {
+  const standaloneRemoteResources = getStandaloneRemoteResourcesConfig();
+
   return (
-    <Router>
+    <Router initialEntries={[standaloneRemoteResources ? '/resources' : '/']}>
       <Routes>
         <Route path="/" element={<Home />} />
         {/* 临时弃用：保留文件但不再挂载路由 */}
         {/* <Route path="/ygg" element={<YggWebsiteIndexPage />} /> */}
         {FEATURES.chat && <Route path="/irc" element={<ChatPage />} />}
+        <Route
+          path="/resources"
+          element={
+            <RemoteResourcesPage
+              initialBaseUrl={standaloneRemoteResources?.baseUrl}
+              initialPath={standaloneRemoteResources?.path}
+              standalone={!!standaloneRemoteResources}
+            />
+          }
+        />
+        <Route path="/site-services" element={<SiteServicesPage />} />
         {/* <Route path="/announcements" element={<ServiceAnnouncementsPage />} /> */}
         {/* <Route path="/announcements" element={<ServiceSyncPage />} /> */}
         <Route path="/settings" element={<SettingsPage />} />

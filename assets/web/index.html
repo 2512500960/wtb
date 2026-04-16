@@ -107,7 +107,7 @@
         gap: 8px;
       }
 
-      button,
+      .wtb-button,
       .link-button,
       a.file-link {
         border: 0;
@@ -119,13 +119,13 @@
         transition: transform 0.15s ease, opacity 0.15s ease, background 0.15s ease;
       }
 
-      button:hover,
+      .wtb-button:hover,
       .link-button:hover,
       a.file-link:hover {
         transform: translateY(-1px);
       }
 
-      button:disabled {
+      .wtb-button:disabled {
         cursor: not-allowed;
         opacity: 0.45;
         transform: none;
@@ -169,10 +169,18 @@
       }
 
       .crumb {
+        border: 0;
+        cursor: pointer;
+        text-decoration: none;
+        transition: transform 0.15s ease, opacity 0.15s ease, background 0.15s ease;
         padding: 6px 10px;
         border-radius: 999px;
         background: #fff;
         color: var(--text);
+      }
+
+      .crumb:hover {
+        transform: translateY(-1px);
       }
 
       .listing {
@@ -293,11 +301,11 @@
 
         <div class="toolbar">
           <div class="actions">
-            <button id="rootBtn" class="ghost">根目录</button>
-            <button id="videoBtn" class="ghost">video</button>
-            <button id="filesBtn" class="ghost">files</button>
-            <button id="upBtn" class="ghost">上一级</button>
-            <button id="refreshBtn" class="secondary">刷新</button>
+            <button id="rootBtn" class="wtb-button ghost">根目录</button>
+            <button id="videoBtn" class="wtb-button ghost">video</button>
+            <button id="filesBtn" class="wtb-button ghost">files</button>
+            <button id="upBtn" class="wtb-button ghost">上一级</button>
+            <button id="refreshBtn" class="wtb-button secondary">刷新</button>
           </div>
         </div>
 
@@ -318,7 +326,7 @@
         <div class="player-meta">
           <div id="playStatus" class="status">还没有开始播放。</div>
           <div class="actions">
-            <button id="stopPlaybackBtn" class="primary">停止当前播放</button>
+            <button id="stopPlaybackBtn" class="wtb-button primary">停止当前播放</button>
           </div>
           <div id="currentFile" class="hint"></div>
           <div id="currentUrl" class="hint mono"></div>
@@ -468,7 +476,7 @@
         listingEl.innerHTML = entries.map((entry) => {
           const openLabel = entry.isDirectory ? '进入目录' : '打开/下载';
           const playButton = isPlayableVideo(entry)
-            ? '<button class="primary js-play" data-path="' + escapeHtml(entry.path) + '">播放</button>'
+            ? '<button class="wtb-button primary js-play" data-path="' + escapeHtml(entry.path) + '">播放</button>'
             : '';
 
           return [
@@ -486,7 +494,7 @@
               '</div>',
               '<div class="entry-actions">',
                 entry.isDirectory
-                  ? '<button class="secondary js-open-dir" data-path="' + escapeHtml(entry.path) + '">进入目录</button>'
+                  ? '<button class="wtb-button secondary js-open-dir" data-path="' + escapeHtml(entry.path) + '">进入目录</button>'
                   : '<a class="file-link ghost" href="' + encodeURI(entry.path) + '">' + openLabel + '</a>',
                 playButton,
               '</div>',
