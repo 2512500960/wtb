@@ -80,7 +80,7 @@ function ModalShell({
         role="dialog"
         aria-modal="true"
         style={{
-          width: 'min(980px, calc(100vw - 32px))',
+          width: 'min(1080px, calc(100vw - 32px))',
           maxHeight: 'min(84vh, 860px)',
           overflow: 'auto',
         }}

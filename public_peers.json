@@ -524,8 +524,8 @@
     "protocol": "tls",
     "ipVersion": "ipv4",
     "region": "(unknown)",
-    "status": "online 1 week+",
-    "reliability": "100%"
+    "status": "online 1 day",
+    "reliability": "99%"
   },
   {
     "address": "tls://yggno.de:18227",
@@ -892,8 +892,8 @@
     "protocol": "quic",
     "ipVersion": "unknown",
     "region": "(unknown)",
-    "status": "online 6 days",
-    "reliability": "99%"
+    "status": "online 3 hours",
+    "reliability": "98%"
   },
   {
     "address": "quic://94.159.110.4:65535",
@@ -981,6 +981,30 @@
     "ipVersion": "unknown",
     "region": "(unknown)",
     "status": "online 1 day",
+    "reliability": "98%"
+  },
+  {
+    "address": "quic://[2a14:1e00:1:ecd::]:65535",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "(unknown)",
+    "status": "online 20 hours",
+    "reliability": "97%"
+  },
+  {
+    "address": "quic://5.35.70.181:65535",
+    "protocol": "quic",
+    "ipVersion": "ipv4",
+    "region": "(unknown)",
+    "status": "online 2 days",
+    "reliability": "98%"
+  },
+  {
+    "address": "quic://[2a14:1e00:1:f3c::]:65535",
+    "protocol": "quic",
+    "ipVersion": "unknown",
+    "region": "(unknown)",
+    "status": "online 3 days",
     "reliability": "98%"
   },
   {
@@ -1174,6 +1198,14 @@
     "region": "(unknown)",
     "status": "online 1 week+",
     "reliability": "100%"
+  },
+  {
+    "address": "tcp://yggdrasil.1337.moe:7676",
+    "protocol": "tcp",
+    "ipVersion": "unknown",
+    "region": "(unknown)",
+    "status": "offline 1 hour",
+    "reliability": "94%"
   },
   {
     "address": "tcp://y.zbin.eu:7743",
