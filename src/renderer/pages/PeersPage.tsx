@@ -130,10 +130,11 @@ function countFromYggCtlStdoutP2PPeer(stdout: string): number | null {
   if (!data) return null;
 
   if (Array.isArray(data.ygg_peers)) return data.ygg_peers.length;
-  if (Array.isArray(data.transport_peers)) return data.transport_peers.length;
-  if (Array.isArray(data.seen_peers)) return data.seen_peers.length;
-
   return null;
+  // if (Array.isArray(data.transport_peers)) return data.transport_peers.length;
+  // if (Array.isArray(data.seen_peers)) return data.seen_peers.length;
+
+  // return null;
 }
 
 function formatDurationSeconds(seconds: number | undefined): string {

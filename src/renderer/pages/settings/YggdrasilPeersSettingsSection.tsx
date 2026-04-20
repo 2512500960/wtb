@@ -415,7 +415,7 @@ export default function YggdrasilPeersSettingsSection() {
           >
             <option value="auto">自动模式</option>
             <option value="manual">手动模式</option>
-            <option value="p2p">纯 P2P</option>
+            <option value="p2p">纯P2P</option>
           </select>
           <button
             type="button"
