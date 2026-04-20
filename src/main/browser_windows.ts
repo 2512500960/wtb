@@ -8,9 +8,14 @@ import {
   shell,
   type App,
   type Session,
+  type WebContents,
 } from 'electron';
 
-import { escapeHtml } from './web_service_utils';
+import {
+  makeNavigationFailureDataUrl,
+  makeProxiedToolbarDataUrl,
+  makeWtbProbeLoadingDataUrl,
+} from './browser_window_pages';
 import { resolveHtmlPath } from './util';
 
 type LoggerLike = {
@@ -24,6 +29,12 @@ type ProxiedToolbarState = {
   canGoBack: boolean;
   canGoForward: boolean;
   isLoading: boolean;
+  errorText?: string;
+};
+
+type ProxiedWindowState = {
+  requestedUrl: string;
+  errorText: string;
 };
 
 type WtbServiceProbeResult = {
@@ -38,6 +49,8 @@ type WtbServiceProbeResult = {
 
 const PROXIED_TOOLBAR_HEIGHT = 60;
 const WTB_SERVICE_PROBE_TIMEOUT_MS = 3500;
+
+const FAILED_LOAD_ABORTED = -3;
 
 const attachSelectionContextMenu = (targetWindow: BrowserWindow): void => {
   targetWindow.webContents.on('context-menu', (_event, params) => {
@@ -69,86 +82,6 @@ const getPreloadPath = (app: App): string => {
   return app.isPackaged
     ? path.join(__dirname, 'preload.js')
     : path.join(__dirname, '../../.erb/dll/preload.js');
-};
-
-const makeInAppLoadingDataUrl = (targetUrl: string): string => {
-  const safeUrl = escapeHtml(targetUrl || '');
-  const html = `<!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>正在打开…</title>
-    <style>
-      body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, sans-serif; background: #0f1115; color: rgba(255,255,255,0.92); }
-      .wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
-      .card { width: min(720px, calc(100vw - 48px)); border-radius: 16px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); padding: 18px 18px; }
-      .row { display: flex; gap: 14px; align-items: center; }
-      .spinner { width: 28px; height: 28px; border-radius: 999px; border: 3px solid rgba(255,255,255,0.18); border-top-color: rgba(255,255,255,0.92); animation: spin 0.9s linear infinite; }
-      @keyframes spin { to { transform: rotate(360deg); } }
-      .title { font-size: 16px; font-weight: 700; margin: 0; }
-      .sub { margin-top: 10px; font-size: 12px; opacity: 0.85; word-break: break-all; line-height: 1.45; }
-      .hint { margin-top: 10px; font-size: 12px; opacity: 0.65; }
-    </style>
-  </head>
-  <body>
-    <div class="wrap">
-      <div class="card">
-        <div class="row">
-          <div class="spinner" aria-hidden="true"></div>
-          <div>
-            <p class="title">正在打开网页…</p>
-            <div class="sub">${safeUrl}</div>
-          </div>
-        </div>
-        <div class="hint">网络较慢时需要耐心等待，窗口已先打开。</div>
-      </div>
-    </div>
-  </body>
-</html>`;
-
-  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
-};
-
-const makeWtbProbeLoadingDataUrl = (targetUrl: string): string => {
-  const safeUrl = escapeHtml(targetUrl || '');
-  const html = `<!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>正在探测…</title>
-    <style>
-      body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, sans-serif; background: #0c1017; color: rgba(255,255,255,0.92); }
-      .wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
-      .card { width: min(760px, calc(100vw - 48px)); border-radius: 16px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); padding: 18px; }
-      .row { display: flex; gap: 14px; align-items: center; }
-      .spinner { width: 28px; height: 28px; border-radius: 999px; border: 3px solid rgba(255,255,255,0.18); border-top-color: rgba(255,255,255,0.92); animation: spin 0.9s linear infinite; }
-      @keyframes spin { to { transform: rotate(360deg); } }
-      .title { font-size: 16px; font-weight: 700; margin: 0; }
-      .sub { margin-top: 10px; font-size: 12px; opacity: 0.85; word-break: break-all; line-height: 1.45; }
-      .hint { margin-top: 10px; font-size: 12px; opacity: 0.72; line-height: 1.5; }
-      .tip { margin-top: 12px; font-size: 12px; opacity: 0.62; }
-    </style>
-  </head>
-  <body>
-    <div class="wrap">
-      <div class="card">
-        <div class="row">
-          <div class="spinner" aria-hidden="true"></div>
-          <div>
-            <p class="title">正在探测网页能力…</p>
-            <div class="sub">${safeUrl}</div>
-          </div>
-        </div>
-        <div class="hint">正在判断目标是否为 WTB Web 服务。如果响应头声明支持资源清单，将切换到本地原生资源页，以便使用 HTTP / IPFS 双源加载与回退。</div>
-        <div class="tip">普通网页会继续按原样打开。</div>
-      </div>
-    </div>
-  </body>
-</html>`;
-
-  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 };
 
 const normalizeProxiedTargetUrl = (value: string): string | null => {
@@ -194,7 +127,8 @@ const probeWtbWebService = async (
       redirect: 'follow',
       signal: createProbeAbortSignal(WTB_SERVICE_PROBE_TIMEOUT_MS),
       headers: {
-        Accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
+        Accept:
+          'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
       },
     });
   } catch {
@@ -203,7 +137,8 @@ const probeWtbWebService = async (
       redirect: 'follow',
       signal: createProbeAbortSignal(WTB_SERVICE_PROBE_TIMEOUT_MS),
       headers: {
-        Accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
+        Accept:
+          'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
         Range: 'bytes=0-0',
       },
     });
@@ -296,206 +231,70 @@ const updateProxiedToolbarState = (
     });
 };
 
-const makeProxiedToolbarDataUrl = (windowId: number, proxyUri: string): string => {
-  const safeProxy = escapeHtml(proxyUri);
-  const html = `<!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <style>
-      :root {
-        color-scheme: dark;
-      }
+const isDataHtmlUrl = (value: string): boolean => {
+  return value.startsWith('data:text/html');
+};
 
-      body {
-        margin: 0;
-        background: #10141b;
-        font-family: "Segoe UI", system-ui, sans-serif;
-        color: rgba(255, 255, 255, 0.94);
-      }
+const formatLoadFailureDetail = (
+  errorCode: number,
+  errorDescription: string,
+): string => {
+  const detail = (errorDescription || '').trim();
+  if (!detail) return `错误代码 ${errorCode}`;
+  return `${detail}（错误代码 ${errorCode}）`;
+};
 
-      .bar {
-        height: ${PROXIED_TOOLBAR_HEIGHT}px;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 0 12px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-        background: linear-gradient(180deg, #161b24 0%, #121720 100%);
-        box-sizing: border-box;
-      }
+const attachRetryPageOnLoadFailure = (
+  contents: WebContents,
+  options: {
+    logger: LoggerLike;
+    getFallbackUrl: (
+      validatedUrl: string,
+      errorCode: number,
+      errorDescription: string,
+    ) => string;
+    onFailure?: (
+      validatedUrl: string,
+      errorCode: number,
+      errorDescription: string,
+    ) => void;
+    onSuccess?: (url: string) => void;
+  },
+): void => {
+  contents.on(
+    'did-fail-load',
+    (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
+      if (!isMainFrame || errorCode === FAILED_LOAD_ABORTED) return;
+      if (!validatedUrl || isDataHtmlUrl(validatedUrl)) return;
 
-      button {
-        height: 30px;
-        min-width: 30px;
-        padding: 0 10px;
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        border-radius: 9px;
-        background: rgba(255, 255, 255, 0.05);
-        color: inherit;
-        cursor: pointer;
-        font: inherit;
-      }
+      options.onFailure?.(validatedUrl, errorCode, errorDescription);
 
-      button:hover {
-        background: rgba(255, 255, 255, 0.1);
-      }
-
-      button:disabled {
-        opacity: 0.4;
-        cursor: default;
-      }
-
-      input {
-        height: 32px;
-        flex: 1;
-        min-width: 120px;
-        padding: 0 12px;
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        border-radius: 9px;
-        background: rgba(255, 255, 255, 0.06);
-        color: inherit;
-        font: inherit;
-        outline: none;
-      }
-
-      input:focus {
-        border-color: rgba(98, 168, 255, 0.75);
-        box-shadow: 0 0 0 3px rgba(98, 168, 255, 0.15);
-      }
-
-      .spacer {
-        width: 4px;
-      }
-
-      .proxy {
-        max-width: 180px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        font-size: 12px;
-        opacity: 0.82;
-      }
-
-      .title {
-        max-width: 180px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        font-size: 12px;
-        color: rgba(255, 255, 255, 0.86);
-      }
-
-      .status {
-        font-size: 12px;
-        opacity: 0.7;
-        min-width: 70px;
-        color: rgba(255, 255, 255, 0.7);
-      }
-
-      .status.error {
-        color: #ff9d9d;
-        opacity: 1;
-      }
-    </style>
-  </head>
-  <body>
-    <form class="bar" id="toolbar-form">
-      <tr>
-      <button id="back" type="button" title="后退">◀</button>
-      <button id="forward" type="button" title="前进">▶</button>
-      <button id="reload" type="button" title="刷新">刷新</button>
-      <input id="address" type="text" spellcheck="false" autocomplete="off" aria-label="地址栏" />
-      <button id="go" type="submit" title="前往">Go</button>
-      <button id="copy" type="button" title="复制当前地址">复制</button>
-      <button id="external" type="button" title="用系统浏览器打开当前页面">浏览器</button>
-      <div class="spacer"></div>
-      <div class="title" id="title"></div>
-      <div class="status" id="status"></div>
-      <!-- <div class="proxy" title="${safeProxy}">代理: ${safeProxy}</div> -->
-      <button id="close" type="button" title="关闭窗口">关闭</button>
-      </tr>
-      <tr>
-
-      </tr>
-    </form>
-    <script>
-      const invoke = (cmd, value) =>
-        window.electron.ipcRenderer.invoke('proxied-window-command', ${windowId}, cmd, value);
-
-      const address = document.getElementById('address');
-      const back = document.getElementById('back');
-      const forward = document.getElementById('forward');
-      const reload = document.getElementById('reload');
-      const copy = document.getElementById('copy');
-      const external = document.getElementById('external');
-      const closeButton = document.getElementById('close');
-      const form = document.getElementById('toolbar-form');
-      const status = document.getElementById('status');
-      const title = document.getElementById('title');
-      let errorText = '';
-
-      const renderStatus = (state) => {
-        if (errorText) {
-          status.textContent = errorText;
-          status.classList.add('error');
-          return;
-        }
-
-        status.classList.remove('error');
-        status.textContent = state && state.isLoading ? '加载中…' : '';
-      };
-
-      const setError = (text) => {
-        errorText = text || '';
-        renderStatus(window.__proxiedToolbarState || null);
-      };
-
-      window.__setProxiedToolbarState = (state) => {
-        if (!state || typeof state !== 'object') return;
-        window.__proxiedToolbarState = state;
-        if (document.activeElement !== address) {
-          address.value = typeof state.url === 'string' ? state.url : '';
-        }
-        back.disabled = !state.canGoBack;
-        forward.disabled = !state.canGoForward;
-        title.textContent = typeof state.title === 'string' ? state.title : '';
-        if (!state.isLoading) {
-          errorText = '';
-        }
-        renderStatus(state);
-      };
-
-      form.addEventListener('submit', async (event) => {
-        event.preventDefault();
-        setError('');
-        const result = await invoke('navigate', address.value);
-        if (!result || result.ok !== true) {
-          setError('地址无效，仅支持 http/https');
-        }
+      const fallbackUrl = options.getFallbackUrl(
+        validatedUrl,
+        errorCode,
+        errorDescription,
+      );
+      contents.loadURL(fallbackUrl).catch((error) => {
+        options.logger.debug?.('Failed to load retry page', error);
       });
+    },
+  );
 
-      back.addEventListener('click', () => invoke('back'));
-      forward.addEventListener('click', () => invoke('forward'));
-      reload.addEventListener('click', () => invoke('reload'));
-      copy.addEventListener('click', () => invoke('copy-url'));
-      external.addEventListener('click', () => invoke('open-external'));
-      closeButton.addEventListener('click', () => invoke('close'));
+  contents.on('did-navigate', (_event, url) => {
+    if (!url || isDataHtmlUrl(url)) return;
+    options.onSuccess?.(url);
+  });
 
-      address.addEventListener('focus', () => address.select());
-      address.addEventListener('input', () => {
-        if (errorText) setError('');
-      });
-    </script>
-  </body>
-</html>`;
-
-  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+  contents.on('did-navigate-in-page', (_event, url) => {
+    if (!url || isDataHtmlUrl(url)) return;
+    options.onSuccess?.(url);
+  });
 };
 
 export class BrowserWindowCoordinator {
   private readonly proxiedWindowViews = new Map<number, BrowserView>();
+
+  private readonly proxiedWindowStates = new Map<number, ProxiedWindowState>();
 
   constructor(
     private readonly options: {
@@ -612,6 +411,11 @@ export class BrowserWindowCoordinator {
       });
 
       this.proxiedWindowViews.set(targetWindow.id, view);
+      this.proxiedWindowStates.set(targetWindow.id, {
+        requestedUrl:
+          normalizeProxiedTargetUrl(targetUrl) || 'https://www.google.com',
+        errorText: '',
+      });
       targetWindow.setBrowserView(view);
       layoutProxiedBrowserView(targetWindow, view);
 
@@ -639,7 +443,10 @@ export class BrowserWindowCoordinator {
       view.webContents.setWindowOpenHandler((details) => {
         try {
           const parsedUrl = new URL(details.url);
-          if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+          if (
+            parsedUrl.protocol !== 'http:' &&
+            parsedUrl.protocol !== 'https:'
+          ) {
             return { action: 'deny' };
           }
           void this.openProxiedWindow(proxyUri, parsedUrl.toString());
@@ -650,24 +457,64 @@ export class BrowserWindowCoordinator {
       });
 
       const syncToolbarState = () => {
+        const windowState = this.proxiedWindowStates.get(targetWindow.id);
+        const currentUrl = view.webContents.getURL();
+        const displayedUrl =
+          currentUrl && !isDataHtmlUrl(currentUrl)
+            ? currentUrl
+            : windowState?.requestedUrl || targetUrl;
         updateProxiedToolbarState(targetWindow, {
-          url: view.webContents.getURL() || targetUrl,
+          url: displayedUrl,
           title: view.webContents.getTitle() || '',
           canGoBack: view.webContents.canGoBack(),
           canGoForward: view.webContents.canGoForward(),
           isLoading: view.webContents.isLoading(),
+          errorText: windowState?.errorText || '',
         });
       };
 
+      attachRetryPageOnLoadFailure(view.webContents, {
+        logger: this.options.logger,
+        getFallbackUrl: (validatedUrl, errorCode, errorDescription) => {
+          return makeNavigationFailureDataUrl({
+            targetUrl: validatedUrl,
+            title: '这个页面暂时没连上',
+            hint: '代理连接、目标站点或本地网络可能暂时不可用。',
+            buttonLabel: '重新加载',
+            errorDetail: formatLoadFailureDetail(errorCode, errorDescription),
+          });
+        },
+        onFailure: (validatedUrl, errorCode, errorDescription) => {
+          this.proxiedWindowStates.set(targetWindow.id, {
+            requestedUrl: validatedUrl,
+            errorText: formatLoadFailureDetail(errorCode, errorDescription),
+          });
+          syncToolbarState();
+        },
+        onSuccess: (url) => {
+          this.proxiedWindowStates.set(targetWindow.id, {
+            requestedUrl: url,
+            errorText: '',
+          });
+          syncToolbarState();
+        },
+      });
+
       view.webContents.on('did-start-loading', syncToolbarState);
       view.webContents.on('did-stop-loading', syncToolbarState);
+      view.webContents.on('page-title-updated', syncToolbarState);
       view.webContents.on('did-navigate', syncToolbarState);
       view.webContents.on('did-navigate-in-page', syncToolbarState);
-      view.webContents.on('page-title-updated', syncToolbarState);
 
-      targetWindow.on('resize', () => layoutProxiedBrowserView(targetWindow, view));
-      targetWindow.on('maximize', () => layoutProxiedBrowserView(targetWindow, view));
-      targetWindow.on('unmaximize', () => layoutProxiedBrowserView(targetWindow, view));
+      targetWindow.on('resize', () =>
+        layoutProxiedBrowserView(targetWindow, view),
+      );
+      targetWindow.on('maximize', () =>
+        layoutProxiedBrowserView(targetWindow, view),
+      );
+      targetWindow.on('unmaximize', () =>
+        layoutProxiedBrowserView(targetWindow, view),
+      );
       targetWindow.on('enter-full-screen', () =>
         layoutProxiedBrowserView(targetWindow, view),
       );
@@ -676,10 +523,16 @@ export class BrowserWindowCoordinator {
       );
       targetWindow.on('closed', () => {
         this.proxiedWindowViews.delete(targetWindow.id);
+        this.proxiedWindowStates.delete(targetWindow.id);
       });
 
       try {
-        await targetWindow.loadURL(makeProxiedToolbarDataUrl(targetWindow.id, proxyUri));
+        await targetWindow.loadURL(
+          makeProxiedToolbarDataUrl({
+            windowId: targetWindow.id,
+            height: PROXIED_TOOLBAR_HEIGHT,
+          }),
+        );
       } catch {
         // ignore
       }
@@ -687,6 +540,10 @@ export class BrowserWindowCoordinator {
 
       const normalizedTarget =
         normalizeProxiedTargetUrl(targetUrl) || 'https://www.google.com';
+      this.proxiedWindowStates.set(targetWindow.id, {
+        requestedUrl: normalizedTarget,
+        errorText: '',
+      });
       view.webContents.loadURL(normalizedTarget).catch(() => {
         // ignore
       });
@@ -709,6 +566,7 @@ export class BrowserWindowCoordinator {
 
       const view = this.proxiedWindowViews.get(windowId);
       const webContents = view?.webContents;
+      const windowState = this.proxiedWindowStates.get(windowId);
       if (!webContents || webContents.isDestroyed()) return { ok: false };
 
       switch (command) {
@@ -719,23 +577,43 @@ export class BrowserWindowCoordinator {
           if (webContents.canGoForward()) webContents.goForward();
           break;
         case 'reload':
-          webContents.reload();
+          if (
+            isDataHtmlUrl(webContents.getURL()) &&
+            windowState?.requestedUrl
+          ) {
+            windowState.errorText = '';
+            webContents.loadURL(windowState.requestedUrl).catch(() => {
+              // ignore
+            });
+          } else {
+            webContents.reload();
+          }
           break;
         case 'navigate': {
           const normalized = normalizeProxiedTargetUrl(
             typeof value === 'string' ? value : '',
           );
           if (!normalized) return { ok: false, error: 'invalid-url' };
+          this.proxiedWindowStates.set(windowId, {
+            requestedUrl: normalized,
+            errorText: '',
+          });
           webContents.loadURL(normalized).catch(() => {
             // ignore
           });
           break;
         }
         case 'copy-url':
-          clipboard.writeText(webContents.getURL() || '');
+          clipboard.writeText(
+            isDataHtmlUrl(webContents.getURL())
+              ? windowState?.requestedUrl || ''
+              : webContents.getURL() || '',
+          );
           break;
         case 'open-external': {
-          const currentUrl = webContents.getURL() || '';
+          const currentUrl = isDataHtmlUrl(webContents.getURL())
+            ? windowState?.requestedUrl || ''
+            : webContents.getURL() || '';
           if (currentUrl) {
             await shell.openExternal(currentUrl).catch(() => {
               // ignore
@@ -774,6 +652,18 @@ export class BrowserWindowCoordinator {
 
     this.options.applyChineseAcceptLanguage(child.webContents.session);
     attachSelectionContextMenu(child);
+    attachRetryPageOnLoadFailure(child.webContents, {
+      logger: this.options.logger,
+      getFallbackUrl: (validatedUrl, errorCode, errorDescription) => {
+        return makeNavigationFailureDataUrl({
+          targetUrl: validatedUrl,
+          title: '这个页面暂时打不开',
+          hint: '网络超时、地址失效，或者远端服务还没准备好。',
+          buttonLabel: '再试一次',
+          errorDetail: formatLoadFailureDetail(errorCode, errorDescription),
+        });
+      },
+    });
     child.once('ready-to-show', () => child.show());
 
     child.webContents.on('will-navigate', (event, navUrl) => {
@@ -781,7 +671,10 @@ export class BrowserWindowCoordinator {
         const parsed = new URL(navUrl);
         if (parsed.protocol === 'socks5:' || parsed.protocol === 'socks5h:') {
           event.preventDefault();
-          void this.openProxiedWindow(parsed.toString(), 'https://www.google.com');
+          void this.openProxiedWindow(
+            parsed.toString(),
+            'https://www.google.com',
+          );
           return;
         }
 
@@ -802,7 +695,10 @@ export class BrowserWindowCoordinator {
         const parsed = new URL(details.url);
 
         if (parsed.protocol === 'socks5:' || parsed.protocol === 'socks5h:') {
-          void this.openProxiedWindow(parsed.toString(), 'https://www.google.com');
+          void this.openProxiedWindow(
+            parsed.toString(),
+            'https://www.google.com',
+          );
           return { action: 'deny' };
         }
 

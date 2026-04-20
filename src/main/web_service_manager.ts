@@ -688,6 +688,13 @@ export class WebServiceManager {
     }
 
     const gatewayUrl = new URL(`/ipfs/${encodeURIComponent(cid)}`, this.options.ipfsManager.getGatewayBaseUrl());
+    console.log('[web][ipfs-proxy] start', {
+      method,
+      cid,
+      range: req.headers.range || null,
+      accept: req.headers.accept || null,
+      gatewayUrl: gatewayUrl.toString(),
+    });
 
     await new Promise<void>((resolve) => {
       let settled = false;
@@ -700,7 +707,14 @@ export class WebServiceManager {
         resolve();
       };
 
-      const failProxyRequest = () => {
+      const failProxyRequest = (error?: unknown) => {
+        console.warn('[web][ipfs-proxy] fail', {
+          method,
+          cid,
+          range: req.headers.range || null,
+          error:
+            error instanceof Error ? error.message : error != null ? String(error) : 'unknown',
+        });
         try {
           endProxyErrorResponse(res, method);
         } catch {
@@ -722,6 +736,15 @@ export class WebServiceManager {
           timeout: 5_000,
         },
         (upstreamRes) => {
+          console.log('[web][ipfs-proxy] response', {
+            method,
+            cid,
+            statusCode: upstreamRes.statusCode || 0,
+            contentType: upstreamRes.headers['content-type'] || null,
+            contentLength: upstreamRes.headers['content-length'] || null,
+            contentRange: upstreamRes.headers['content-range'] || null,
+            acceptRanges: upstreamRes.headers['accept-ranges'] || null,
+          });
           this.copyProxyHeaders(upstreamRes, res);
           if (contentType) {
             res.setHeader('Content-Type', contentType);
@@ -739,25 +762,42 @@ export class WebServiceManager {
 
           upstreamRes.once('error', () => {
             upstream.destroy();
-            failProxyRequest();
+            failProxyRequest(new Error('upstream response stream error'));
           });
 
           upstreamRes.pipe(res);
-          upstreamRes.once('end', () => resolveOnce());
+          upstreamRes.once('end', () => {
+            console.log('[web][ipfs-proxy] end', {
+              method,
+              cid,
+              statusCode: upstreamRes.statusCode || 0,
+            });
+            resolveOnce();
+          });
         },
       );
 
       res.once('close', () => {
+        console.log('[web][ipfs-proxy] client closed', {
+          method,
+          cid,
+        });
         upstream.destroy();
         resolveOnce();
       });
 
       upstream.on('timeout', () => {
+        console.warn('[web][ipfs-proxy] timeout', {
+          method,
+          cid,
+          timeoutMs: 5000,
+          range: req.headers.range || null,
+        });
         upstream.destroy(new Error('ipfs gateway request timed out'));
       });
 
-      upstream.once('error', () => {
-        failProxyRequest();
+      upstream.once('error', (error) => {
+        failProxyRequest(error);
       });
 
       upstream.end();

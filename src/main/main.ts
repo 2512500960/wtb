@@ -9,23 +9,17 @@
  * `./src/main.js` using webpack. This gives us some performance wins.
  */
 import path from 'path';
-import {
-  app,
-  BrowserWindow,
-  session,
-} from 'electron';
+import { app, BrowserWindow, session } from 'electron';
 import log from 'electron-log';
 import fs from 'fs';
 import { registerAppLifecycle } from './app_lifecycle';
+import { AppTrayController } from './app_tray';
 import { BrowserWindowCoordinator } from './browser_windows';
 import { AnnouncementsCoordinator } from './announcements_coordinator';
 import { EmbeddedStaticServer } from './embedded_static_server';
 import { EmbeddedAppsCoordinator } from './embedded_apps';
 import { IpfsSidecarManager } from './ipfs_manager';
-import {
-  configureMainProcessDebugging,
-  createMainWindow,
-} from './main_window';
+import { configureMainProcessDebugging, createMainWindow } from './main_window';
 import { registerAnnouncementsIpc } from './register_announcements_ipc';
 import { registerBrowserIpc } from './register_browser_ipc';
 import { registerChatIpc } from './register_chat_ipc';
@@ -54,9 +48,7 @@ import type {
   YggdrasilCtlCommand,
   YggdrasilCtlResult,
 } from './yggdrasil_types';
-import {
-  type ServiceStatus,
-} from './service_types';
+import { type ServiceStatus } from './service_types';
 import { WebServiceManager } from './web_service_manager';
 import { ensureMediaDirs } from './mediaServer';
 import {
@@ -67,25 +59,46 @@ import { YggdrasilManager } from './yggdrasil_manager';
 import { YggPeerCoordinator } from './ygg_peer_coordinator';
 import { WEBSITE_INDEX_ED25519_PUBLIC_KEY_PEM } from './website_index_pubkey';
 import { WebsiteIndexService } from './website_index_service';
+import { YggSitePreheater } from './ygg_site_preheater';
 import { loadBundledPublicPeers } from './public_ygg_peers';
 import { startPublicNodesUpdater } from './public_nodes_updater';
 import { yggdrasilBootstrapNodes } from './yggdrasil_bootstrap_nodes';
 import {
   getWtbDataDir,
   getWtbConfig,
+  setWtbWebAutoStartEnabled,
+  setWtbYggSitePreheaterEnabled,
   setWtbYggdrasilAutoPeerManagerConfig,
   setWtbYggdrasilPublicPeers,
   setWtbWebAssetsDir,
 } from './wtb_config';
 import { YggdrasilPeerAutoManager } from './yggdrasil_peer_auto_manager';
+import { Libp2pGroupChatService, type ChatMessage } from './libp2p_group_chat';
 import {
-  Libp2pGroupChatService,
-  type ChatMessage,
-} from './libp2p_group_chat';
+  YGG_MINI_WIKI_PREHEAT_URL,
+  YGG_WEBSITE_INDEX_URL,
+  YGG_WEBSITE_INDEX_IN_APP_URL,
+  YGG_WEBSITE_INDEX_SOURCE_URL,
+} from '../common/ygg_urls';
 // import { ServiceAnnouncementsManager } from './service_announcements'; // 已切换到 HTTP pull 模式
 import { ServiceSyncHttpManager } from './service_sync_http';
 
+if (true) {
+  require('electron-debug').default();
+  let port = '9223';
+  if (process.env.MAIN_ARGS) {
+    if (process.env.MAIN_ARGS) {
+      port = (
+        [...process.env.MAIN_ARGS.matchAll(/"[^"]+"|[^\s"]+/g)]
+          .flat()
+          .filter((str) => str.includes('debugging-port'))[0] || '=9223'
+      ).split('=')[1];
+    }
+  }
+  app.commandLine.appendSwitch('remote-debugging-port', port);
+}
 let mainWindow: BrowserWindow | null = null;
+let quitRequested = false;
 
 type TaskProgressPayload = {
   operation:
@@ -173,9 +186,33 @@ const embeddedApps = new EmbeddedAppsCoordinator({
   applyElementAcceptLanguage: forceElementAcceptLanguage,
 });
 const websiteIndexService = new WebsiteIndexService({
-  sourceUrl:
-    'http://[200:5948:48e2:97e3:8afb:40aa:b3ac:4d94]:5000/index.json',
+  sourceUrl: YGG_WEBSITE_INDEX_SOURCE_URL,
   publicKeyPem: WEBSITE_INDEX_ED25519_PUBLIC_KEY_PEM,
+});
+const trayController = new AppTrayController({
+  app,
+  logger: log,
+  getMainWindow: () => mainWindow,
+  onExitRequested: () => {
+    quitRequested = true;
+  },
+});
+const yggSitePreheater = new YggSitePreheater({
+  logger: log,
+  websiteIndexService,
+  seedTargets: [
+    {
+      url: YGG_WEBSITE_INDEX_IN_APP_URL,
+      probeTimeoutMs: 4_500,
+      probeAttempts: 4,
+    },
+  ],
+  staticTargets: [
+    { url: YGG_MINI_WIKI_PREHEAT_URL },
+    { url: YGG_WEBSITE_INDEX_URL },
+  ],
+  isYggdrasilRunning: () => getYggdrasilStatus().state === 'running',
+  isEnabled: () => Boolean(getWtbConfig().yggSitePreheater?.enabled),
 });
 
 // libp2p for groupchat is deprecated
@@ -225,7 +262,8 @@ const yggPeerCoordinator = new YggPeerCoordinator({
   clearConfigPeersBestEffort: (reason: string) => {
     yggdrasilManager.clearConfigPeersBestEffort(reason);
   },
-  loadBundledPublicPeers: () => loadBundledPublicPeers(yggdrasilManager.getBaseDir()),
+  loadBundledPublicPeers: () =>
+    loadBundledPublicPeers(yggdrasilManager.getBaseDir()),
   runCtlCommand: (
     command: 'addpeer' | 'removepeer' | 'getpeersjson',
     args = [],
@@ -272,6 +310,8 @@ const startYggdrasil = async (): Promise<ServiceStatus> => {
   const status = await yggdrasilManager.start();
   if (status.state === 'running') {
     await autoStartIpfsIfYggdrasilRunning('yggdrasil started');
+    await autoStartWebIfEnabled('yggdrasil started');
+    yggSitePreheater.syncEnabled('yggdrasil started');
   }
   return status;
 };
@@ -313,7 +353,9 @@ const getAllServiceStatuses = (): ServiceStatus[] => {
 
 const startIpfsService = async (): Promise<ServiceStatus> => {
   if (getYggdrasilStatus().state !== 'running') {
-    throw new Error('Yggdrasil 未运行，无法启动 IPFS 服务。请先启动 Yggdrasil。');
+    throw new Error(
+      'Yggdrasil 未运行，无法启动 IPFS 服务。请先启动 Yggdrasil。',
+    );
   }
   return await ipfsManager.start();
 };
@@ -327,8 +369,11 @@ const getIpfsRepoDir = (): string => {
 };
 
 let ipfsAutoStartAttempted = false;
+let webAutoStartAttempted = false;
 
-const autoStartIpfsIfYggdrasilRunning = async (reason: string): Promise<void> => {
+const autoStartIpfsIfYggdrasilRunning = async (
+  reason: string,
+): Promise<void> => {
   if (getYggdrasilStatus().state !== 'running') {
     return;
   }
@@ -343,6 +388,39 @@ const autoStartIpfsIfYggdrasilRunning = async (reason: string): Promise<void> =>
 
 const scheduleAutoStartIpfsIfNeeded = (reason: string): void => {
   void autoStartIpfsIfYggdrasilRunning(reason);
+};
+
+const autoStartWebIfEnabled = async (reason: string): Promise<void> => {
+  if (!getWtbConfig().web?.autoStartEnabled) {
+    return;
+  }
+  if (getYggdrasilStatus().state !== 'running') {
+    return;
+  }
+  if (getWebStatus().state === 'running') {
+    webAutoStartAttempted = true;
+    return;
+  }
+  if (webAutoStartAttempted) return;
+  webAutoStartAttempted = true;
+
+  await startWebService().catch((error) => {
+    webAutoStartAttempted = false;
+    log.warn(`Failed to auto-start Web service (${reason})`, error);
+  });
+};
+
+const scheduleAutoStartWebIfNeeded = (reason: string): void => {
+  void autoStartWebIfEnabled(reason);
+};
+
+const getWebRuntimeSettings = () => {
+  const cfg = getWtbConfig();
+  return {
+    autoStartEnabled: Boolean(cfg.web?.autoStartEnabled),
+    preheaterEnabled: Boolean(cfg.yggSitePreheater?.enabled),
+    preheaterStatus: yggSitePreheater.getStatus(),
+  };
 };
 
 const runYggdrasilCtl = async (
@@ -372,11 +450,19 @@ const prepareWebRootDir = async (): Promise<void> => {
 };
 
 const startWebService = async (): Promise<ServiceStatus> => {
-  return await webServiceManager.start();
+  const status = await webServiceManager.start();
+  if (status.state === 'running') {
+    webAutoStartAttempted = true;
+  }
+  return status;
 };
 
 const stopWebService = async (): Promise<ServiceStatus> => {
-  return await webServiceManager.stop();
+  const status = await webServiceManager.stop();
+  if (status.state === 'stopped') {
+    webAutoStartAttempted = false;
+  }
+  return status;
 };
 
 registerServiceIpc({
@@ -399,8 +485,11 @@ registerServiceIpc({
       return;
     }
 
+    yggSitePreheater.stop('yggdrasil stopped');
+    await stopWebService();
     await stopIpfsService();
     ipfsAutoStartAttempted = false;
+    webAutoStartAttempted = false;
     // announcementsCoordinator.stop().catch(() => {
     //   // ignore
     // });
@@ -418,12 +507,19 @@ registerIpfsIpc({
   listSwarmPeers: async () => {
     return await ipfsManager.listSwarmPeers();
   },
-  addPath: async (targetPath: string, options?: { wrapWithDirectory?: boolean }) => {
+  addPath: async (
+    targetPath: string,
+    options?: { wrapWithDirectory?: boolean },
+  ) => {
     return await ipfsManager.addPath(targetPath, options);
   },
   migrateRepo: async (
     targetDir: string,
-    onProgress?: (progress: { current: number; total: number; message: string }) => void,
+    onProgress?: (progress: {
+      current: number;
+      total: number;
+      message: string;
+    }) => void,
   ) => {
     return await ipfsManager.migrateRepo(targetDir, onProgress);
   },
@@ -446,6 +542,20 @@ registerEmbeddedAppsIpc({
 
 registerMiscIpc({
   getWebRootDir,
+  getWebRuntimeSettings,
+  setWebAutoStartEnabled: async (enabled: boolean) => {
+    const cfg = setWtbWebAutoStartEnabled(enabled);
+    if (enabled) {
+      webAutoStartAttempted = false;
+      scheduleAutoStartWebIfNeeded('web auto-start enabled');
+    }
+    return cfg;
+  },
+  setYggSitePreheaterEnabled: async (enabled: boolean) => {
+    const cfg = setWtbYggSitePreheaterEnabled(enabled);
+    yggSitePreheater.syncEnabled('preheater config changed');
+    return cfg;
+  },
   getWebActivity: () => webServiceManager.getActivitySnapshot(),
   getWebCompatibilityStatus: async () =>
     await inspectLegacyWebCompatibility(app, getWebRootDir()),
@@ -488,7 +598,11 @@ registerMiscIpc({
   importManagedWebFiles: async (
     targetDirectoryPath: string,
     sourceFilePaths: string[],
-    onProgress?: (progress: { current: number; total: number; message: string }) => void,
+    onProgress?: (progress: {
+      current: number;
+      total: number;
+      message: string;
+    }) => void,
   ) =>
     await importManagedWebFiles({
       webRoot: getWebRootDir(),
@@ -500,7 +614,11 @@ registerMiscIpc({
   importManagedWebDirectory: async (
     targetDirectoryPath: string,
     sourceDirectoryPath: string,
-    onProgress?: (progress: { current: number; total: number; message: string }) => void,
+    onProgress?: (progress: {
+      current: number;
+      total: number;
+      message: string;
+    }) => void,
   ) =>
     await importManagedWebDirectory({
       webRoot: getWebRootDir(),
@@ -537,7 +655,11 @@ registerMiscIpc({
       operationType,
     }),
   migrateWebContentToManagedIpfs: async (
-    onProgress?: (progress: { current: number; total: number; message: string }) => void,
+    onProgress?: (progress: {
+      current: number;
+      total: number;
+      message: string;
+    }) => void,
   ) =>
     await migrateWebContentToManagedIpfs({
       webRoot: getWebRootDir(),
@@ -592,7 +714,8 @@ registerYggIpc({
     await yggPeerCoordinator.applyPublicPeerSelection(peers),
   applyAutoPeerConfig: async (input: unknown) =>
     await yggPeerCoordinator.applyAutoPeerConfig(input),
-  reconcileAutoPeerNow: async () => await yggPeerCoordinator.reconcileAutoPeerNow(),
+  reconcileAutoPeerNow: async () =>
+    await yggPeerCoordinator.reconcileAutoPeerNow(),
   loadWebsiteIndex: async () => {
     const ygg = getYggdrasilStatus();
     if (ygg.state !== 'running') {
@@ -614,15 +737,25 @@ const prepareStartup = (reason: string): void => {
   // scheduleAutoStartAnnouncementsIfNeeded(reason);
   if (getYggdrasilStatus().state === 'running') {
     scheduleAutoStartIpfsIfNeeded(reason);
+    scheduleAutoStartWebIfNeeded(reason);
   }
+  yggSitePreheater.syncEnabled(reason);
 };
 
 const createAndTrackMainWindow = async (): Promise<void> => {
+  trayController.initialize();
   const windowRef = await createMainWindow({
     app,
     onClosed: () => {
       mainWindow = null;
     },
+  });
+  windowRef.on('close', (event) => {
+    if (quitRequested) {
+      return;
+    }
+    event.preventDefault();
+    trayController.hideMainWindow();
   });
   mainWindow = windowRef;
 };
@@ -633,6 +766,10 @@ const hasMainWindow = (): boolean => {
 
 configureMainProcessDebugging();
 
+app.on('before-quit', () => {
+  quitRequested = true;
+});
+
 registerAppLifecycle({
   app,
   logger: log,
@@ -642,6 +779,8 @@ registerAppLifecycle({
   createAndTrackMainWindow,
   hasMainWindow,
   disposeBeforeQuit: () => {
+    yggSitePreheater.stop('app quit');
+    trayController.dispose();
     webServiceManager.dispose();
     cinnyStaticServer.stop();
     elementStaticServer.stop();

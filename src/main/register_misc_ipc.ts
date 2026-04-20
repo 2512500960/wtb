@@ -18,6 +18,9 @@ type TaskProgressPayload = {
 
 export const registerMiscIpc = (options: {
   getWebRootDir: () => string;
+  getWebRuntimeSettings: () => unknown;
+  setWebAutoStartEnabled: (enabled: boolean) => Promise<unknown> | unknown;
+  setYggSitePreheaterEnabled: (enabled: boolean) => Promise<unknown> | unknown;
   getWebActivity: () => unknown;
   getWebCompatibilityStatus: () => Promise<unknown>;
   setWebAssetsDir: (dir: string | null) => {
@@ -86,6 +89,50 @@ export const registerMiscIpc = (options: {
         activeWindowMinutes: 10,
         activeClients: [],
         recentRequests: [],
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+  ipcMain.handle('wtb:web:getRuntimeSettings', async () => {
+    try {
+      return {
+        ok: true,
+        data: options.getWebRuntimeSettings(),
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+  ipcMain.handle('wtb:web:setAutoStartEnabled', async (_event, enabled: boolean) => {
+    try {
+      await options.setWebAutoStartEnabled(Boolean(enabled));
+      return {
+        ok: true,
+        data: options.getWebRuntimeSettings(),
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+
+  ipcMain.handle('wtb:web:setPreheaterEnabled', async (_event, enabled: boolean) => {
+    try {
+      await options.setYggSitePreheaterEnabled(Boolean(enabled));
+      return {
+        ok: true,
+        data: options.getWebRuntimeSettings(),
+      };
+    } catch (error) {
+      return {
+        ok: false,
         error: error instanceof Error ? error.message : String(error),
       };
     }

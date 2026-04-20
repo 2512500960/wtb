@@ -1,8 +1,7 @@
-﻿import * as React from 'react';
+import * as React from 'react';
 import { Link } from 'react-router-dom';
 
 type YggdrasilCtlCommand = 'getpeersjson' | 'getp2ppeersjson';
-const SHOW_TRANSPORTS_ADDRESS = false;
 type YggdrasilCtlResult = {
   ok: boolean;
   command: YggdrasilCtlCommand;
@@ -26,13 +25,16 @@ type YggGetPeersItem = {
   uptime?: number;
   latency?: number;
   last_error?: string;
+  last_error_time?: string;
 };
 
-type P2PTransportPeer = {
+type P2PPeerBase = {
   peer_id?: string;
+  uri?: string;
+  up?: boolean;
+  inbound?: boolean;
   inbound_conns?: number;
   outbound_conns?: number;
-  remote_addrs?: string[];
   ygg_session_active?: boolean;
   rendezvous_seen?: boolean;
   rendezvous_connected?: boolean;
@@ -40,24 +42,21 @@ type P2PTransportPeer = {
   last_rendezvous_connect_at?: string;
 };
 
+type P2PSeenPeer = P2PPeerBase;
+
+type P2PTransportPeer = P2PPeerBase & {
+  remote_addrs?: string[];
+};
+
+type P2PYggPeer = P2PPeerBase & YggGetPeersItem;
+
 type P2PGetPeersResult = {
   enabled?: boolean;
   local_peer_id?: string;
   rendezvous_tags?: string[];
+  seen_peers?: P2PSeenPeer[];
   transport_peers?: P2PTransportPeer[];
-  ygg_peers?: Array<
-    Pick<
-      P2PTransportPeer,
-      | 'peer_id'
-      | 'inbound_conns'
-      | 'outbound_conns'
-      | 'ygg_session_active'
-      | 'rendezvous_seen'
-      | 'rendezvous_connected'
-      | 'last_rendezvous_seen_at'
-      | 'last_rendezvous_connect_at'
-    >
-  >;
+  ygg_peers?: P2PYggPeer[];
   now?: string;
   note?: string;
 };
@@ -71,21 +70,6 @@ function tryParseJson(input: string): unknown | null {
     return null;
   }
 }
-
-const countFromYggCtlStdoutP2PPeer = (stdout: string): number | null => {
-  const data = tryParseJson(stdout);
-  if (data == null) return null;
-  // check if data has ygg_peers field and is an array
-  if (
-    typeof data === 'object' &&
-    data !== null &&
-    'ygg_peers' in data &&
-    Array.isArray((data as Record<string, unknown>).ygg_peers)
-  ) {
-    return ((data as Record<string, unknown>).ygg_peers as unknown[]).length;
-  }
-  return null;
-};
 
 const countFromYggCtlStdoutTranditionalPeer = (
   stdout: string,
@@ -141,6 +125,18 @@ function parseP2PPeers(stdout: string): P2PGetPeersResult | null {
   return data as P2PGetPeersResult;
 }
 
+function countFromYggCtlStdoutP2PPeer(stdout: string): number | null {
+  const data = parseP2PPeers(stdout);
+  if (!data) return null;
+
+  if (Array.isArray(data.ygg_peers)) return data.ygg_peers.length;
+  return null;
+  // if (Array.isArray(data.transport_peers)) return data.transport_peers.length;
+  // if (Array.isArray(data.seen_peers)) return data.seen_peers.length;
+
+  // return null;
+}
+
 function formatDurationSeconds(seconds: number | undefined): string {
   if (typeof seconds !== 'number' || !Number.isFinite(seconds)) return '—';
   if (seconds < 60) return `${Math.round(seconds)}s`;
@@ -162,9 +158,69 @@ function formatLatency(latency: number | undefined): string {
   return `${Math.round(latency)}ns`;
 }
 
-function boolText(v: boolean | undefined): string {
-  if (typeof v !== 'boolean') return '—';
-  return v ? '是' : '否';
+function formatDirection(inbound: boolean | undefined): string {
+  if (typeof inbound !== 'boolean') return '—';
+  return inbound ? 'IN' : 'OUT';
+}
+
+function formatNumber(value: number | undefined): string | number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
+  return value;
+}
+
+function formatBytes(bytes: number | undefined): string {
+  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0) {
+    return '—';
+  }
+
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let value = bytes / 1024;
+  let unitIndex = 0;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  let digits = 2;
+  if (value >= 100) {
+    digits = 0;
+  } else if (value >= 10) {
+    digits = 1;
+  }
+
+  return `${value.toFixed(digits)} ${units[unitIndex]}`;
+}
+
+function formatPeerUri(uri: string | undefined): string {
+  if (!uri) return '—';
+  try {
+    return decodeURIComponent(uri);
+  } catch {
+    return uri;
+  }
+}
+
+function renderP2PIdentity(peer: P2PPeerBase) {
+  return (
+    <>
+      <div style={{ wordBreak: 'break-all' }}>{peer.peer_id ?? '—'}</div>
+      {peer.uri ? (
+        <div
+          style={{
+            marginTop: 4,
+            fontSize: 12,
+            opacity: 0.72,
+            wordBreak: 'break-all',
+          }}
+        >
+          {formatPeerUri(peer.uri)}
+        </div>
+      ) : null}
+    </>
+  );
 }
 
 function StatusBadge({ res }: { res: YggdrasilCtlResult | null }) {
@@ -210,7 +266,7 @@ export default function PeersPage({ embedded }: { embedded: boolean }) {
       refresh().catch(() => {
         // ignore
       });
-    }, 5000);
+    }, 20000);
     return () => window.clearInterval(id);
   }, [refresh]);
 
@@ -228,6 +284,9 @@ export default function PeersPage({ embedded }: { embedded: boolean }) {
     if (typeof v !== 'boolean') return '—';
     return v ? '是' : '否';
   }, [p2pParsed?.enabled]);
+  const p2pCountsText = React.useMemo(() => {
+    return `ygg_peers：${p2pParsed?.ygg_peers?.length ?? 0}`;
+  }, [p2pParsed?.ygg_peers?.length]);
 
   const content = (
     <>
@@ -282,10 +341,12 @@ export default function PeersPage({ embedded }: { embedded: boolean }) {
                         <th className="WebsiteIndexHeadCell">Up</th>
                         <th className="WebsiteIndexHeadCell">Remote</th>
                         <th className="WebsiteIndexHeadCell">Address</th>
-                        <th className="WebsiteIndexHeadCell">Inbound</th>
+                        <th className="WebsiteIndexHeadCell">Direction</th>
                         <th className="WebsiteIndexHeadCell">Cost</th>
                         <th className="WebsiteIndexHeadCell">Latency</th>
                         <th className="WebsiteIndexHeadCell">Uptime</th>
+                        <th className="WebsiteIndexHeadCell">Received</th>
+                        <th className="WebsiteIndexHeadCell">Sent</th>
                         <th className="WebsiteIndexHeadCell">Last Error</th>
                       </tr>
                     </thead>
@@ -319,7 +380,7 @@ export default function PeersPage({ embedded }: { embedded: boolean }) {
                               {p.address ?? '—'}
                             </td>
                             <td className="WebsiteIndexCell">
-                              {boolText(p.inbound)}
+                              {formatDirection(p.inbound)}
                             </td>
                             <td className="WebsiteIndexCell">
                               {typeof p.cost === 'number' ? p.cost : '—'}
@@ -329,6 +390,12 @@ export default function PeersPage({ embedded }: { embedded: boolean }) {
                             </td>
                             <td className="WebsiteIndexCell">
                               {formatDurationSeconds(p.uptime)}
+                            </td>
+                            <td className="WebsiteIndexCell">
+                              {formatBytes(p.bytes_recvd)}
+                            </td>
+                            <td className="WebsiteIndexCell">
+                              {formatBytes(p.bytes_sent)}
                             </td>
                             <td
                               className="WebsiteIndexCell"
@@ -385,6 +452,7 @@ export default function PeersPage({ embedded }: { embedded: boolean }) {
                         ? `，local_peer_id：${p2pParsed.local_peer_id}`
                         : ''}
                     </div>
+                    <div style={{ marginTop: 6 }}>{p2pCountsText}</div>
                     {p2pParsed.rendezvous_tags &&
                     p2pParsed.rendezvous_tags.length ? (
                       <div style={{ marginTop: 6, wordBreak: 'break-all' }}>
@@ -396,99 +464,6 @@ export default function PeersPage({ embedded }: { embedded: boolean }) {
                     ) : null}
                   </div>
 
-                  {p2pParsed.transport_peers &&
-                  SHOW_TRANSPORTS_ADDRESS &&
-                  p2pParsed.transport_peers.length ? (
-                    <>
-                      <div className="StatusBlockTitle">transport_peers</div>
-                      <div className="WebsiteIndexTableWrapper">
-                        <table className="WebsiteIndexTable">
-                          <thead>
-                            <tr>
-                              <th className="WebsiteIndexHeadCell">Peer ID</th>
-                              <th className="WebsiteIndexHeadCell">In</th>
-                              <th className="WebsiteIndexHeadCell">Out</th>
-                              <th className="WebsiteIndexHeadCell">
-                                Remote Addrs
-                              </th>
-                              <th className="WebsiteIndexHeadCell">
-                                Ygg Active
-                              </th>
-                              <th className="WebsiteIndexHeadCell">RV Seen</th>
-                              <th className="WebsiteIndexHeadCell">
-                                RV Connected
-                              </th>
-                              <th className="WebsiteIndexHeadCell">
-                                Last Seen
-                              </th>
-                              <th className="WebsiteIndexHeadCell">
-                                Last Connect
-                              </th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {p2pParsed.transport_peers.map((p) => (
-                              <tr
-                                key={`p2p:${p.peer_id ?? ''}|${
-                                  p.remote_addrs?.join('|') ?? ''
-                                }`}
-                              >
-                                <td
-                                  className="WebsiteIndexCell"
-                                  style={{ wordBreak: 'break-all' }}
-                                >
-                                  {p.peer_id ?? '—'}
-                                </td>
-                                <td className="WebsiteIndexCell">
-                                  {typeof p.inbound_conns === 'number'
-                                    ? p.inbound_conns
-                                    : '—'}
-                                </td>
-                                <td className="WebsiteIndexCell">
-                                  {typeof p.outbound_conns === 'number'
-                                    ? p.outbound_conns
-                                    : '—'}
-                                </td>
-                                <td
-                                  className="WebsiteIndexCell"
-                                  style={{
-                                    wordBreak: 'break-all',
-                                    whiteSpace: 'pre-wrap',
-                                  }}
-                                >
-                                  {p.remote_addrs?.length
-                                    ? p.remote_addrs.join('\n')
-                                    : '—'}
-                                </td>
-                                <td className="WebsiteIndexCell">
-                                  {boolText(p.ygg_session_active)}
-                                </td>
-                                <td className="WebsiteIndexCell">
-                                  {boolText(p.rendezvous_seen)}
-                                </td>
-                                <td className="WebsiteIndexCell">
-                                  {boolText(p.rendezvous_connected)}
-                                </td>
-                                <td
-                                  className="WebsiteIndexCell"
-                                  style={{ wordBreak: 'break-all' }}
-                                >
-                                  {p.last_rendezvous_seen_at ?? '—'}
-                                </td>
-                                <td
-                                  className="WebsiteIndexCell"
-                                  style={{ wordBreak: 'break-all' }}
-                                >
-                                  {p.last_rendezvous_connect_at ?? '—'}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </>
-                  ) : null}
-
                   {p2pParsed.ygg_peers && p2pParsed.ygg_peers.length ? (
                     <>
                       <div className="StatusBlockTitle">ygg_peers</div>
@@ -496,13 +471,22 @@ export default function PeersPage({ embedded }: { embedded: boolean }) {
                         <table className="WebsiteIndexTable">
                           <thead>
                             <tr>
-                              <th className="WebsiteIndexHeadCell">Peer ID</th>
-                              <th className="WebsiteIndexHeadCell">In</th>
-                              <th className="WebsiteIndexHeadCell">Out</th>
+                              <th className="WebsiteIndexHeadCell">Peer</th>
+                              {/* <th className="WebsiteIndexHeadCell">Up</th> */}
+                              <th className="WebsiteIndexHeadCell">
+                                Direction
+                              </th>
+                              <th className="WebsiteIndexHeadCell">Address</th>
+                              <th className="WebsiteIndexHeadCell">Cost</th>
+                              <th className="WebsiteIndexHeadCell">Latency</th>
+                              <th className="WebsiteIndexHeadCell">Uptime</th>
+                              <th className="WebsiteIndexHeadCell">Received</th>
+                              <th className="WebsiteIndexHeadCell">Sent</th>
+                              {/* <th className="WebsiteIndexHeadCell">Out</th>
                               <th className="WebsiteIndexHeadCell">
                                 Ygg Active
-                              </th>
-                              <th className="WebsiteIndexHeadCell">RV Seen</th>
+                              </th> */}
+                              {/* <th className="WebsiteIndexHeadCell">RV Seen</th>
                               <th className="WebsiteIndexHeadCell">
                                 RV Connected
                               </th>
@@ -512,31 +496,48 @@ export default function PeersPage({ embedded }: { embedded: boolean }) {
                               <th className="WebsiteIndexHeadCell">
                                 Last Connect
                               </th>
+                              <th className="WebsiteIndexHeadCell">
+                                Last Error
+                              </th> */}
                             </tr>
                           </thead>
                           <tbody>
                             {p2pParsed.ygg_peers.map((p) => (
                               <tr key={`ygg:${p.peer_id ?? 'unknown'}`}>
+                                <td className="WebsiteIndexCell">
+                                  {renderP2PIdentity(p)}
+                                </td>
+                                {/* <td className="WebsiteIndexCell">
+                                  {boolText(p.up)}
+                                </td> */}
+                                <td className="WebsiteIndexCell">
+                                  {formatDirection(p.inbound)}
+                                </td>
                                 <td
                                   className="WebsiteIndexCell"
                                   style={{ wordBreak: 'break-all' }}
                                 >
-                                  {p.peer_id ?? '—'}
+                                  {p.address ?? '—'}
                                 </td>
                                 <td className="WebsiteIndexCell">
-                                  {typeof p.inbound_conns === 'number'
-                                    ? p.inbound_conns
-                                    : '—'}
+                                  {formatNumber(p.cost)}
                                 </td>
                                 <td className="WebsiteIndexCell">
-                                  {typeof p.outbound_conns === 'number'
-                                    ? p.outbound_conns
-                                    : '—'}
+                                  {formatLatency(p.latency)}
                                 </td>
                                 <td className="WebsiteIndexCell">
+                                  {formatDurationSeconds(p.uptime)}
+                                </td>
+                                <td className="WebsiteIndexCell">
+                                  {formatBytes(p.bytes_recvd)}
+                                </td>
+                                <td className="WebsiteIndexCell">
+                                  {formatBytes(p.bytes_sent)}
+                                </td>
+                                {/* <td className="WebsiteIndexCell">
                                   {boolText(p.ygg_session_active)}
-                                </td>
-                                <td className="WebsiteIndexCell">
+                                </td> */}
+                                {/* <td className="WebsiteIndexCell">
                                   {boolText(p.rendezvous_seen)}
                                 </td>
                                 <td className="WebsiteIndexCell">
@@ -547,13 +548,19 @@ export default function PeersPage({ embedded }: { embedded: boolean }) {
                                   style={{ wordBreak: 'break-all' }}
                                 >
                                   {p.last_rendezvous_seen_at ?? '—'}
-                                </td>
-                                <td
+                                </td> */}
+                                {/* <td
                                   className="WebsiteIndexCell"
                                   style={{ wordBreak: 'break-all' }}
                                 >
                                   {p.last_rendezvous_connect_at ?? '—'}
                                 </td>
+                                <td
+                                  className="WebsiteIndexCell"
+                                  style={{ wordBreak: 'break-word' }}
+                                >
+                                  {p.last_error ?? p.last_error_time ?? '—'}
+                                </td> */}
                               </tr>
                             ))}
                           </tbody>

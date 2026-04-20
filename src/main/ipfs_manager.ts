@@ -2,11 +2,7 @@ import type { App } from 'electron';
 import fs from 'fs';
 import * as http from 'http';
 import path from 'path';
-import {
-  spawn,
-  spawnSync,
-  type ChildProcess,
-} from 'child_process';
+import { spawn, spawnSync, type ChildProcess } from 'child_process';
 
 import { ensureDirExists } from './fs_utils';
 import type { ServiceStatus } from './service_types';
@@ -82,6 +78,11 @@ type AddResult = {
   cid: { toString(): string };
 };
 
+const getPeerIdFromMultiaddr = (address: string): string => {
+  const match = address.match(/\/p2p\/([^/]+)/i);
+  return match?.[1] || '';
+};
+
 type KuboRPCClient = {
   add: (
     candidate: ImportCandidate,
@@ -108,7 +109,9 @@ function* createDirectoryImportCandidates(
     const entries = fs.readdirSync(currentPath, { withFileTypes: true });
     for (const entry of entries) {
       const childPath = path.join(currentPath, entry.name);
-      const relativePath = toPosixRelativePath(path.relative(rootPath, childPath));
+      const relativePath = toPosixRelativePath(
+        path.relative(rootPath, childPath),
+      );
       const importPath = path.posix.join(rootName, relativePath);
 
       if (entry.isDirectory()) {
@@ -137,6 +140,10 @@ export class IpfsSidecarManager {
   private rpcClient: KuboRPCClient | null = null;
 
   private resolvedRepoDir: string | null = null;
+
+  private setResolvedRepoDir(repoDir: string): void {
+    this.resolvedRepoDir = path.resolve(repoDir);
+  }
 
   constructor(
     private readonly options: {
@@ -304,15 +311,13 @@ export class IpfsSidecarManager {
       diskUsedBytes: diskStats?.usedBytes ?? null,
     };
   }
-
-  async migrateRepo(targetDir: string): Promise<{
-    fromDir: string;
-    toDir: string;
-    restarted: boolean;
-  }>;
   async migrateRepo(
     targetDir: string,
-    onProgress?: (progress: { current: number; total: number; message: string }) => void,
+    onProgress?: (progress: {
+      current: number;
+      total: number;
+      message: string;
+    }) => void,
   ): Promise<{
     fromDir: string;
     toDir: string;
@@ -372,22 +377,17 @@ export class IpfsSidecarManager {
         try {
           fs.renameSync(currentDir, nextDir);
         } catch (error) {
-          const renameMessage = error instanceof Error ? error.message : String(error);
-          if (!/cross-device|exdev/i.test(renameMessage)) {
+          if (!this.isCrossDeviceError(error)) {
             throw error;
           }
-
-          fs.cpSync(currentDir, nextDir, {
-            recursive: true,
-            force: false,
-            errorOnExist: true,
-          });
+          this.copyDirectorySync(currentDir, nextDir);
           fs.rmSync(currentDir, { recursive: true, force: true });
         }
       } else {
         ensureDirExists(nextDir);
       }
 
+      this.setResolvedRepoDir(nextDir);
       setWtbIpfsRepoDir(nextDir);
       if (wasRunning) {
         onProgress?.({
@@ -547,12 +547,7 @@ export class IpfsSidecarManager {
       options?.onProgress,
     );
 
-    this.updatePathCache(
-      resolvedPath,
-      stat,
-      cid,
-      wrapWithDirectory,
-    );
+    this.updatePathCache(resolvedPath, stat, cid, wrapWithDirectory);
 
     return {
       cid,
@@ -606,14 +601,14 @@ export class IpfsSidecarManager {
     };
   }
 
-  async connectToPeers(
-    addresses: string[],
-  ): Promise<{
+  async connectToPeers(addresses: string[]): Promise<{
     connected: string[];
     failed: Array<{ address: string; error: string }>;
   }> {
     const uniqueAddresses = Array.from(
-      new Set(addresses.filter((item) => typeof item === 'string' && item.trim())),
+      new Set(
+        addresses.filter((item) => typeof item === 'string' && item.trim()),
+      ),
     );
     if (!uniqueAddresses.length) {
       return { connected: [], failed: [] };
@@ -628,17 +623,66 @@ export class IpfsSidecarManager {
     const failed: Array<{ address: string; error: string }> = [];
 
     for (const address of uniqueAddresses) {
+      console.log('[ipfs] swarm/connect start', { address });
       try {
         // eslint-disable-next-line no-await-in-loop
         await this.apiPostArgs('swarm/connect', [address]);
         connected.push(address);
+        console.log('[ipfs] swarm/connect success', { address });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (/already connected|connected to/i.test(message)) {
           connected.push(address);
+          console.log('[ipfs] swarm/connect already connected', {
+            address,
+            message,
+          });
         } else {
           failed.push({ address, error: message });
+          console.warn('[ipfs] swarm/connect failed', {
+            address,
+            error: message,
+          });
         }
+      }
+    }
+
+    if (connected.length > 0) {
+      try {
+        const swarmPeers = await this.listSwarmPeers();
+        const connectedPeerChecks = connected.map((address) => {
+          const peerId = getPeerIdFromMultiaddr(address);
+          const matchedPeer = swarmPeers.find((peer) => {
+            if (peerId && peer.peerId === peerId) {
+              return true;
+            }
+            return peer.address === address;
+          });
+
+          return {
+            address,
+            peerId,
+            presentInSwarmPeers: !!matchedPeer,
+            observedPeer: matchedPeer
+              ? {
+                  peerId: matchedPeer.peerId,
+                  address: matchedPeer.address,
+                  latency: matchedPeer.latency,
+                  direction: matchedPeer.direction,
+                  streams: matchedPeer.streams,
+                }
+              : null,
+          };
+        });
+
+        console.log('[ipfs] swarm/connect verification', {
+          connectedPeerChecks,
+          swarmPeerCount: swarmPeers.length,
+        });
+      } catch (error) {
+        console.warn('[ipfs] swarm/connect verification failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
 
@@ -678,7 +722,11 @@ export class IpfsSidecarManager {
         releasedCids.push(cid);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (/not pinned|not recursively pinned|is not pinned|already unpinned/i.test(message)) {
+        if (
+          /not pinned|not recursively pinned|is not pinned|already unpinned/i.test(
+            message,
+          )
+        ) {
           releasedCids.push(cid);
           continue;
         }
@@ -760,7 +808,10 @@ export class IpfsSidecarManager {
       return workspaceRepoDir;
     }
 
-    const userDataRepoDir = path.join(this.options.app.getPath('userData'), 'ipfs');
+    const userDataRepoDir = path.join(
+      this.options.app.getPath('userData'),
+      'ipfs',
+    );
     const preferredRepoDir = path.resolve(userDataRepoDir);
     const legacyRepoDir = path.resolve(workspaceRepoDir);
 
@@ -792,28 +843,21 @@ export class IpfsSidecarManager {
       try {
         fs.renameSync(legacyRepoDir, preferredRepoDir);
       } catch (error) {
-        const errorCode =
-          error && typeof error === 'object' && 'code' in error
-            ? String((error as NodeJS.ErrnoException).code || '')
-            : '';
-        if (!/cross-device|exdev/i.test(errorCode) && !/cross-device|exdev/i.test(
-          error instanceof Error ? error.message : String(error),
-        )) {
+        if (!this.isCrossDeviceError(error)) {
           throw error;
         }
 
-        fs.cpSync(legacyRepoDir, preferredRepoDir, {
-          recursive: true,
-          force: false,
-          errorOnExist: true,
-        });
+        this.copyDirectorySync(legacyRepoDir, preferredRepoDir);
         fs.rmSync(legacyRepoDir, { recursive: true, force: true });
       }
 
-      this.options.logger.info('Moved development IPFS repo outside the workspace', {
-        fromDir: legacyRepoDir,
-        toDir: preferredRepoDir,
-      });
+      this.options.logger.info(
+        'Moved development IPFS repo outside the workspace',
+        {
+          fromDir: legacyRepoDir,
+          toDir: preferredRepoDir,
+        },
+      );
       return preferredRepoDir;
     } catch (error) {
       this.options.logger.warn(
@@ -845,6 +889,85 @@ export class IpfsSidecarManager {
     }
 
     return await this.getRpcClient();
+  }
+
+  private isCrossDeviceError(error: unknown): boolean {
+    const errorCode =
+      error && typeof error === 'object' && 'code' in error
+        ? String((error as NodeJS.ErrnoException).code || '')
+        : '';
+    const errorMessage = error instanceof Error ? error.message : String(error);
+
+    return (
+      /cross-device|exdev/i.test(errorCode) ||
+      /cross-device|exdev/i.test(errorMessage)
+    );
+  }
+
+  private copyDirectorySync(sourceDir: string, targetDir: string): void {
+    const createdTarget = !fs.existsSync(targetDir);
+
+    try {
+      this.copyDirectoryEntrySync(sourceDir, targetDir);
+    } catch (error) {
+      if (createdTarget) {
+        fs.rmSync(targetDir, { recursive: true, force: true });
+      } else if (fs.existsSync(targetDir)) {
+        const targetStats = fs.statSync(targetDir);
+        if (targetStats.isDirectory()) {
+          fs.readdirSync(targetDir).forEach((entry) => {
+            fs.rmSync(path.join(targetDir, entry), {
+              recursive: true,
+              force: true,
+            });
+          });
+        }
+      }
+
+      throw error;
+    }
+  }
+
+  private copyDirectoryEntrySync(sourcePath: string, targetPath: string): void {
+    const sourceStats = fs.lstatSync(sourcePath);
+
+    if (sourceStats.isSymbolicLink()) {
+      const targetLink = fs.readlinkSync(sourcePath);
+      const linkStats = fs.statSync(sourcePath);
+      fs.symlinkSync(
+        targetLink,
+        targetPath,
+        linkStats.isDirectory() ? 'junction' : 'file',
+      );
+      return;
+    }
+
+    if (sourceStats.isDirectory()) {
+      if (fs.existsSync(targetPath)) {
+        const targetStats = fs.statSync(targetPath);
+        if (!targetStats.isDirectory()) {
+          throw new Error(`Target path must be a directory: ${targetPath}`);
+        }
+      } else {
+        fs.mkdirSync(targetPath, { recursive: true });
+      }
+
+      fs.readdirSync(sourcePath, { withFileTypes: true }).forEach((entry) => {
+        this.copyDirectoryEntrySync(
+          path.join(sourcePath, entry.name),
+          path.join(targetPath, entry.name),
+        );
+      });
+      return;
+    }
+
+    if (!sourceStats.isFile()) {
+      return;
+    }
+
+    fs.copyFileSync(sourcePath, targetPath, fs.constants.COPYFILE_EXCL);
+    fs.chmodSync(targetPath, sourceStats.mode);
+    fs.utimesSync(targetPath, sourceStats.atime, sourceStats.mtime);
   }
 
   private async addPathViaRpc(
@@ -892,7 +1015,9 @@ export class IpfsSidecarManager {
     }
 
     if (!stat.isDirectory()) {
-      throw new Error(`Only files and directories are supported: ${resolvedPath}`);
+      throw new Error(
+        `Only files and directories are supported: ${resolvedPath}`,
+      );
     }
 
     let finalResult: AddResult | null = null;
@@ -967,10 +1092,14 @@ export class IpfsSidecarManager {
   }
 
   private killProcessTree(pid: number): void {
-    const result = spawnSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {
-      encoding: 'utf8',
-      windowsHide: true,
-    });
+    const result = spawnSync(
+      'taskkill.exe',
+      ['/PID', String(pid), '/T', '/F'],
+      {
+        encoding: 'utf8',
+        windowsHide: true,
+      },
+    );
 
     if (result.error) {
       throw result.error;
@@ -1037,7 +1166,14 @@ export class IpfsSidecarManager {
     addresses.Gateway = `/ip4/127.0.0.1/tcp/${DEFAULT_GATEWAY_PORT}`;
 
     const announce = Array.isArray(addresses.Announce)
-      ? addresses.Announce.filter((item): item is string => typeof item === 'string')
+      ? addresses.Announce.filter(
+          (item): item is string => typeof item === 'string',
+        )
+      : [];
+    const appendAnnounce = Array.isArray(addresses.AppendAnnounce)
+      ? addresses.AppendAnnounce.filter(
+          (item): item is string => typeof item === 'string',
+        )
       : [];
 
     if (this.options.getYggdrasilAddress) {
@@ -1046,18 +1182,28 @@ export class IpfsSidecarManager {
         // debug("Got Yggdrasil address for IPFS config: %s", yggAddr);
         const yggMultiaddr = `/ip6/${yggAddr}/tcp/4001`;
         // debug("Constructed Yggdrasil multiaddr for IPFS config: %s", yggMultiaddr);
-        if (!announce.includes(yggMultiaddr)) {
-          announce.push(yggMultiaddr);
+        if (!appendAnnounce.includes(yggMultiaddr)) {
+          appendAnnounce.push(yggMultiaddr);
         }
+        addresses.Announce = announce.filter(
+          (item) => item !== yggMultiaddr,
+        );
       } catch {
         // ignore when Yggdrasil is not available yet
       }
     }
 
-    addresses.Announce = announce;
+    addresses.AppendAnnounce = appendAnnounce;
+    if (!Array.isArray(addresses.Announce)) {
+      addresses.Announce = announce;
+    }
     config.Addresses = addresses;
 
-    fs.writeFileSync(this.getConfigPath(), `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+    fs.writeFileSync(
+      this.getConfigPath(),
+      `${JSON.stringify(config, null, 2)}\n`,
+      'utf8',
+    );
   }
 
   private readRepoStats(): {
@@ -1074,15 +1220,19 @@ export class IpfsSidecarManager {
         };
       }
 
-      const result = spawnSync(this.getExecutablePath(), ['repo', 'stat', '--enc=json'], {
-        cwd: path.dirname(this.getExecutablePath()),
-        env: {
-          ...process.env,
-          IPFS_PATH: this.getRepoDir(),
+      const result = spawnSync(
+        this.getExecutablePath(),
+        ['repo', 'stat', '--enc=json'],
+        {
+          cwd: path.dirname(this.getExecutablePath()),
+          env: {
+            ...process.env,
+            IPFS_PATH: this.getRepoDir(),
+          },
+          encoding: 'utf8',
+          windowsHide: true,
         },
-        encoding: 'utf8',
-        windowsHide: true,
-      });
+      );
       if (result.error || result.status !== 0) {
         return {
           repoSizeBytes: null,
@@ -1161,10 +1311,10 @@ export class IpfsSidecarManager {
         : '';
 
     return (
-      errorCode === 'ENOENT'
-      || errorCode === 'EPERM'
-      || errorCode === 'EACCES'
-      || errorCode === 'EBUSY'
+      errorCode === 'ENOENT' ||
+      errorCode === 'EPERM' ||
+      errorCode === 'EACCES' ||
+      errorCode === 'EBUSY'
     );
   }
 
@@ -1332,7 +1482,9 @@ export class IpfsSidecarManager {
     return {
       id: typeof parsed.ID === 'string' ? parsed.ID : '',
       addresses: Array.isArray(parsed.Addresses)
-        ? parsed.Addresses.filter((item): item is string => typeof item === 'string')
+        ? parsed.Addresses.filter(
+            (item): item is string => typeof item === 'string',
+          )
         : [],
     };
   }

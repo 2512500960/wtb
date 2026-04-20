@@ -1,0 +1,76 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "electron-dev-start",
+      "type": "shell",
+      "command": "npm run start",
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "MAIN_ARGS": "--inspect-brk=5858 --remote-debugging-port=9223 --enable-logging=stderr --v=1 --trace-warnings --trace-uncaught",
+          "ELECTRON_ENABLE_LOGGING": "1",
+          "ELECTRON_ENABLE_STACK_DUMPING": "1"
+        }
+      },
+      "isBackground": true,
+      "problemMatcher": [
+        {
+          "pattern": [
+            {
+              "regexp": ".",
+              "file": 1,
+              "location": 1,
+              "message": 1
+            }
+          ],
+          "background": {
+            "activeOnStart": true,
+            "beginsPattern": "Starting Main Process|> start:renderer|> start",
+            "endsPattern": "Debugger listening on ws://127\\.0\\.0\\.1:5858/"
+          }
+        }
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": false
+      }
+    },
+    {
+      "label": "electron-packaged-start",
+      "type": "shell",
+      "command": ".\\WorldTreeBrowser.exe --inspect-brk=5860 --remote-debugging-port=9224 --enable-logging=stderr --v=1 --trace-warnings --trace-uncaught",
+      "options": {
+        "cwd": "${workspaceFolder}/release/build/win-unpacked",
+        "env": {
+          "ELECTRON_ENABLE_LOGGING": "1",
+          "ELECTRON_ENABLE_STACK_DUMPING": "1"
+        }
+      },
+      "isBackground": true,
+      "problemMatcher": [
+        {
+          "pattern": [
+            {
+              "regexp": ".",
+              "file": 1,
+              "location": 1,
+              "message": 1
+            }
+          ],
+          "background": {
+            "activeOnStart": true,
+            "beginsPattern": ".",
+            "endsPattern": "Debugger listening on ws://127\\.0\\.0\\.1:5860/"
+          }
+        }
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": false
+      }
+    }
+  ]
+}

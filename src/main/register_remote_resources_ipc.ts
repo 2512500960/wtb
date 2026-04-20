@@ -62,9 +62,23 @@ export const registerRemoteResourcesIpc = (opts: {
       }
 
       const localIpfs = await opts.ipfsManager.getDetailedStatus();
+      console.log('[remote-resources] manifest ipfs peers', {
+        baseUrl: `${baseUrl.protocol}//${baseUrl.host}`,
+        requestedPath: requestedPath || '/',
+        localIpfsRunning: localIpfs.running,
+        peerAddresses: payload.data.ipfs.peerAddresses,
+      });
       const peerConnect = localIpfs.running
         ? await opts.ipfsManager.connectToPeers(payload.data.ipfs.peerAddresses)
         : { connected: [], failed: [] as Array<{ address: string; error: string }> };
+      if (!localIpfs.running) {
+        console.log('[remote-resources] skipped ipfs peer connect because local ipfs is not running');
+      } else {
+        // console.log('[remote-resources] ipfs peer connect result', {
+        //   connected: peerConnect.connected,
+        //   failed: peerConnect.failed,
+        // });
+      }
 
       const entries = payload.data.entries.map((entry) => {
         const ipfsUrl =

@@ -67,8 +67,8 @@ export const registerYggIpc = (options: {
         if (normalized.length >= 10) break;
       }
 
-      if (normalized.length < 1 || normalized.length > 10) {
-        throw new Error('请选择 1~10 个 peer');
+      if (normalized.length > 10) {
+        throw new Error('请选择 0~10 个 peer');
       }
 
       const result = await options.applyPublicPeerSelection(normalized);
