@@ -339,7 +339,7 @@ export const makeProxiedToolbarDataUrl = (opts: {
 
       body {
         margin: 0;
-        background: #10141b;
+        background: #fdfdfd;
         font-family: "Segoe UI", system-ui, sans-serif;
         color: rgba(255, 255, 255, 0.94);
       }
@@ -356,6 +356,7 @@ export const makeProxiedToolbarDataUrl = (opts: {
       }
 
       button {
+        flex: 0 0 auto;
         height: 30px;
         min-width: 30px;
         padding: 0 10px;
@@ -365,6 +366,8 @@ export const makeProxiedToolbarDataUrl = (opts: {
         color: inherit;
         cursor: pointer;
         font: inherit;
+        line-height: 1;
+        white-space: nowrap;
       }
 
       button:hover {
@@ -378,8 +381,8 @@ export const makeProxiedToolbarDataUrl = (opts: {
 
       input {
         height: 32px;
-        flex: 1;
-        min-width: 120px;
+        flex: 1 1 220px;
+        min-width: 0;
         padding: 0 12px;
         border: 1px solid rgba(255, 255, 255, 0.12);
         border-radius: 9px;
@@ -395,10 +398,13 @@ export const makeProxiedToolbarDataUrl = (opts: {
       }
 
       .spacer {
+        flex: 0 0 4px;
         width: 4px;
       }
 
       .title {
+        flex: 0 1 160px;
+        min-width: 0;
         max-width: 180px;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -408,15 +414,73 @@ export const makeProxiedToolbarDataUrl = (opts: {
       }
 
       .status {
+        flex: 0 1 96px;
+        min-width: 0;
         font-size: 12px;
         opacity: 0.7;
-        min-width: 70px;
         color: rgba(255, 255, 255, 0.7);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
       .status.error {
         color: #ff9d9d;
         opacity: 1;
+      }
+
+      .stats {
+        flex: 0 1 240px;
+        min-width: 0;
+        max-width: 240px;
+        font-size: 11px;
+        color: rgba(255, 255, 255, 0.78);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      @media (max-width: 1180px) {
+        .title {
+          display: none;
+        }
+      }
+
+      @media (max-width: 1040px) {
+        .stats {
+          display: none;
+        }
+      }
+
+      @media (max-width: 900px) {
+        .status {
+          display: none;
+        }
+      }
+
+      @media (max-width: 760px) {
+        .bar {
+          gap: 6px;
+          padding: 0 8px;
+        }
+
+        .spacer,
+        .title,
+        .stats,
+        .status {
+          display: none;
+        }
+
+        input {
+          flex-basis: 140px;
+        }
+      }
+
+      @media (max-width: 620px) {
+        #copy,
+        #external {
+          display: none;
+        }
       }
     </style>
   </head>
@@ -431,6 +495,7 @@ export const makeProxiedToolbarDataUrl = (opts: {
       <button id="external" type="button" title="用系统浏览器打开当前页面">浏览器</button>
       <div class="spacer"></div>
       <div class="title" id="title"></div>
+      <div class="stats" id="stats"></div>
       <div class="status" id="status"></div>
       <button id="close" type="button" title="关闭窗口">关闭</button>
     </form>
@@ -448,7 +513,48 @@ export const makeProxiedToolbarDataUrl = (opts: {
       const form = document.getElementById('toolbar-form');
       const status = document.getElementById('status');
       const title = document.getElementById('title');
+      const stats = document.getElementById('stats');
       let errorText = '';
+
+      const formatBytes = (value) => {
+        const bytes = Number.isFinite(value) ? Math.max(0, value) : 0;
+        if (bytes < 1024) return String(Math.round(bytes)) + ' B';
+        if (bytes < 1024 * 1024) {
+          return (
+            (bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0) + ' KB'
+          );
+        }
+        if (bytes < 1024 * 1024 * 1024) {
+          return (
+            (bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0) +
+            ' MB'
+          );
+        }
+        return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+      };
+
+      const renderStats = (state) => {
+        const totalReceivedBytes =
+          state && typeof state.totalReceivedBytes === 'number'
+            ? state.totalReceivedBytes
+            : 0;
+        const downloadRateBytesPerSecond =
+          state && typeof state.downloadRateBytesPerSecond === 'number'
+            ? state.downloadRateBytesPerSecond
+            : 0;
+        const avgResponseLatencyMs =
+          state && typeof state.avgResponseLatencyMs === 'number'
+            ? state.avgResponseLatencyMs
+            : null;
+
+        stats.textContent = [
+          '下行 ' + formatBytes(totalReceivedBytes),
+          formatBytes(downloadRateBytesPerSecond) + '/s',
+          avgResponseLatencyMs === null
+            ? '响应 --'
+            : '响应 ' + String(Math.round(avgResponseLatencyMs)) + ' ms',
+        ].join(' · ');
+      };
 
       const renderStatus = (state) => {
         const stateError = state && typeof state.errorText === 'string' ? state.errorText : '';
@@ -477,6 +583,7 @@ export const makeProxiedToolbarDataUrl = (opts: {
         back.disabled = !state.canGoBack;
         forward.disabled = !state.canGoForward;
         title.textContent = typeof state.title === 'string' ? state.title : '';
+        renderStats(state);
         if (!state.errorText && !state.isLoading) {
           errorText = '';
         }

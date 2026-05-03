@@ -30,6 +30,9 @@ type ProxiedToolbarState = {
   canGoForward: boolean;
   isLoading: boolean;
   errorText?: string;
+  totalReceivedBytes?: number;
+  downloadRateBytesPerSecond?: number;
+  avgResponseLatencyMs?: number | null;
 };
 
 type ProxiedWindowState = {
@@ -47,10 +50,46 @@ type WtbServiceProbeResult = {
   supportsIpfs: boolean;
 };
 
+type ProxiedNetworkSnapshot = {
+  totalReceivedBytes: number;
+  downloadRateBytesPerSecond: number;
+  avgResponseLatencyMs: number | null;
+};
+
+type ProxiedNetworkCollector = {
+  getSnapshot: () => ProxiedNetworkSnapshot;
+  reset: () => void;
+  dispose: () => void;
+};
+
+type ToolbarWindowOptions = {
+  requestedUrl: string;
+  initialViewUrl: string;
+  fallbackTitle: string;
+  fallbackHint: string;
+  fallbackButtonLabel: string;
+  partition?: string;
+  onHttpWindowOpen: (url: string) => void;
+  onSocksWindowOpen?: (proxyUri: string) => void;
+};
+
 const PROXIED_TOOLBAR_HEIGHT = 60;
 const WTB_SERVICE_PROBE_TIMEOUT_MS = 3500;
+const PROXIED_METRICS_UPDATE_INTERVAL_MS = 1000;
+const PROXIED_DOWNLOAD_RATE_WINDOW_MS = 2000;
+const PROXIED_LATENCY_SAMPLE_LIMIT = 20;
 
 const FAILED_LOAD_ABORTED = -3;
+
+const LATENCY_RESOURCE_TYPES = new Set([
+  'Document',
+  'Fetch',
+  'Script',
+  'Stylesheet',
+  'XHR',
+]);
+
+const EXCLUDED_NETWORK_RESOURCE_TYPES = new Set(['EventSource', 'WebSocket']);
 
 const attachSelectionContextMenu = (targetWindow: BrowserWindow): void => {
   targetWindow.webContents.on('context-menu', (_event, params) => {
@@ -231,6 +270,164 @@ const updateProxiedToolbarState = (
     });
 };
 
+const attachProxiedNetworkMetrics = (
+  contents: WebContents,
+  logger: LoggerLike,
+): ProxiedNetworkCollector => {
+  let totalReceivedBytes = 0;
+  let recentByteSamples: Array<{ recordedAtMs: number; bytes: number }> = [];
+  let latencySamples: number[] = [];
+  let attached = false;
+
+  const activeRequests = new Map<string, { startedAtMs: number }>();
+
+  const trimByteSamples = (nowMs: number) => {
+    recentByteSamples = recentByteSamples.filter(
+      (sample) => nowMs - sample.recordedAtMs <= PROXIED_DOWNLOAD_RATE_WINDOW_MS,
+    );
+  };
+
+  const reset = () => {
+    totalReceivedBytes = 0;
+    recentByteSamples = [];
+    latencySamples = [];
+    activeRequests.clear();
+  };
+
+  const getSnapshot = (): ProxiedNetworkSnapshot => {
+    const nowMs = Date.now();
+    trimByteSamples(nowMs);
+    const recentBytes = recentByteSamples.reduce(
+      (sum, sample) => sum + sample.bytes,
+      0,
+    );
+    const avgResponseLatencyMs = latencySamples.length
+      ? Math.round(
+          latencySamples.reduce((sum, latencyMs) => sum + latencyMs, 0) /
+            latencySamples.length,
+        )
+      : null;
+
+    return {
+      totalReceivedBytes,
+      downloadRateBytesPerSecond: Math.round(
+        (recentBytes * 1000) / PROXIED_DOWNLOAD_RATE_WINDOW_MS,
+      ),
+      avgResponseLatencyMs,
+    };
+  };
+
+  const onDebuggerMessage = (
+    _event: Electron.Event,
+    method: string,
+    params: Record<string, unknown>,
+  ) => {
+    const requestId =
+      typeof params.requestId === 'string' ? params.requestId : null;
+    const resourceType =
+      typeof params.type === 'string' ? params.type : undefined;
+    const timestampSeconds =
+      typeof params.timestamp === 'number' ? params.timestamp : undefined;
+    const timestampMs =
+      typeof timestampSeconds === 'number'
+        ? Math.round(timestampSeconds * 1000)
+        : Date.now();
+
+    if (method === 'Network.requestWillBeSent') {
+      if (!requestId || EXCLUDED_NETWORK_RESOURCE_TYPES.has(resourceType || '')) {
+        return;
+      }
+      activeRequests.set(requestId, { startedAtMs: timestampMs });
+      return;
+    }
+
+    if (method === 'Network.responseReceived') {
+      if (
+        !requestId ||
+        !resourceType ||
+        !LATENCY_RESOURCE_TYPES.has(resourceType)
+      ) {
+        return;
+      }
+
+      const requestState = activeRequests.get(requestId);
+      if (!requestState) return;
+
+      const latencyMs = Math.max(0, timestampMs - requestState.startedAtMs);
+      latencySamples.push(latencyMs);
+      if (latencySamples.length > PROXIED_LATENCY_SAMPLE_LIMIT) {
+        latencySamples = latencySamples.slice(-PROXIED_LATENCY_SAMPLE_LIMIT);
+      }
+      return;
+    }
+
+    if (method === 'Network.loadingFinished') {
+      if (!requestId) return;
+
+      const encodedDataLength =
+        typeof params.encodedDataLength === 'number'
+          ? Math.max(0, params.encodedDataLength)
+          : 0;
+
+      if (encodedDataLength > 0) {
+        totalReceivedBytes += encodedDataLength;
+        recentByteSamples.push({
+          recordedAtMs: timestampMs,
+          bytes: encodedDataLength,
+        });
+        trimByteSamples(timestampMs);
+      }
+
+      activeRequests.delete(requestId);
+      return;
+    }
+
+    if (method === 'Network.loadingFailed' && requestId) {
+      activeRequests.delete(requestId);
+    }
+  };
+
+  try {
+    if (!contents.debugger.isAttached()) {
+      contents.debugger.attach('1.3');
+      attached = true;
+    }
+    contents.debugger.on('message', onDebuggerMessage);
+    void contents.debugger.sendCommand('Network.enable').catch((error) => {
+      logger.debug?.('Failed to enable proxied window network metrics', error);
+    });
+  } catch (error) {
+    logger.debug?.('Failed to attach proxied window debugger', error);
+  }
+
+  const dispose = () => {
+    try {
+      contents.debugger.off('message', onDebuggerMessage);
+    } catch {
+      // ignore
+    }
+
+    if (!attached) return;
+
+    try {
+      void contents.debugger.sendCommand('Network.disable').catch(() => {
+        // ignore
+      });
+      if (contents.debugger.isAttached()) {
+        contents.debugger.detach();
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  return {
+    getSnapshot,
+    reset,
+    dispose,
+  };
+};
+
 const isDataHtmlUrl = (value: string): boolean => {
   return value.startsWith('data:text/html');
 };
@@ -327,13 +524,20 @@ export class BrowserWindowCoordinator {
       return;
     }
 
-    const child = this.createInAppWindow();
     const loadingUrl = makeWtbProbeLoadingDataUrl(url);
-    try {
-      await child.loadURL(loadingUrl);
-    } catch {
-      // ignore
-    }
+    const { targetWindow, view } = await this.createToolbarWindow({
+      requestedUrl: url,
+      initialViewUrl: loadingUrl,
+      fallbackTitle: '这个页面暂时打不开',
+      fallbackHint: '网络超时、地址失效，或者远端服务还没准备好。',
+      fallbackButtonLabel: '再试一次',
+      onHttpWindowOpen: (nextUrl) => {
+        void this.openInAppUrl(nextUrl);
+      },
+      onSocksWindowOpen: (proxyUri) => {
+        void this.openProxiedWindow(proxyUri, 'https://www.google.com');
+      },
+    });
 
     let targetUrl = url;
     try {
@@ -345,8 +549,8 @@ export class BrowserWindowCoordinator {
         const baseUrl = `${parsed.protocol}//${parsed.host}`;
         const requestedPath = normalizeStandaloneResourcePath(parsed.pathname);
 
-        if (!child.isDestroyed()) {
-          child.close();
+        if (!targetWindow.isDestroyed()) {
+          targetWindow.close();
         }
 
         await this.openStandaloneRemoteResourcesWindow({
@@ -360,8 +564,12 @@ export class BrowserWindowCoordinator {
       this.options.logger.debug?.('WTB web service probe failed', error);
     }
 
-    if (!child.isDestroyed()) {
-      child.loadURL(targetUrl).catch(() => {
+    if (!targetWindow.isDestroyed()) {
+      this.proxiedWindowStates.set(targetWindow.id, {
+        requestedUrl: targetUrl,
+        errorText: '',
+      });
+      view.webContents.loadURL(targetUrl).catch(() => {
         // ignore
       });
     }
@@ -391,161 +599,19 @@ export class BrowserWindowCoordinator {
         this.options.logger.warn('setProxy failed for', proxyUri, error);
       }
 
-      const targetWindow = new BrowserWindow({
-        width: 1000,
-        height: 700,
-        show: false,
-        webPreferences: {
-          preload: getPreloadPath(this.options.app),
-          nodeIntegration: false,
-          contextIsolation: true,
-        },
-      });
-
-      const view = new BrowserView({
-        webPreferences: {
-          nodeIntegration: false,
-          contextIsolation: true,
-          partition,
-        },
-      });
-
-      this.proxiedWindowViews.set(targetWindow.id, view);
-      this.proxiedWindowStates.set(targetWindow.id, {
-        requestedUrl:
-          normalizeProxiedTargetUrl(targetUrl) || 'https://www.google.com',
-        errorText: '',
-      });
-      targetWindow.setBrowserView(view);
-      layoutProxiedBrowserView(targetWindow, view);
-
-      this.options.applyChineseAcceptLanguage(targetWindow.webContents.session);
-      this.options.applyChineseAcceptLanguage(view.webContents.session);
-      attachSelectionContextMenu(targetWindow);
-
-      targetWindow.once('ready-to-show', () => targetWindow.show());
-
-      view.webContents.on('will-navigate', (event, navUrl) => {
-        try {
-          const parsedUrl = new URL(navUrl);
-          if (
-            parsedUrl.protocol !== 'http:' &&
-            parsedUrl.protocol !== 'https:' &&
-            parsedUrl.protocol !== 'file:'
-          ) {
-            event.preventDefault();
-          }
-        } catch {
-          event.preventDefault();
-        }
-      });
-
-      view.webContents.setWindowOpenHandler((details) => {
-        try {
-          const parsedUrl = new URL(details.url);
-          if (
-            parsedUrl.protocol !== 'http:' &&
-            parsedUrl.protocol !== 'https:'
-          ) {
-            return { action: 'deny' };
-          }
-          void this.openProxiedWindow(proxyUri, parsedUrl.toString());
-          return { action: 'deny' };
-        } catch {
-          return { action: 'deny' };
-        }
-      });
-
-      const syncToolbarState = () => {
-        const windowState = this.proxiedWindowStates.get(targetWindow.id);
-        const currentUrl = view.webContents.getURL();
-        const displayedUrl =
-          currentUrl && !isDataHtmlUrl(currentUrl)
-            ? currentUrl
-            : windowState?.requestedUrl || targetUrl;
-        updateProxiedToolbarState(targetWindow, {
-          url: displayedUrl,
-          title: view.webContents.getTitle() || '',
-          canGoBack: view.webContents.canGoBack(),
-          canGoForward: view.webContents.canGoForward(),
-          isLoading: view.webContents.isLoading(),
-          errorText: windowState?.errorText || '',
-        });
-      };
-
-      attachRetryPageOnLoadFailure(view.webContents, {
-        logger: this.options.logger,
-        getFallbackUrl: (validatedUrl, errorCode, errorDescription) => {
-          return makeNavigationFailureDataUrl({
-            targetUrl: validatedUrl,
-            title: '这个页面暂时没连上',
-            hint: '代理连接、目标站点或本地网络可能暂时不可用。',
-            buttonLabel: '重新加载',
-            errorDetail: formatLoadFailureDetail(errorCode, errorDescription),
-          });
-        },
-        onFailure: (validatedUrl, errorCode, errorDescription) => {
-          this.proxiedWindowStates.set(targetWindow.id, {
-            requestedUrl: validatedUrl,
-            errorText: formatLoadFailureDetail(errorCode, errorDescription),
-          });
-          syncToolbarState();
-        },
-        onSuccess: (url) => {
-          this.proxiedWindowStates.set(targetWindow.id, {
-            requestedUrl: url,
-            errorText: '',
-          });
-          syncToolbarState();
-        },
-      });
-
-      view.webContents.on('did-start-loading', syncToolbarState);
-      view.webContents.on('did-stop-loading', syncToolbarState);
-      view.webContents.on('page-title-updated', syncToolbarState);
-      view.webContents.on('did-navigate', syncToolbarState);
-      view.webContents.on('did-navigate-in-page', syncToolbarState);
-
-      targetWindow.on('resize', () =>
-        layoutProxiedBrowserView(targetWindow, view),
-      );
-      targetWindow.on('maximize', () =>
-        layoutProxiedBrowserView(targetWindow, view),
-      );
-      targetWindow.on('unmaximize', () =>
-        layoutProxiedBrowserView(targetWindow, view),
-      );
-      targetWindow.on('enter-full-screen', () =>
-        layoutProxiedBrowserView(targetWindow, view),
-      );
-      targetWindow.on('leave-full-screen', () =>
-        layoutProxiedBrowserView(targetWindow, view),
-      );
-      targetWindow.on('closed', () => {
-        this.proxiedWindowViews.delete(targetWindow.id);
-        this.proxiedWindowStates.delete(targetWindow.id);
-      });
-
-      try {
-        await targetWindow.loadURL(
-          makeProxiedToolbarDataUrl({
-            windowId: targetWindow.id,
-            height: PROXIED_TOOLBAR_HEIGHT,
-          }),
-        );
-      } catch {
-        // ignore
-      }
-      syncToolbarState();
-
       const normalizedTarget =
         normalizeProxiedTargetUrl(targetUrl) || 'https://www.google.com';
-      this.proxiedWindowStates.set(targetWindow.id, {
+
+      const { targetWindow } = await this.createToolbarWindow({
         requestedUrl: normalizedTarget,
-        errorText: '',
-      });
-      view.webContents.loadURL(normalizedTarget).catch(() => {
-        // ignore
+        initialViewUrl: normalizedTarget,
+        partition,
+        fallbackTitle: '这个页面暂时没连上',
+        fallbackHint: '代理连接、目标站点或本地网络可能暂时不可用。',
+        fallbackButtonLabel: '重新加载',
+        onHttpWindowOpen: (nextUrl) => {
+          void this.openProxiedWindow(proxyUri, nextUrl);
+        },
       });
 
       return targetWindow;
@@ -639,42 +705,49 @@ export class BrowserWindowCoordinator {
     }
   }
 
-  private createInAppWindow(): BrowserWindow {
-    const child = new BrowserWindow({
+  private async createToolbarWindow(
+    options: ToolbarWindowOptions,
+  ): Promise<{ targetWindow: BrowserWindow; view: BrowserView }> {
+    const targetWindow = new BrowserWindow({
       width: 1000,
       height: 700,
       show: false,
       webPreferences: {
+        preload: getPreloadPath(this.options.app),
         nodeIntegration: false,
         contextIsolation: true,
       },
     });
 
-    this.options.applyChineseAcceptLanguage(child.webContents.session);
-    attachSelectionContextMenu(child);
-    attachRetryPageOnLoadFailure(child.webContents, {
-      logger: this.options.logger,
-      getFallbackUrl: (validatedUrl, errorCode, errorDescription) => {
-        return makeNavigationFailureDataUrl({
-          targetUrl: validatedUrl,
-          title: '这个页面暂时打不开',
-          hint: '网络超时、地址失效，或者远端服务还没准备好。',
-          buttonLabel: '再试一次',
-          errorDetail: formatLoadFailureDetail(errorCode, errorDescription),
-        });
+    const view = new BrowserView({
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        ...(options.partition ? { partition: options.partition } : {}),
       },
     });
-    child.once('ready-to-show', () => child.show());
 
-    child.webContents.on('will-navigate', (event, navUrl) => {
+    this.proxiedWindowViews.set(targetWindow.id, view);
+    this.proxiedWindowStates.set(targetWindow.id, {
+      requestedUrl: options.requestedUrl,
+      errorText: '',
+    });
+
+    targetWindow.setBrowserView(view);
+    layoutProxiedBrowserView(targetWindow, view);
+
+    this.options.applyChineseAcceptLanguage(targetWindow.webContents.session);
+    this.options.applyChineseAcceptLanguage(view.webContents.session);
+    attachSelectionContextMenu(targetWindow);
+    targetWindow.once('ready-to-show', () => targetWindow.show());
+
+    view.webContents.on('will-navigate', (event, navUrl) => {
       try {
         const parsed = new URL(navUrl);
+
         if (parsed.protocol === 'socks5:' || parsed.protocol === 'socks5h:') {
           event.preventDefault();
-          void this.openProxiedWindow(
-            parsed.toString(),
-            'https://www.google.com',
-          );
+          options.onSocksWindowOpen?.(parsed.toString());
           return;
         }
 
@@ -690,15 +763,12 @@ export class BrowserWindowCoordinator {
       }
     });
 
-    child.webContents.setWindowOpenHandler((details) => {
+    view.webContents.setWindowOpenHandler((details) => {
       try {
         const parsed = new URL(details.url);
 
         if (parsed.protocol === 'socks5:' || parsed.protocol === 'socks5h:') {
-          void this.openProxiedWindow(
-            parsed.toString(),
-            'https://www.google.com',
-          );
+          options.onSocksWindowOpen?.(parsed.toString());
           return { action: 'deny' };
         }
 
@@ -706,14 +776,121 @@ export class BrowserWindowCoordinator {
           return { action: 'deny' };
         }
 
-        void this.openInAppUrl(parsed.toString());
+        options.onHttpWindowOpen(parsed.toString());
         return { action: 'deny' };
       } catch {
         return { action: 'deny' };
       }
     });
 
-    return child;
+    const networkMetrics = attachProxiedNetworkMetrics(
+      view.webContents,
+      this.options.logger,
+    );
+
+    const syncToolbarState = () => {
+      const windowState = this.proxiedWindowStates.get(targetWindow.id);
+      const currentUrl = view.webContents.getURL();
+      const displayedUrl =
+        currentUrl && !isDataHtmlUrl(currentUrl)
+          ? currentUrl
+          : windowState?.requestedUrl || options.requestedUrl;
+      const metrics = networkMetrics.getSnapshot();
+
+      updateProxiedToolbarState(targetWindow, {
+        url: displayedUrl,
+        title: view.webContents.getTitle() || '',
+        canGoBack: view.webContents.canGoBack(),
+        canGoForward: view.webContents.canGoForward(),
+        isLoading: view.webContents.isLoading(),
+        errorText: windowState?.errorText || '',
+        totalReceivedBytes: metrics.totalReceivedBytes,
+        downloadRateBytesPerSecond: metrics.downloadRateBytesPerSecond,
+        avgResponseLatencyMs: metrics.avgResponseLatencyMs,
+      });
+    };
+
+    const metricsInterval = setInterval(
+      syncToolbarState,
+      PROXIED_METRICS_UPDATE_INTERVAL_MS,
+    );
+
+    view.webContents.on('did-start-loading', () => {
+      networkMetrics.reset();
+      syncToolbarState();
+    });
+
+    attachRetryPageOnLoadFailure(view.webContents, {
+      logger: this.options.logger,
+      getFallbackUrl: (validatedUrl, errorCode, errorDescription) => {
+        return makeNavigationFailureDataUrl({
+          targetUrl: validatedUrl,
+          title: options.fallbackTitle,
+          hint: options.fallbackHint,
+          buttonLabel: options.fallbackButtonLabel,
+          errorDetail: formatLoadFailureDetail(errorCode, errorDescription),
+        });
+      },
+      onFailure: (validatedUrl, errorCode, errorDescription) => {
+        this.proxiedWindowStates.set(targetWindow.id, {
+          requestedUrl: validatedUrl,
+          errorText: formatLoadFailureDetail(errorCode, errorDescription),
+        });
+        syncToolbarState();
+      },
+      onSuccess: (url) => {
+        this.proxiedWindowStates.set(targetWindow.id, {
+          requestedUrl: url,
+          errorText: '',
+        });
+        syncToolbarState();
+      },
+    });
+
+    view.webContents.on('did-stop-loading', syncToolbarState);
+    view.webContents.on('page-title-updated', syncToolbarState);
+    view.webContents.on('did-navigate', syncToolbarState);
+    view.webContents.on('did-navigate-in-page', syncToolbarState);
+
+    targetWindow.on('resize', () =>
+      layoutProxiedBrowserView(targetWindow, view),
+    );
+    targetWindow.on('maximize', () =>
+      layoutProxiedBrowserView(targetWindow, view),
+    );
+    targetWindow.on('unmaximize', () =>
+      layoutProxiedBrowserView(targetWindow, view),
+    );
+    targetWindow.on('enter-full-screen', () =>
+      layoutProxiedBrowserView(targetWindow, view),
+    );
+    targetWindow.on('leave-full-screen', () =>
+      layoutProxiedBrowserView(targetWindow, view),
+    );
+    targetWindow.on('closed', () => {
+      clearInterval(metricsInterval);
+      networkMetrics.dispose();
+      this.proxiedWindowViews.delete(targetWindow.id);
+      this.proxiedWindowStates.delete(targetWindow.id);
+    });
+
+    try {
+      await targetWindow.loadURL(
+        makeProxiedToolbarDataUrl({
+          windowId: targetWindow.id,
+          height: PROXIED_TOOLBAR_HEIGHT,
+        }),
+      );
+    } catch {
+      // ignore
+    }
+
+    syncToolbarState();
+    view.webContents.loadURL(options.initialViewUrl).catch(() => {
+      // ignore
+    });
+
+    return { targetWindow, view };
   }
 
   private async openStandaloneRemoteResourcesWindow(opts: {

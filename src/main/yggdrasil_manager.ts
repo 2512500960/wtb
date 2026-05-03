@@ -57,6 +57,11 @@ const yggdrasilCtlJsonCommandMap = new Map<string, string>([
   ['getp2ppeersjson', 'getp2ppeers'],
 ]);
 
+const yggdrasilWtbDefaults = Object.freeze({
+  ifMtu: 2048,
+  routeProbe: true,
+});
+
 const psSingleQuote = (value: string): string => {
   return `'${value.replace(/'/g, "''")}'`;
 };
@@ -78,6 +83,15 @@ const normalizeYggdrasilConfStringList = (values: unknown): string[] => {
     normalized.push(trimmed);
   }
   return normalized;
+};
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> => {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+};
+
+const stringListsEqual = (left: string[], right: string[]): boolean => {
+  if (left.length !== right.length) return false;
+  return left.every((value, index) => value === right[index]);
 };
 
 const getPeArch = (filePath: string): PeArch | null => {
@@ -332,8 +346,7 @@ export class YggdrasilManager {
 
     fs.mkdirSync(dataDir, { recursive: true });
     fs.mkdirSync(p2pDataDir, { recursive: true });
-    await this.generateConfIfMissing(yggExe, confPath);
-    this.updateConfP2PDataDir(confPath, p2pDataDir.replace(/\\/g, '/'));
+    await this.prepareConfForStart(yggExe, confPath, p2pDataDir.replace(/\\/g, '/'));
     this.clearConfigPeersBestEffort('before yggdrasil start');
 
     const script = [
@@ -616,59 +629,83 @@ export class YggdrasilManager {
   private setConfPeers(confPath: string, peers: string[]): void {
     const list = normalizeYggdrasilConfStringList(peers);
 
-    const raw = stripUtf8Bom(fs.readFileSync(confPath, { encoding: 'utf8' }));
-    const doc: any = (Hjson as any).rt?.parse
-      ? (Hjson as any).rt.parse(raw)
-      : Hjson.parse(raw);
+    const doc = this.readConfDocument(confPath);
 
     doc.Peers = list;
 
-    const out: string = (Hjson as any).rt?.stringify
-      ? (Hjson as any).rt.stringify(doc, {
-          quotes: 'all',
-          separator: true,
-          space: 2,
-        })
-      : Hjson.stringify(doc, { quotes: 'all', separator: true, space: 2 });
-
-    fs.writeFileSync(confPath, `${stripUtf8Bom(out)}\n`, { encoding: 'utf8' });
+    this.writeConfDocument(confPath, doc);
   }
 
-  private mergeConfP2PBootstrapPeers(confPath: string, peers: string[]): void {
-    const additionalPeers = normalizeYggdrasilConfStringList(peers);
-    if (!additionalPeers.length) return;
-
-    const raw = stripUtf8Bom(fs.readFileSync(confPath, { encoding: 'utf8' }));
-    const doc: any = (Hjson as any).rt?.parse
-      ? (Hjson as any).rt.parse(raw)
-      : Hjson.parse(raw);
-
-    if (!doc.P2P || typeof doc.P2P !== 'object') {
-      doc.P2P = {};
-    }
-
-    doc.P2P.bootstrap_peers = normalizeYggdrasilConfStringList([
-      ...normalizeYggdrasilConfStringList(doc.P2P.bootstrap_peers),
-      ...additionalPeers,
-    ]);
-
-    const out: string = (Hjson as any).rt?.stringify
-      ? (Hjson as any).rt.stringify(doc, {
-          quotes: 'all',
-          separator: true,
-          space: 2,
-        })
-      : Hjson.stringify(doc, { quotes: 'all', separator: true, space: 2 });
-
-    fs.writeFileSync(confPath, `${stripUtf8Bom(out)}\n`, { encoding: 'utf8' });
-  }
-
-  private async generateConfIfMissing(
+  private async prepareConfForStart(
     yggExe: string,
     confPath: string,
+    desiredP2PDataDir: string,
   ): Promise<void> {
-    if (fs.existsSync(confPath)) return;
+    const hadExistingConf = fs.existsSync(confPath);
+    const latestConfTemplate = this.generateConfDocument(yggExe);
+    const doc = hadExistingConf
+      ? this.readConfDocument(confPath)
+      : latestConfTemplate;
 
+    let changed = !hadExistingConf;
+
+    if (hadExistingConf) {
+      changed = this.mergeMissingConfigDefaults(doc, latestConfTemplate) || changed;
+    }
+
+    if (!isPlainObject(doc.P2P)) {
+      doc.P2P = {};
+      changed = true;
+    }
+
+    if (!hadExistingConf) {
+      const nextBootstrapPeers = normalizeYggdrasilConfStringList([
+        ...normalizeYggdrasilConfStringList(doc.P2P.bootstrap_peers),
+        ...this.options.bootstrapNodes,
+      ]);
+
+      if (!stringListsEqual(normalizeYggdrasilConfStringList(doc.Peers), [])) {
+        doc.Peers = [];
+        changed = true;
+      }
+
+      if (
+        !stringListsEqual(
+          normalizeYggdrasilConfStringList(doc.P2P.bootstrap_peers),
+          nextBootstrapPeers,
+        )
+      ) {
+        doc.P2P.bootstrap_peers = nextBootstrapPeers;
+        changed = true;
+      }
+    }
+
+    if (doc.P2P.data_dir !== desiredP2PDataDir) {
+      doc.P2P.data_dir = desiredP2PDataDir;
+      changed = true;
+    }
+
+    if (doc.route_probe !== yggdrasilWtbDefaults.routeProbe) {
+      doc.route_probe = yggdrasilWtbDefaults.routeProbe;
+      changed = true;
+    }
+
+    if (doc.IfMTU !== yggdrasilWtbDefaults.ifMtu) {
+      doc.IfMTU = yggdrasilWtbDefaults.ifMtu;
+      changed = true;
+    }
+
+    if (!changed) return;
+
+    this.writeConfDocument(confPath, doc);
+    this.options.logger.info(
+      hadExistingConf
+        ? 'Prepared existing yggdrasil.conf with latest defaults and WTB overrides.'
+        : 'Generated yggdrasil.conf with latest defaults and WTB overrides.',
+    );
+  }
+
+  private generateConfDocument(yggExe: string): any {
     const result = spawnSync(yggExe, ['-genconf'], {
       encoding: 'utf8',
       windowsHide: true,
@@ -689,23 +726,22 @@ export class YggdrasilManager {
     if (!confText.trim()) {
       throw new Error('yggdrasil -genconf 输出为空，无法生成配置文件');
     }
-    fs.writeFileSync(confPath, stripUtf8Bom(confText), { encoding: 'utf8' });
 
-    this.setConfPeers(confPath, []);
-    this.mergeConfP2PBootstrapPeers(confPath, this.options.bootstrapNodes);
+    return this.parseConfDocument(confText);
   }
 
-  private updateConfP2PDataDir(confPath: string, desiredDataDir: string): void {
-    const raw = stripUtf8Bom(fs.readFileSync(confPath, { encoding: 'utf8' }));
-    const doc: any = (Hjson as any).rt?.parse
-      ? (Hjson as any).rt.parse(raw)
-      : Hjson.parse(raw);
+  private parseConfDocument(raw: string): any {
+    const normalized = stripUtf8Bom(raw);
+    return (Hjson as any).rt?.parse
+      ? (Hjson as any).rt.parse(normalized)
+      : Hjson.parse(normalized);
+  }
 
-    if (!doc.P2P || typeof doc.P2P !== 'object') {
-      doc.P2P = {};
-    }
-    doc.P2P.data_dir = desiredDataDir;
+  private readConfDocument(confPath: string): any {
+    return this.parseConfDocument(fs.readFileSync(confPath, { encoding: 'utf8' }));
+  }
 
+  private writeConfDocument(confPath: string, doc: any): void {
     const out: string = (Hjson as any).rt?.stringify
       ? (Hjson as any).rt.stringify(doc, {
           quotes: 'all',
@@ -715,6 +751,30 @@ export class YggdrasilManager {
       : Hjson.stringify(doc, { quotes: 'all', separator: true, space: 2 });
 
     fs.writeFileSync(confPath, `${stripUtf8Bom(out)}\n`, { encoding: 'utf8' });
+  }
+
+  private mergeMissingConfigDefaults(
+    target: Record<string, unknown>,
+    defaults: Record<string, unknown>,
+  ): boolean {
+    let changed = false;
+
+    for (const [key, defaultValue] of Object.entries(defaults)) {
+      const currentValue = target[key];
+
+      if (typeof currentValue === 'undefined') {
+        target[key] = defaultValue;
+        changed = true;
+        continue;
+      }
+
+      if (isPlainObject(currentValue) && isPlainObject(defaultValue)) {
+        changed =
+          this.mergeMissingConfigDefaults(currentValue, defaultValue) || changed;
+      }
+    }
+
+    return changed;
   }
 
   private buildStartupHint(baseDir: string): string | null {

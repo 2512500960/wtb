@@ -1441,13 +1441,14 @@ a:hover {
 
 .WebFileManagerTheme {
   background: transparent;
-  color: rgb(115, 241, 12);
+  color: rgb(103, 225, 4);
+  /* font-size: 20px; */
 }
 .WebFileManagerTheme .item-action {
   background: rgba(52, 208, 29, 0.1);
   width: fit-content;
   border: 10px solid rgba(52, 208, 29, 0.3);
-  background-color: #c9e0c3;
+  background-color: #f9f9f9;
   margin-right: 5px;
 }
 .WebFileManagerUploadEntry {
@@ -1493,7 +1494,9 @@ a:hover {
 .WebFileManagerTheme .fm-context-menu .file-context-menu-list ul li {
   width: 130px;
 }
-
+.files.list .modified-date {
+  width: 25%;
+}
 @keyframes WebStorageProgressSlide {
   0% {
     transform: translateX(-120%);
