@@ -60,6 +60,7 @@ const yggdrasilCtlJsonCommandMap = new Map<string, string>([
 const yggdrasilWtbDefaults = Object.freeze({
   ifMtu: 2048,
   routeProbe: true,
+  NodeInfoPrivacy: true,
 });
 
 const psSingleQuote = (value: string): string => {
