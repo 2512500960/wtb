@@ -70,13 +70,13 @@ type AutoPeerStatus = {
   lastCycleSummary: AutoPeerCycleSummary | null;
 };
 
-type AutoConfigField = {
-  label: string;
-  value: string;
-  setter: React.Dispatch<React.SetStateAction<string>>;
+type YggConfig = {
+  ifMtu: number;
+  tcpOnly: boolean;
+  p2pEnabled: boolean;
 };
 
-type PeerMode = 'auto' | 'manual' | 'p2p';
+type DirectPeerMode = 'auto' | 'manual' | 'disabled';
 
 const TARGET_PEER_OPTIONS = ['3', '4', '5', '6'] as const;
 
@@ -118,16 +118,42 @@ const clampNumber = (
   return Math.min(max, Math.max(min, Math.floor(parsed)));
 };
 
+const radioGroupStyle: React.CSSProperties = {
+  display: 'flex',
+  gap: 16,
+  alignItems: 'center',
+  flexWrap: 'wrap',
+};
+
+const radioLabelStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 4,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+};
+
 export default function YggdrasilPeersSettingsSection() {
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+
+  // direct peer mode
+  const [directPeerMode, setDirectPeerMode] =
+    React.useState<DirectPeerMode>('auto');
+
+  // p2p + other config
+  const [p2pEnabled, setP2pEnabled] = React.useState(true);
+  const [ifMtu, setIfMtu] = React.useState('32768');
+  const [tcpOnly, setTcpOnly] = React.useState(true);
+
+  // peer candidates & selection
   const [candidates, setCandidates] = React.useState<PublicPeerNode[]>([]);
   const [selected, setSelected] = React.useState<string[]>([]);
-  const [mode, setMode] = React.useState<PeerMode>('auto');
   const [autoStatus, setAutoStatus] = React.useState<AutoPeerStatus | null>(
     null,
   );
 
+  // auto config fields
   const [targetPeerCount, setTargetPeerCount] = React.useState('6');
   const [initialDelayMs, setInitialDelayMs] = React.useState('20000');
   const [reconcileIntervalMs, setReconcileIntervalMs] =
@@ -135,40 +161,17 @@ export default function YggdrasilPeersSettingsSection() {
   const [probeIntervalMs, setProbeIntervalMs] = React.useState('1500');
   const [probeTimeoutMs, setProbeTimeoutMs] = React.useState('5000');
 
-  const autoConfigFields: AutoConfigField[] = [
-    { label: '首次延迟 ms', value: initialDelayMs, setter: setInitialDelayMs },
-    {
-      label: '重平衡周期 ms',
-      value: reconcileIntervalMs,
-      setter: setReconcileIntervalMs,
-    },
-    {
-      label: '采样间隔 ms',
-      value: probeIntervalMs,
-      setter: setProbeIntervalMs,
-    },
-    { label: '单步超时 ms', value: probeTimeoutMs, setter: setProbeTimeoutMs },
-  ];
-
-  const applyConfigToForm = React.useCallback(
-    (cfg: AutoPeerConfig | undefined) => {
-      setTargetPeerCount(String(cfg?.targetPeerCount ?? 6));
-      setInitialDelayMs(String(cfg?.initialDelayMs ?? 20000));
-      setReconcileIntervalMs(String(cfg?.reconcileIntervalMs ?? 900000));
-      setProbeIntervalMs(String(cfg?.probeIntervalMs ?? 1500));
-      setProbeTimeoutMs(String(cfg?.probeTimeoutMs ?? 5000));
-    },
-    [],
-  );
-
   const refresh = React.useCallback(async () => {
     setError(null);
     try {
-      const [listRaw, selectionRaw, autoStatusRaw] = (await Promise.all([
-        window.electron.ipcRenderer.invoke('ygg:publicPeers:list'),
-        window.electron.ipcRenderer.invoke('ygg:publicPeers:getSelection'),
-        window.electron.ipcRenderer.invoke('ygg:autoPeer:getStatus'),
-      ])) as [unknown, unknown, unknown];
+      const [listRaw, selectionRaw, autoStatusRaw, yggCfg] = (await Promise.all(
+        [
+          window.electron.ipcRenderer.invoke('ygg:publicPeers:list'),
+          window.electron.ipcRenderer.invoke('ygg:publicPeers:getSelection'),
+          window.electron.ipcRenderer.invoke('ygg:autoPeer:getStatus'),
+          window.electron.ipcRenderer.invoke('ygg:config:get'),
+        ],
+      )) as [unknown, unknown, unknown, YggConfig];
 
       const list: PublicPeerNode[] = Array.isArray(listRaw)
         ? (listRaw as any[])
@@ -204,15 +207,29 @@ export default function YggdrasilPeersSettingsSection() {
       const normalizedSelection = persistedSelection.filter((x) =>
         candidateAddrSet.has(x),
       );
-      let resolvedMode: PeerMode = 'auto';
+
+      // resolve direct peer mode from config
+      let resolvedMode: DirectPeerMode = 'auto';
       if (status?.config?.enabled === false) {
-        resolvedMode = persistedSelection.length > 0 ? 'manual' : 'p2p';
+        resolvedMode = persistedSelection.length > 0 ? 'manual' : 'disabled';
       }
 
       setSelected(normalizedSelection);
       setAutoStatus(status);
-      applyConfigToForm(status?.config);
-      setMode(resolvedMode);
+      setDirectPeerMode(resolvedMode);
+
+      // apply auto config fields
+      const cfg = status?.config;
+      setTargetPeerCount(String(cfg?.targetPeerCount ?? 6));
+      setInitialDelayMs(String(cfg?.initialDelayMs ?? 20000));
+      setReconcileIntervalMs(String(cfg?.reconcileIntervalMs ?? 900000));
+      setProbeIntervalMs(String(cfg?.probeIntervalMs ?? 1500));
+      setProbeTimeoutMs(String(cfg?.probeTimeoutMs ?? 5000));
+
+      // apply ygg config
+      setIfMtu(String(yggCfg.ifMtu));
+      setTcpOnly(yggCfg.tcpOnly);
+      setP2pEnabled(yggCfg.p2pEnabled);
 
       if (!list.length) {
         setError(
@@ -222,7 +239,7 @@ export default function YggdrasilPeersSettingsSection() {
     } finally {
       // no-op
     }
-  }, [applyConfigToForm]);
+  }, []);
 
   React.useEffect(() => {
     refresh().catch((e) => {
@@ -245,62 +262,74 @@ export default function YggdrasilPeersSettingsSection() {
   };
 
   const buildAutoConfigPayload = (): AutoPeerConfig => {
+    const enabled = directPeerMode === 'auto';
     return {
-      enabled: mode === 'auto',
-      targetPeerCount: clampNumber(targetPeerCount, 6, 3, 6),
-      initialDelayMs: clampNumber(initialDelayMs, 20000, 0, 600000),
-      reconcileIntervalMs: clampNumber(
-        reconcileIntervalMs,
-        900000,
-        10000,
-        86400000,
-      ),
-      sampleSize: Math.max(6, clampNumber(targetPeerCount, 6, 3, 6) * 2),
-      probeAttempts: Math.min(
-        8,
-        Math.max(4, clampNumber(targetPeerCount, 6, 3, 6) * 2),
-      ),
-      probeIntervalMs: clampNumber(probeIntervalMs, 1500, 200, 30000),
-      probeTimeoutMs: clampNumber(probeTimeoutMs, 5000, 500, 60000),
+      enabled,
+      targetPeerCount: enabled ? clampNumber(targetPeerCount, 6, 3, 6) : 6,
+      initialDelayMs: enabled
+        ? clampNumber(initialDelayMs, 20000, 0, 600000)
+        : 20000,
+      reconcileIntervalMs: enabled
+        ? clampNumber(reconcileIntervalMs, 900000, 10000, 86400000)
+        : 900000,
+      sampleSize: enabled
+        ? Math.max(6, clampNumber(targetPeerCount, 6, 3, 6) * 2)
+        : 12,
+      probeAttempts: enabled
+        ? Math.min(8, Math.max(4, clampNumber(targetPeerCount, 6, 3, 6) * 2))
+        : 3,
+      probeIntervalMs: enabled
+        ? clampNumber(probeIntervalMs, 1500, 200, 30000)
+        : 1500,
+      probeTimeoutMs: enabled
+        ? clampNumber(probeTimeoutMs, 5000, 500, 60000)
+        : 5000,
     };
   };
 
-  const saveCurrentMode = async () => {
+  const save = async () => {
     setSaving(true);
     setError(null);
     try {
-      const payload = buildAutoConfigPayload();
-      const configResult = (await window.electron.ipcRenderer.invoke(
-        'ygg:autoPeer:updateConfig',
-        payload,
-      )) as { status?: AutoPeerStatus };
-
-      if (configResult?.status) {
-        setAutoStatus(configResult.status);
-        applyConfigToForm(configResult.status.config);
+      const mtu = Number(ifMtu);
+      if (!Number.isFinite(mtu) || mtu < 1280 || mtu > 65535) {
+        throw new Error('MTU 必须在 1280~65535 之间');
       }
 
-      if (mode !== 'auto') {
+      // 1. save auto peer config
+      const autoPayload = buildAutoConfigPayload();
+      await window.electron.ipcRenderer.invoke(
+        'ygg:autoPeer:updateConfig',
+        autoPayload,
+      );
+
+      // 2. save manual peer selection (if manually selected or disabled)
+      if (directPeerMode !== 'auto') {
         if (
-          mode === 'manual' &&
+          directPeerMode === 'manual' &&
           (selected.length < 1 || selected.length > 10)
         ) {
           throw new Error('手动模式请选择 1~10 个 peer');
         }
         await window.electron.ipcRenderer.invoke(
           'ygg:publicPeers:setSelection',
-          mode === 'p2p' ? [] : selected,
+          directPeerMode === 'disabled' ? [] : selected,
         );
       }
+
+      // 3. save ygg config (p2pEnabled, ifMtu, tcpOnly)
+      await window.electron.ipcRenderer.invoke('ygg:config:set', {
+        ifMtu: mtu,
+        tcpOnly,
+        p2pEnabled,
+      });
+
+      await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
     }
-
-    refresh().catch((e) => {
-      setError(e instanceof Error ? e.message : String(e));
-    });
   };
 
   const renderCycleSummary = (summary: AutoPeerCycleSummary | null) => {
@@ -373,220 +402,206 @@ export default function YggdrasilPeersSettingsSection() {
   );
 
   const atMax = selected.length >= 10;
-  const autoPageActive = mode === 'auto';
-  const manualPageActive = mode === 'manual';
-  const p2pPageActive = mode === 'p2p';
   const canSaveSelection = selected.length >= 1 && selected.length <= 10;
-  let saveButtonLabel = '保存纯 P2P 模式';
-  if (mode === 'auto') {
-    saveButtonLabel = '保存自动模式';
-  } else if (mode === 'manual') {
-    saveButtonLabel = '保存手动模式';
-  }
-  const manualSelectionHint =
-    manualPageActive && !canSaveSelection ? '需选择 1 到 10 个节点' : null;
   const controlsDisabled = saving;
+
   let runningStatusLabel = '未运行';
-  let currentModeLabel = '纯 P2P 模式';
-  if (mode === 'auto') {
-    currentModeLabel = '自动调度模式';
-  } else if (mode === 'manual') {
-    currentModeLabel = '手动固定模式';
-  }
   if (autoStatus?.cycleInFlight) {
     runningStatusLabel = '调度中';
   } else if (autoStatus?.running) {
     runningStatusLabel = '后台运行';
   }
 
+  const directModeLabel =
+    directPeerMode === 'auto'
+      ? '自动调度'
+      : directPeerMode === 'manual'
+        ? '手动固定'
+        : '已禁用';
+
+  const sectionHeaderStyle: React.CSSProperties = {
+    fontSize: 13,
+    fontWeight: 600,
+    color: 'var(--text-primary)',
+    marginBottom: 8,
+    paddingBottom: 4,
+  };
+
+  const sectionBoxStyle: React.CSSProperties = {
+    border: '1px solid var(--border-color, #ddd)',
+    borderRadius: 6,
+    padding: 12,
+    marginBottom: 16,
+  };
+
   return (
     <div className="ChatTopPanel">
       <div className="ChatTopTitleRow">
-        <div className="ChatTopTitle">Yggdrasil Peer 模式设置</div>
+        <div className="ChatTopTitle">Yggdrasil 设置</div>
         <div className="ChatTopActions">
-          <select
-            className="ChatInput"
-            value={mode}
-            onChange={(e) => {
-              setMode(e.target.value as PeerMode);
+          <span
+            style={{
+              fontSize: 14,
+              fontWeight: 500,
+              color: 'var(--text-hint, #000000)',
+              marginRight: 8,
+              display: 'inline-flex',
+              alignItems: 'center',
+              lineHeight: 1,
             }}
-            style={{ width: '120px' }}
-            disabled={saving}
           >
-            <option value="auto">自动模式</option>
-            <option value="manual">手动模式</option>
-            <option value="p2p">纯P2P</option>
-          </select>
+            直连模式：{directModeLabel}
+            {' | '}
+            P2P：{p2pEnabled ? '启用' : '禁用'}
+          </span>
           <button
             type="button"
             className="ServicePrimaryButton"
-            onClick={saveCurrentMode}
-            style={{ width: '140px' }}
-            disabled={saving || (manualPageActive && !canSaveSelection)}
+            onClick={save}
+            disabled={
+              saving || (directPeerMode === 'manual' && !canSaveSelection)
+            }
+            style={{ width: '120px' }}
           >
-            {saving ? '保存中...' : saveButtonLabel}
+            {saving ? '保存中...' : '保存'}
           </button>
-          {manualSelectionHint ? (
-            <div className="ChatTinyHint">{manualSelectionHint}</div>
-          ) : null}
         </div>
       </div>
 
       {error ? <div className="ServiceError">{error}</div> : null}
 
       <div className="ChatTopGrid">
-        <div className="ChatTopItem">
-          <div className="ChatTopLabel">当前模式</div>
-          <div className="ChatStack">
-            <div className="ChatTopValue">{currentModeLabel}</div>
-            <div className="ChatTinyHint">
-              模式切换请使用顶部下拉框，再点击顶部保存按钮生效。
-            </div>
+        {/* ── 直连 Public Peer ── */}
+        <div
+          className="ChatTopItem ChatTopItemWide"
+          style={{ ...sectionBoxStyle, padding: 12 }}
+        >
+          <div style={sectionHeaderStyle}>直连 Public Peer</div>
+          <div style={radioGroupStyle}>
+            <label style={radioLabelStyle}>
+              <input
+                type="radio"
+                name="directPeerMode"
+                checked={directPeerMode === 'auto'}
+                onChange={() => setDirectPeerMode('auto')}
+                disabled={controlsDisabled}
+              />
+              自动调度
+            </label>
+            <label style={radioLabelStyle}>
+              <input
+                type="radio"
+                name="directPeerMode"
+                checked={directPeerMode === 'manual'}
+                onChange={() => setDirectPeerMode('manual')}
+                disabled={controlsDisabled}
+              />
+              手动固定
+            </label>
+            <label style={radioLabelStyle}>
+              <input
+                type="radio"
+                name="directPeerMode"
+                checked={directPeerMode === 'disabled'}
+                onChange={() => setDirectPeerMode('disabled')}
+                disabled={controlsDisabled}
+              />
+              禁用
+            </label>
           </div>
-        </div>
 
-        <div className="ChatTopItem">
-          <div className="ChatTopLabel">运行状态</div>
-          <div className="ChatTopValue">{runningStatusLabel}</div>
-        </div>
+          {/* auto mode params */}
+          {directPeerMode === 'auto' ? (
+            <div style={{ marginTop: 8 }}>
+              <div className="ChatStack">
+                <label className="ChatStack" htmlFor="auto-target-peer-count">
+                  <span className="ChatTopValue">目标总 peer 数</span>
+                  <select
+                    id="auto-target-peer-count"
+                    className="ChatInput"
+                    value={targetPeerCount}
+                    onChange={(e) => setTargetPeerCount(e.target.value)}
+                    disabled={controlsDisabled}
+                    style={{ width: 80 }}
+                  >
+                    {TARGET_PEER_OPTIONS.map((value) => (
+                      <option key={value} value={value}>
+                        {value}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="ChatTinyHint">
+                  候选池规模和每个候选的采样次数会根据目标数量自动推导，大致按目标数量的
+                  2 倍处理。
+                </div>
 
-        <div className="ChatTopItem">
-          <div className="ChatTopLabel">手动固定 Peer</div>
-          <div className="ChatTopValue">
-            {mode === 'auto'
-              ? '自动模式下不启用'
-              : `${autoStatus?.pinnedPeers.length ?? selected.length}`}
-          </div>
-        </div>
-
-        <div className="ChatTopItem">
-          <div className="ChatTopLabel">动态目标数</div>
-          <div className="ChatTopValue">
-            {autoStatus?.config?.targetPeerCount ?? '—'}
-          </div>
-        </div>
-
-        <div className="ChatTopItem">
-          <div className="ChatTopLabel">当前 public 连接</div>
-          <div className="ChatTopValue">
-            {autoStatus?.connectedPublicPeers.length ?? 0}
-          </div>
-        </div>
-
-        <div className="ChatTopItem">
-          <div className="ChatTopLabel">当前动态连接</div>
-          <div className="ChatTopValue">
-            {autoStatus?.managedConnectedPeers.length ?? 0}
-          </div>
-        </div>
-
-        <div className="ChatTopItem">
-          <div className="ChatTopLabel">下一次调度</div>
-          <div className="ChatTopValue">
-            {formatDateTime(autoStatus?.nextRunAt ?? null)}
-          </div>
-        </div>
-
-        <div className="ChatTopItem">
-          <div className="ChatTopLabel">最近成功</div>
-          <div className="ChatTopValue">
-            {formatDateTime(autoStatus?.lastSuccessAt ?? null)}
-          </div>
-        </div>
-
-        {autoPageActive ? (
-          <div className="ChatTopItem ChatTopItemWide">
-            <div className="ChatTopLabel">自动模式页面</div>
-            <div className="ChatStack">
-              <div className="ChatTopValue">
-                自动模式只通过 addpeer/removepeer 管理运行态 public
-                peers，不会把 peer 列表写进 yggdrasil.conf。
-              </div>
-              <label className="ChatStack" htmlFor="auto-target-peer-count">
-                <span className="ChatTopValue">目标总 peer 数</span>
-                <select
-                  id="auto-target-peer-count"
-                  className="ChatInput"
-                  value={targetPeerCount}
-                  onChange={(e) => setTargetPeerCount(e.target.value)}
-                  disabled={controlsDisabled}
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                    gap: 8,
+                    marginTop: 8,
+                  }}
                 >
-                  {TARGET_PEER_OPTIONS.map((value) => (
-                    <option key={value} value={value}>
-                      {value}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="ChatTinyHint">
-                候选池规模和每个候选的采样次数会根据目标数量自动推导，
-                大致按目标数量的 2 倍处理。
+                  {[
+                    {
+                      label: '首次延迟 ms',
+                      value: initialDelayMs,
+                      setter: setInitialDelayMs,
+                    },
+                    {
+                      label: '重平衡周期 ms',
+                      value: reconcileIntervalMs,
+                      setter: setReconcileIntervalMs,
+                    },
+                    {
+                      label: '采样间隔 ms',
+                      value: probeIntervalMs,
+                      setter: setProbeIntervalMs,
+                    },
+                    {
+                      label: '单步超时 ms',
+                      value: probeTimeoutMs,
+                      setter: setProbeTimeoutMs,
+                    },
+                  ].map(({ label, value, setter }) => {
+                    const inputId = `auto-config-${label}`;
+                    return (
+                      <div key={label} className="ChatStack">
+                        <label className="ChatTopValue" htmlFor={inputId}>
+                          {label}
+                        </label>
+                        <input
+                          id={inputId}
+                          className="ChatInput"
+                          value={value}
+                          onChange={(e) => setter(e.target.value)}
+                          inputMode="numeric"
+                          disabled={controlsDisabled}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
+            </div>
+          ) : null}
 
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-                  gap: 8,
-                }}
-              >
-                {autoConfigFields.map(({ label, value, setter }) => {
-                  const inputId = `auto-config-${label}`;
-                  return (
-                    <div key={label} className="ChatStack">
-                      <label className="ChatTopValue" htmlFor={inputId}>
-                        {label}
-                      </label>
-                      <input
-                        id={inputId}
-                        className="ChatInput"
-                        value={value}
-                        onChange={(e) => setter(e.target.value)}
-                        inputMode="numeric"
-                        disabled={controlsDisabled}
-                      />
-                    </div>
-                  );
-                })}
+          {/* manual mode peer selection */}
+          {directPeerMode === 'manual' ? (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ marginBottom: 6 }}>
+                <span className="ChatTopValue">
+                  已选 {selected.length} / 10
+                </span>
+                {!canSaveSelection ? (
+                  <span className="ChatTinyHint" style={{ marginLeft: 8 }}>
+                    需选择 1 到 10 个节点
+                  </span>
+                ) : null}
               </div>
-            </div>
-
-            <div className="ChatTinyHint">
-              自动模式会从 public_peers.json 中动态挑选节点。手动模式和纯 P2P
-              模式里保存的节点在自动模式下只会被排除，不会被自动调度直接采用。
-            </div>
-          </div>
-        ) : null}
-
-        <div className="ChatTopItem ChatTopItemWide">
-          <div className="ChatTopLabel">最近事件</div>
-          <pre className="ChatListenPre" style={{ maxHeight: 150 }}>
-            {(autoStatus?.recentEvents ?? [])
-              .map(
-                (event) =>
-                  `[${formatDateTime(event.at)}] ${event.level.toUpperCase()} ${event.message}`,
-              )
-              .join('\n') || '—'}
-          </pre>
-        </div>
-
-        <div className="ChatTopItem ChatTopItemWide">
-          <div className="ChatTopLabel">最近一次调度摘要</div>
-          <pre className="ChatListenPre" style={{ maxHeight: 260 }}>
-            {renderCycleSummary(autoStatus?.lastCycleSummary ?? null)}
-          </pre>
-        </div>
-
-        {manualPageActive ? (
-          <>
-            <div className="ChatTopItem">
-              <div className="ChatTopLabel">已选固定数量</div>
-              <div className="ChatTopValue">{selected.length} / 10</div>
-            </div>
-
-            <div className="ChatTopItem ChatTopItemWide">
-              <div className="ChatTopLabel">手动模式页面</div>
-              <div className="StatusPre" style={{ maxHeight: '42vh' }}>
+              <div className="StatusPre" style={{ maxHeight: '30vh' }}>
                 {!candidates.length ? (
                   <div className="StatusEmpty">（暂无候选项）</div>
                 ) : (
@@ -630,7 +645,7 @@ export default function YggdrasilPeersSettingsSection() {
                           </tr>
                           {g.items.map((p) => {
                             const checked = selectedSet.has(p.addr);
-                            const disabled = !checked && atMax;
+                            const cbDisabled = !checked && atMax;
                             const inputId = `ygg-public-peer-${encodeURIComponent(p.addr)}`;
                             return (
                               <tr
@@ -647,7 +662,7 @@ export default function YggdrasilPeersSettingsSection() {
                                     type="checkbox"
                                     aria-label={`选择节点 ${p.addr}`}
                                     checked={checked}
-                                    disabled={controlsDisabled || disabled}
+                                    disabled={controlsDisabled || cbDisabled}
                                     onChange={() => toggle(p.addr)}
                                   />
                                 </td>
@@ -675,30 +690,194 @@ export default function YggdrasilPeersSettingsSection() {
                   </table>
                 )}
               </div>
-
-              <div className="ChatTinyHint">
-                手动模式同样不会把 peer 写入 yggdrasil.conf。保存后，如果
-                Yggdrasil 正在运行，会直接通过 addpeer/removepeer
-                把运行态连接同步到你当前选择的节点集合。
+              <div className="ChatTinyHint" style={{ marginTop: 4 }}>
+                手动模式不会把 peer 写入 yggdrasil.conf。保存后，如果 Yggdrasil
+                正在运行，会通过 addpeer/removepeer 同步运行态连接。
               </div>
             </div>
-          </>
-        ) : null}
+          ) : null}
 
-        {p2pPageActive ? (
-          <div className="ChatTopItem ChatTopItemWide">
-            <div className="ChatTopLabel">纯 P2P 模式页面</div>
-            <div className="ChatStack">
-              <div className="ChatTopValue">
-                纯 P2P 模式当前等价于 0 个手动固定 public peer。
-              </div>
+          {/* disabled mode hint */}
+          {directPeerMode === 'disabled' ? (
+            <div className="ChatStack" style={{ marginTop: 8 }}>
+              <div className="ChatTopValue">不会连接任何 public peer</div>
               <div className="ChatTinyHint">
-                保存后会停止自动 public peer 调度，并清空当前保存的手动 public
-                peer 选择；运行中的 public 连接也会同步移除，仅保留 P2P 侧连接。
+                自动调度停止，手动 peer 列表清空；仅通过 P2P
+                节点发现（如果启用）和局域网自动发现来连接其他节点。
+              </div>
+            </div>
+          ) : null}
+        </div>
+
+        {/* ── P2P 节点发现 ── */}
+        <div
+          className="ChatTopItem ChatTopItemWide"
+          style={{ ...sectionBoxStyle, padding: 12 }}
+        >
+          <div style={sectionHeaderStyle}>P2P 节点发现</div>
+          <div style={radioGroupStyle}>
+            <label style={radioLabelStyle}>
+              <input
+                type="radio"
+                name="p2pEnabled"
+                checked={p2pEnabled}
+                onChange={() => setP2pEnabled(true)}
+                disabled={controlsDisabled}
+              />
+              启用
+            </label>
+            <label style={radioLabelStyle}>
+              <input
+                type="radio"
+                name="p2pEnabled"
+                checked={!p2pEnabled}
+                onChange={() => setP2pEnabled(false)}
+                disabled={controlsDisabled}
+              />
+              禁用
+            </label>
+          </div>
+          <div className="ChatTinyHint" style={{ marginTop: 4 }}>
+            {p2pEnabled
+              ? 'Yggdrasil 正常参与 P2P 网格，通过 DHT 等机制自动发现和连接其他节点。'
+              : 'Yggdrasil 不启动 P2P 子系统，不会主动发现或连接其他 P2P 节点，只连接直连 Public Peer 或局域网发现节点。'}
+          </div>
+        </div>
+
+        {/* ── 其他参数 ── */}
+        <div
+          className="ChatTopItem ChatTopItemWide"
+          style={{ ...sectionBoxStyle, padding: 12 }}
+        >
+          <div style={sectionHeaderStyle}>其他参数</div>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+              gap: 12,
+            }}
+          >
+            <div className="ChatStack">
+              <div className="ChatTopLabel">MTU</div>
+              <input
+                className="ChatInput"
+                value={ifMtu}
+                onChange={(e) => setIfMtu(e.target.value)}
+                inputMode="numeric"
+                placeholder="32768"
+                disabled={controlsDisabled}
+                style={{ width: 100 }}
+              />
+              <div className="ChatTinyHint">
+                建议 1280~65535，默认 32768。重启 Yggdrasil 生效。
+              </div>
+            </div>
+            <div className="ChatStack">
+              <div className="ChatTopLabel">TCP only</div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={tcpOnly}
+                  onChange={(e) => setTcpOnly(e.target.checked)}
+                  disabled={controlsDisabled}
+                />
+                <span>仅使用 TCP 传输（关闭 QUIC）</span>
+              </label>
+              <div className="ChatTinyHint">
+                默认开启。关闭后 yggdrasil 会尝试使用 QUIC 传输。重启 Yggdrasil
+                生效。
               </div>
             </div>
           </div>
-        ) : null}
+        </div>
+
+        {/* ── 状态信息 ── */}
+        <div
+          className="ChatTopItem ChatTopItemWide"
+          style={{ padding: 0, border: 'none' }}
+        >
+          <div style={{ ...sectionHeaderStyle, marginTop: 4 }}>运行状态</div>
+          <div className="ChatTopGrid" style={{ marginTop: 0 }}>
+            <div className="ChatTopItem">
+              <div className="ChatTopLabel">直连模式</div>
+              <div className="ChatTopValue">{directModeLabel}</div>
+            </div>
+            <div className="ChatTopItem">
+              <div className="ChatTopLabel">P2P 发现</div>
+              <div className="ChatTopValue">{p2pEnabled ? '启用' : '禁用'}</div>
+            </div>
+            <div className="ChatTopItem">
+              <div className="ChatTopLabel">运行状态</div>
+              <div className="ChatTopValue">{runningStatusLabel}</div>
+            </div>
+            <div className="ChatTopItem">
+              <div className="ChatTopLabel">手动固定 Peer</div>
+              <div className="ChatTopValue">
+                {directPeerMode === 'auto'
+                  ? '自动模式下不启用'
+                  : `${autoStatus?.pinnedPeers.length ?? selected.length}`}
+              </div>
+            </div>
+            <div className="ChatTopItem">
+              <div className="ChatTopLabel">动态目标数</div>
+              <div className="ChatTopValue">
+                {autoStatus?.config?.targetPeerCount ?? '—'}
+              </div>
+            </div>
+            <div className="ChatTopItem">
+              <div className="ChatTopLabel">当前 public 连接</div>
+              <div className="ChatTopValue">
+                {autoStatus?.connectedPublicPeers.length ?? 0}
+              </div>
+            </div>
+            <div className="ChatTopItem">
+              <div className="ChatTopLabel">当前动态连接</div>
+              <div className="ChatTopValue">
+                {autoStatus?.managedConnectedPeers.length ?? 0}
+              </div>
+            </div>
+            <div className="ChatTopItem">
+              <div className="ChatTopLabel">下一次调度</div>
+              <div className="ChatTopValue">
+                {formatDateTime(autoStatus?.nextRunAt ?? null)}
+              </div>
+            </div>
+            <div className="ChatTopItem">
+              <div className="ChatTopLabel">最近成功</div>
+              <div className="ChatTopValue">
+                {formatDateTime(autoStatus?.lastSuccessAt ?? null)}
+              </div>
+            </div>
+          </div>
+
+          <div
+            className="ChatTopItem ChatTopItemWide"
+            style={{ marginTop: 12 }}
+          >
+            <div className="ChatTopLabel">最近事件</div>
+            <pre
+              className="ChatListenPre"
+              style={{ maxHeight: 120, marginTop: 4 }}
+            >
+              {(autoStatus?.recentEvents ?? [])
+                .map(
+                  (event) =>
+                    `[${formatDateTime(event.at)}] ${event.level.toUpperCase()} ${event.message}`,
+                )
+                .join('\n') || '—'}
+            </pre>
+          </div>
+
+          <div className="ChatTopItem ChatTopItemWide" style={{ marginTop: 8 }}>
+            <div className="ChatTopLabel">最近一次调度摘要</div>
+            <pre
+              className="ChatListenPre"
+              style={{ maxHeight: 200, marginTop: 4 }}
+            >
+              {renderCycleSummary(autoStatus?.lastCycleSummary ?? null)}
+            </pre>
+          </div>
+        </div>
       </div>
     </div>
   );

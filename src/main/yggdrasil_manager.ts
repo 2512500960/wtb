@@ -28,6 +28,7 @@ type YggdrasilManagerOptions = {
   getOwnerWindow: () => BrowserWindow | null;
   logger: LoggerLike;
   bootstrapNodes: string[];
+  getYggdrasilConfig?: () => { ifMtu: number; tcpOnly: boolean; p2pEnabled: boolean };
 };
 
 type PeArch = 'x86' | 'x64' | 'arm64' | 'unknown';
@@ -49,18 +50,21 @@ const yggdrasilCtlAllowedCommands: ReadonlySet<string> = new Set<string>([
   'getselfjson',
   'getpeersjson',
   'getp2ppeersjson',
+  'getRouteTable',
 ]);
 
 const yggdrasilCtlJsonCommandMap = new Map<string, string>([
   ['getselfjson', 'getself'],
   ['getpeersjson', 'getpeers'],
   ['getp2ppeersjson', 'getp2ppeers'],
+  ['getRouteTable', 'getRouteTable'],
 ]);
 
 const yggdrasilWtbDefaults = Object.freeze({
-  ifMtu: 2048,
+  ifMtu: 32768,
   routeProbe: true,
   NodeInfoPrivacy: true,
+  P2P: { tcp_only: true },
 });
 
 const psSingleQuote = (value: string): string => {
@@ -637,6 +641,17 @@ export class YggdrasilManager {
     this.writeConfDocument(confPath, doc);
   }
 
+  private getYggCfg(): { ifMtu: number; tcpOnly: boolean; p2pEnabled: boolean } {
+    if (this.options.getYggdrasilConfig) {
+      return this.options.getYggdrasilConfig();
+    }
+    return {
+      ifMtu: yggdrasilWtbDefaults.ifMtu,
+      tcpOnly: (yggdrasilWtbDefaults.P2P && yggdrasilWtbDefaults.P2P.tcp_only) || true,
+      p2pEnabled: true,
+    };
+  }
+
   private async prepareConfForStart(
     yggExe: string,
     confPath: string,
@@ -686,13 +701,24 @@ export class YggdrasilManager {
       changed = true;
     }
 
+    const cfg = this.getYggCfg();
+    if (doc.P2P.tcp_only !== cfg.tcpOnly) {
+      doc.P2P.tcp_only = cfg.tcpOnly;
+      changed = true;
+    }
+
+    if (doc.P2P.enabled !== cfg.p2pEnabled) {
+      doc.P2P.enabled = cfg.p2pEnabled;
+      changed = true;
+    }
+
     if (doc.route_probe !== yggdrasilWtbDefaults.routeProbe) {
       doc.route_probe = yggdrasilWtbDefaults.routeProbe;
       changed = true;
     }
 
-    if (doc.IfMTU !== yggdrasilWtbDefaults.ifMtu) {
-      doc.IfMTU = yggdrasilWtbDefaults.ifMtu;
+    if (doc.IfMTU !== cfg.ifMtu) {
+      doc.IfMTU = cfg.ifMtu;
       changed = true;
     }
 

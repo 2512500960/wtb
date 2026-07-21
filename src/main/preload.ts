@@ -45,6 +45,8 @@ export type InvokeChannels =
   | 'ygg:autoPeer:getStatus'
   | 'ygg:autoPeer:updateConfig'
   | 'ygg:autoPeer:reconcileNow'
+  | 'ygg:config:get'
+  | 'ygg:config:set'
   | 'ygg:index:load'
   | 'cinny:open'
   | 'element:open'

@@ -25,6 +25,15 @@ export type WtbConfigV1 = {
     /** Optional: list of manual public peer URLs stored by WTB */
     publicPeers?: string[];
 
+    /** Optional: Yggdrasil TUN interface MTU. Default: 32768 */
+    ifMtu?: number;
+
+    /** Optional: restrict Yggdrasil P2P to TCP only (disable QUIC). Default: true */
+    tcpOnly?: boolean;
+
+    /** Optional: enable Yggdrasil P2P discovery subsystem. Default: true */
+    p2pEnabled?: boolean;
+
     /** Optional: auto-manage runtime public peer selection */
     autoPeerManager?: {
       /** Enable automatic runtime peer management. Default: true */
@@ -402,6 +411,9 @@ const normalizeConfigV1 = (raw: unknown): WtbConfigV1 => {
       ? yggObj.autoPeerManager
       : {};
   const autoPeerDefaults = defaultYggdrasilAutoPeerManagerConfig();
+  const ifMtuValue = normalizeInteger(yggObj?.ifMtu, 32768, 1280, 65535);
+  const tcpOnlyValue = normalizeBoolean(yggObj?.tcpOnly, true);
+  const p2pEnabledValue = normalizeBoolean(yggObj?.p2pEnabled, true);
   const autoPeerManager: YggdrasilAutoPeerManagerConfig = {
     enabled: normalizeBoolean(
       autoPeerManagerRaw?.enabled,
@@ -465,6 +477,9 @@ const normalizeConfigV1 = (raw: unknown): WtbConfigV1 => {
     },
     yggdrasil: {
       ...(publicPeers ? { publicPeers } : {}),
+      ifMtu: ifMtuValue,
+      tcpOnly: tcpOnlyValue,
+      p2pEnabled: p2pEnabledValue,
       autoPeerManager,
     },
     web: (() => {
@@ -735,6 +750,50 @@ export const setWtbYggdrasilAutoPeerManagerRuntimeState = (
   } else {
     delete parsed.yggdrasil.autoPeerManager.probeState;
   }
+
+  return persistMutableConfigObject(parsed);
+};
+
+export type YggdrasilConfig = {
+  ifMtu: number;
+  tcpOnly: boolean;
+  p2pEnabled: boolean;
+};
+
+const DEFAULT_YGG_IF_MTU = 32768;
+const DEFAULT_YGG_TCP_ONLY = true;
+const DEFAULT_YGG_P2P_ENABLED = true;
+
+export const getWtbYggdrasilConfig = (): YggdrasilConfig => {
+  const cfg = getWtbConfig();
+  return {
+    ifMtu: cfg.yggdrasil?.ifMtu ?? DEFAULT_YGG_IF_MTU,
+    tcpOnly: cfg.yggdrasil?.tcpOnly ?? DEFAULT_YGG_TCP_ONLY,
+    p2pEnabled: cfg.yggdrasil?.p2pEnabled ?? DEFAULT_YGG_P2P_ENABLED,
+  };
+};
+
+export const setWtbYggdrasilConfig = (
+  input: Partial<YggdrasilConfig>,
+): WtbConfigV1 => {
+  const parsed = loadMutableConfigObject();
+  const current = getWtbYggdrasilConfig();
+
+  if (!parsed.yggdrasil || typeof parsed.yggdrasil !== 'object') {
+    parsed.yggdrasil = {};
+  }
+
+  parsed.yggdrasil.ifMtu = normalizeInteger(
+    input.ifMtu,
+    current.ifMtu,
+    1280,
+    65535,
+  );
+  parsed.yggdrasil.tcpOnly = normalizeBoolean(input.tcpOnly, current.tcpOnly);
+  parsed.yggdrasil.p2pEnabled = normalizeBoolean(
+    input.p2pEnabled,
+    current.p2pEnabled,
+  );
 
   return persistMutableConfigObject(parsed);
 };

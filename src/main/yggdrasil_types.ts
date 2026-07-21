@@ -19,4 +19,5 @@ export type YggdrasilCtlCommand =
   | 'list'
   | 'getselfjson'
   | 'getpeersjson'
-  | 'getp2ppeersjson';
+  | 'getp2ppeersjson'
+  | 'getRouteTable';

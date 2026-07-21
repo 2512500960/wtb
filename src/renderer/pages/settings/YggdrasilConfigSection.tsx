@@ -1,0 +1,115 @@
+import * as React from 'react';
+
+type YggConfig = {
+  ifMtu: number;
+  tcpOnly: boolean;
+};
+
+export default function YggdrasilConfigSection() {
+  const [saving, setSaving] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [config, setConfig] = React.useState<YggConfig | null>(null);
+  const [ifMtu, setIfMtu] = React.useState('');
+  const [tcpOnly, setTcpOnly] = React.useState(true);
+
+  const refresh = React.useCallback(async () => {
+    setError(null);
+    try {
+      const res = (await window.electron.ipcRenderer.invoke(
+        'ygg:config:get',
+      )) as YggConfig;
+      setConfig(res);
+      setIfMtu(String(res.ifMtu));
+      setTcpOnly(res.tcpOnly);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  React.useEffect(() => {
+    refresh().catch(() => {});
+  }, [refresh]);
+
+  const save = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const mtu = Number(ifMtu);
+      if (!Number.isFinite(mtu) || mtu < 1280 || mtu > 65535) {
+        throw new Error('MTU 必须在 1280~65535 之间');
+      }
+
+      await window.electron.ipcRenderer.invoke('ygg:config:set', {
+        ifMtu: mtu,
+        tcpOnly,
+      });
+
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="ChatTopPanel">
+      <div className="ChatTopTitleRow">
+        <div className="ChatTopTitle">Yggdrasil 参数配置</div>
+        <div className="ChatTopActions">
+          <button
+            type="button"
+            className="ServicePrimaryButton"
+            onClick={save}
+            disabled={saving}
+            style={{ width: '140px' }}
+          >
+            {saving ? '保存中...' : '保存'}
+          </button>
+        </div>
+      </div>
+
+      {error ? <div className="ServiceError">{error}</div> : null}
+
+      <div className="ChatTopGrid">
+        <div className="ChatTopItem">
+          <div className="ChatTopLabel">MTU</div>
+          <div className="ChatStack">
+            <input
+              className="ChatInput"
+              value={ifMtu}
+              onChange={(e) => setIfMtu(e.target.value)}
+              inputMode="numeric"
+              placeholder="32768"
+              disabled={saving}
+            />
+            <div className="ChatTinyHint">
+              建议 1280~65535。默认 32768。 设置后需要重启 Yggdrasil
+              服务才能生效。
+            </div>
+          </div>
+        </div>
+
+        <div className="ChatTopItem">
+          <div className="ChatTopLabel">TCP only</div>
+          <div className="ChatStack">
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={tcpOnly}
+                onChange={(e) => setTcpOnly(e.target.checked)}
+                disabled={saving}
+              />
+              <span>仅使用 TCP 传输（关闭 QUIC）</span>
+            </label>
+            <div className="ChatTinyHint">
+              默认开启。关闭后 yggdrasil 会尝试使用 QUIC 传输，可能提升性能，
+              但也可能在某些网络环境下导致连接问题。 设置后需要重启 Yggdrasil
+              服务才能生效。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

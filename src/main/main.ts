@@ -71,6 +71,8 @@ import {
   setWtbYggdrasilAutoPeerManagerConfig,
   setWtbYggdrasilPublicPeers,
   setWtbWebAssetsDir,
+  getWtbYggdrasilConfig,
+  setWtbYggdrasilConfig,
 } from './wtb_config';
 import { YggdrasilPeerAutoManager } from './yggdrasil_peer_auto_manager';
 import { Libp2pGroupChatService, type ChatMessage } from './libp2p_group_chat';
@@ -157,6 +159,7 @@ const yggdrasilManager = new YggdrasilManager({
   getOwnerWindow: () => mainWindow,
   logger: log,
   bootstrapNodes: yggdrasilBootstrapNodes,
+  getYggdrasilConfig: getWtbYggdrasilConfig,
 });
 const ipfsManager = new IpfsSidecarManager({
   app,
@@ -726,6 +729,8 @@ registerYggIpc({
     return await websiteIndexService.loadIndex();
   },
   runYggdrasilCtl,
+  getYggdrasilConfig: getWtbYggdrasilConfig,
+  setYggdrasilConfig: setWtbYggdrasilConfig,
 });
 
 const initializeDefaultSession = (): void => {

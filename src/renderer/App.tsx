@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { MemoryRouter as Router, Routes, Route } from 'react-router-dom';
+import { MemoryRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import './App.css';
 import { ServiceName, ServiceStatus } from './types/services';
 import LauncherTileLink from './components/Launcher/LauncherTileLink';
@@ -13,6 +13,7 @@ import PeersPage from './pages/PeersPage';
 import RemoteResourcesPage from './pages/RemoteResourcesPage';
 import SiteServicesPage from './pages/SiteServicesPage';
 import StatusPage from './pages/StatusPage';
+import NetworkVisualizePage from './pages/NetworkVisualizePage';
 import { FEATURES } from './features/flags';
 import type { YggdrasilCtlResult } from './types/yggdrasilctl';
 import {
@@ -301,14 +302,30 @@ function Home() {
                 <div className="LauncherMetricLabel">P2P Peers</div>
                 <div className="LauncherMetricValue">{p2pPeerCount ?? '—'}</div>
               </div>
-              <button
-                type="button"
-                className="ServiceGhostButton LauncherInlineButton"
-                disabled={!yggRunning}
-                onClick={() => setShowPeers(true)}
-              >
-                查看 peers
-              </button>
+              <span style={{ display: 'inline-flex', gap: 8 }}>
+                <button
+                  type="button"
+                  className="ServiceGhostButton LauncherInlineButton"
+                  disabled={!yggRunning}
+                  onClick={() => setShowPeers(true)}
+                >
+                  查看 peers
+                </button>
+                <Link
+                  to="/network"
+                  className="ServiceGhostButton LauncherInlineButton"
+                  style={
+                    !yggRunning
+                      ? { pointerEvents: 'none', opacity: 0.4 }
+                      : undefined
+                  }
+                  onClick={(e) => {
+                    if (!yggRunning) e.preventDefault();
+                  }}
+                >
+                  查看 route
+                </Link>
+              </span>
             </div>
             <div className="LauncherAddressRow">
               <div className="LauncherMetricLabel">Yggdrasil IPv6</div>
@@ -372,6 +389,7 @@ function Home() {
           ) : null}
         </button>
 
+        {/* 隐藏 Mini 维基百科磁贴
         <button
           className={yggRunning ? 'LauncherTile' : 'LauncherTile isDisabled'}
           type="button"
@@ -391,6 +409,7 @@ function Home() {
             <div className="LauncherHint">需要先启动 Yggdrasil</div>
           ) : null}
         </button>
+        */}
 
         <button
           className={yggRunning ? 'LauncherTile' : 'LauncherTile isDisabled'}
@@ -479,7 +498,7 @@ function Home() {
           to="/settings"
           label="软件设置"
           icon="⚙️"
-          disabled={!yggRunning}
+          disabled={false}
         />
       </div>
 
@@ -514,6 +533,7 @@ export default function App() {
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/status" element={<StatusPage />} />
         <Route path="/peers" element={<PeersPage embedded={false} />} />
+        <Route path="/network" element={<NetworkVisualizePage />} />
       </Routes>
     </Router>
   );

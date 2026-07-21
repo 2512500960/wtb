@@ -27,6 +27,8 @@ export const registerYggIpc = (options: {
   reconcileAutoPeerNow: () => Promise<unknown>;
   loadWebsiteIndex: () => Promise<unknown>;
   runYggdrasilCtl: (command: YggdrasilCtlCommand) => Promise<YggdrasilCtlResult>;
+  getYggdrasilConfig: () => { ifMtu: number; tcpOnly: boolean; p2pEnabled: boolean };
+  setYggdrasilConfig: (input: { ifMtu?: number; tcpOnly?: boolean; p2pEnabled?: boolean }) => unknown;
 }): void => {
   ipcMain.handle('ygg:getIPv6', async () => {
     const ygg = options.getYggdrasilStatus();
@@ -127,4 +129,22 @@ export const registerYggIpc = (options: {
       }
     },
   );
+
+  ipcMain.handle('ygg:config:get', async () => {
+    return options.getYggdrasilConfig();
+  });
+
+  ipcMain.handle('ygg:config:set', async (_event, input: unknown) => {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+      throw new Error('参数无效：yggdrasil 配置必须是对象');
+    }
+
+    const { ifMtu, tcpOnly, p2pEnabled } = input as Record<string, unknown>;
+    const payload: { ifMtu?: number; tcpOnly?: boolean; p2pEnabled?: boolean } = {};
+    if (ifMtu !== undefined) payload.ifMtu = Number(ifMtu);
+    if (tcpOnly !== undefined) payload.tcpOnly = Boolean(tcpOnly);
+    if (p2pEnabled !== undefined) payload.p2pEnabled = Boolean(p2pEnabled);
+
+    return options.setYggdrasilConfig(payload);
+  });
 };

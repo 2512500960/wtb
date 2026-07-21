@@ -33,7 +33,7 @@ export const registerBrowserIpc = (options: {
         if (!proxyUri || typeof proxyUri !== 'string') return;
         void options.browserWindows.openProxiedWindow(
           proxyUri,
-          typeof targetUrl === 'string' ? targetUrl : 'https://www.google.com',
+          typeof targetUrl === 'string' ? targetUrl : 'https://www.bing.com',
         );
       } catch (error) {
         options.logger.warn('open-proxied-window failed', error);

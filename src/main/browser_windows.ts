@@ -535,7 +535,7 @@ export class BrowserWindowCoordinator {
         void this.openInAppUrl(nextUrl);
       },
       onSocksWindowOpen: (proxyUri) => {
-        void this.openProxiedWindow(proxyUri, 'https://www.google.com');
+        void this.openProxiedWindow(proxyUri, 'https://www.bing.com');
       },
     });
 
@@ -577,7 +577,7 @@ export class BrowserWindowCoordinator {
 
   async openProxiedWindow(
     proxyUri: string,
-    targetUrl = 'https://www.google.com',
+    targetUrl = 'https://www.bing.com',
   ): Promise<BrowserWindow | null> {
     try {
       const parsed = new URL(proxyUri);
@@ -600,7 +600,7 @@ export class BrowserWindowCoordinator {
       }
 
       const normalizedTarget =
-        normalizeProxiedTargetUrl(targetUrl) || 'https://www.google.com';
+        normalizeProxiedTargetUrl(targetUrl) || 'https://www.bing.com';
 
       const { targetWindow } = await this.createToolbarWindow({
         requestedUrl: normalizedTarget,
