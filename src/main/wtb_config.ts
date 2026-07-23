@@ -34,6 +34,9 @@ export type WtbConfigV1 = {
     /** Optional: enable Yggdrasil P2P discovery subsystem. Default: true */
     p2pEnabled?: boolean;
 
+    /** Optional: Yamux stream window size in KB. Default: 16384 */
+    yamuxStreamWindowKb?: number;
+
     /** Optional: auto-manage runtime public peer selection */
     autoPeerManager?: {
       /** Enable automatic runtime peer management. Default: true */
@@ -414,6 +417,7 @@ const normalizeConfigV1 = (raw: unknown): WtbConfigV1 => {
   const ifMtuValue = normalizeInteger(yggObj?.ifMtu, 32768, 1280, 65535);
   const tcpOnlyValue = normalizeBoolean(yggObj?.tcpOnly, true);
   const p2pEnabledValue = normalizeBoolean(yggObj?.p2pEnabled, true);
+  const yamuxStreamWindowKbValue = normalizeInteger(yggObj?.yamuxStreamWindowKb, 16384, 4, 65536);
   const autoPeerManager: YggdrasilAutoPeerManagerConfig = {
     enabled: normalizeBoolean(
       autoPeerManagerRaw?.enabled,
@@ -480,6 +484,7 @@ const normalizeConfigV1 = (raw: unknown): WtbConfigV1 => {
       ifMtu: ifMtuValue,
       tcpOnly: tcpOnlyValue,
       p2pEnabled: p2pEnabledValue,
+      yamuxStreamWindowKb: yamuxStreamWindowKbValue,
       autoPeerManager,
     },
     web: (() => {
@@ -758,11 +763,13 @@ export type YggdrasilConfig = {
   ifMtu: number;
   tcpOnly: boolean;
   p2pEnabled: boolean;
+  yamuxStreamWindowKb: number;
 };
 
 const DEFAULT_YGG_IF_MTU = 32768;
 const DEFAULT_YGG_TCP_ONLY = true;
 const DEFAULT_YGG_P2P_ENABLED = true;
+const DEFAULT_YGG_YAMUX_STREAM_WINDOW_KB = 16384;
 
 export const getWtbYggdrasilConfig = (): YggdrasilConfig => {
   const cfg = getWtbConfig();
@@ -770,6 +777,7 @@ export const getWtbYggdrasilConfig = (): YggdrasilConfig => {
     ifMtu: cfg.yggdrasil?.ifMtu ?? DEFAULT_YGG_IF_MTU,
     tcpOnly: cfg.yggdrasil?.tcpOnly ?? DEFAULT_YGG_TCP_ONLY,
     p2pEnabled: cfg.yggdrasil?.p2pEnabled ?? DEFAULT_YGG_P2P_ENABLED,
+    yamuxStreamWindowKb: cfg.yggdrasil?.yamuxStreamWindowKb ?? DEFAULT_YGG_YAMUX_STREAM_WINDOW_KB,
   };
 };
 
@@ -793,6 +801,12 @@ export const setWtbYggdrasilConfig = (
   parsed.yggdrasil.p2pEnabled = normalizeBoolean(
     input.p2pEnabled,
     current.p2pEnabled,
+  );
+  parsed.yggdrasil.yamuxStreamWindowKb = normalizeInteger(
+    input.yamuxStreamWindowKb,
+    current.yamuxStreamWindowKb,
+    4,
+    65536,
   );
 
   return persistMutableConfigObject(parsed);

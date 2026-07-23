@@ -3,6 +3,7 @@ import * as React from 'react';
 type YggConfig = {
   ifMtu: number;
   tcpOnly: boolean;
+  yamuxStreamWindowKb: number;
 };
 
 export default function YggdrasilConfigSection() {
@@ -11,6 +12,7 @@ export default function YggdrasilConfigSection() {
   const [config, setConfig] = React.useState<YggConfig | null>(null);
   const [ifMtu, setIfMtu] = React.useState('');
   const [tcpOnly, setTcpOnly] = React.useState(true);
+  const [yamuxStreamWindowKb, setYamuxStreamWindowKb] = React.useState('16384');
 
   const refresh = React.useCallback(async () => {
     setError(null);
@@ -21,6 +23,7 @@ export default function YggdrasilConfigSection() {
       setConfig(res);
       setIfMtu(String(res.ifMtu));
       setTcpOnly(res.tcpOnly);
+      setYamuxStreamWindowKb(String(res.yamuxStreamWindowKb));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -42,6 +45,7 @@ export default function YggdrasilConfigSection() {
       await window.electron.ipcRenderer.invoke('ygg:config:set', {
         ifMtu: mtu,
         tcpOnly,
+        yamuxStreamWindowKb: Number(yamuxStreamWindowKb),
       });
 
       await refresh();
@@ -85,6 +89,24 @@ export default function YggdrasilConfigSection() {
             />
             <div className="ChatTinyHint">
               建议 1280~65535。默认 32768。 设置后需要重启 Yggdrasil
+              服务才能生效。
+            </div>
+          </div>
+        </div>
+
+        <div className="ChatTopItem">
+          <div className="ChatTopLabel">Yamux Stream Window (KB)</div>
+          <div className="ChatStack">
+            <input
+              className="ChatInput"
+              value={yamuxStreamWindowKb}
+              onChange={(e) => setYamuxStreamWindowKb(e.target.value)}
+              inputMode="numeric"
+              placeholder="16384"
+              disabled={saving}
+            />
+            <div className="ChatTinyHint">
+              建议 4096~65536，默认 16384。 设置后需要重启 Yggdrasil
               服务才能生效。
             </div>
           </div>

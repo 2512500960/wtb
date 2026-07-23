@@ -74,6 +74,7 @@ type YggConfig = {
   ifMtu: number;
   tcpOnly: boolean;
   p2pEnabled: boolean;
+  yamuxStreamWindowKb: number;
 };
 
 type DirectPeerMode = 'auto' | 'manual' | 'disabled';
@@ -145,6 +146,7 @@ export default function YggdrasilPeersSettingsSection() {
   const [p2pEnabled, setP2pEnabled] = React.useState(true);
   const [ifMtu, setIfMtu] = React.useState('32768');
   const [tcpOnly, setTcpOnly] = React.useState(true);
+  const [yamuxStreamWindowKb, setYamuxStreamWindowKb] = React.useState('16384');
 
   // peer candidates & selection
   const [candidates, setCandidates] = React.useState<PublicPeerNode[]>([]);
@@ -230,6 +232,7 @@ export default function YggdrasilPeersSettingsSection() {
       setIfMtu(String(yggCfg.ifMtu));
       setTcpOnly(yggCfg.tcpOnly);
       setP2pEnabled(yggCfg.p2pEnabled);
+      setYamuxStreamWindowKb(String(yggCfg.yamuxStreamWindowKb));
 
       if (!list.length) {
         setError(
@@ -322,6 +325,7 @@ export default function YggdrasilPeersSettingsSection() {
         ifMtu: mtu,
         tcpOnly,
         p2pEnabled,
+        yamuxStreamWindowKb: Number(yamuxStreamWindowKb),
       });
 
       await refresh();
@@ -753,7 +757,7 @@ export default function YggdrasilPeersSettingsSection() {
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+              gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
               gap: 12,
             }}
           >
@@ -770,6 +774,21 @@ export default function YggdrasilPeersSettingsSection() {
               />
               <div className="ChatTinyHint">
                 建议 1280~65535，默认 32768。重启 Yggdrasil 生效。
+              </div>
+            </div>
+            <div className="ChatStack">
+              <div className="ChatTopLabel">Yamux Stream Window (KB)</div>
+              <input
+                className="ChatInput"
+                value={yamuxStreamWindowKb}
+                onChange={(e) => setYamuxStreamWindowKb(e.target.value)}
+                inputMode="numeric"
+                placeholder="16384"
+                disabled={controlsDisabled}
+                style={{ width: 100 }}
+              />
+              <div className="ChatTinyHint">
+                建议 4096~65536，默认 16384。重启 Yggdrasil 生效。
               </div>
             </div>
             <div className="ChatStack">
