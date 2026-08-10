@@ -27,8 +27,8 @@ export const registerYggIpc = (options: {
   reconcileAutoPeerNow: () => Promise<unknown>;
   loadWebsiteIndex: () => Promise<unknown>;
   runYggdrasilCtl: (command: YggdrasilCtlCommand) => Promise<YggdrasilCtlResult>;
-  getYggdrasilConfig: () => { ifMtu: number; tcpOnly: boolean; p2pEnabled: boolean; yamuxStreamWindowKb: number };
-  setYggdrasilConfig: (input: { ifMtu?: number; tcpOnly?: boolean; p2pEnabled?: boolean; yamuxStreamWindowKb?: number }) => unknown;
+  getYggdrasilConfig: () => { ifMtu: number; tcpOnly: boolean; p2pEnabled: boolean; yamuxStreamWindowKb: number; quicOnly: boolean; preferIpv6: boolean };
+  setYggdrasilConfig: (input: { ifMtu?: number; tcpOnly?: boolean; p2pEnabled?: boolean; yamuxStreamWindowKb?: number; quicOnly?: boolean; preferIpv6?: boolean }) => unknown;
 }): void => {
   ipcMain.handle('ygg:getIPv6', async () => {
     const ygg = options.getYggdrasilStatus();
@@ -139,12 +139,14 @@ export const registerYggIpc = (options: {
       throw new Error('参数无效：yggdrasil 配置必须是对象');
     }
 
-    const { ifMtu, tcpOnly, p2pEnabled, yamuxStreamWindowKb } = input as Record<string, unknown>;
-    const payload: { ifMtu?: number; tcpOnly?: boolean; p2pEnabled?: boolean; yamuxStreamWindowKb?: number } = {};
+    const { ifMtu, tcpOnly, p2pEnabled, yamuxStreamWindowKb, quicOnly, preferIpv6 } = input as Record<string, unknown>;
+    const payload: { ifMtu?: number; tcpOnly?: boolean; p2pEnabled?: boolean; yamuxStreamWindowKb?: number; quicOnly?: boolean; preferIpv6?: boolean } = {};
     if (ifMtu !== undefined) payload.ifMtu = Number(ifMtu);
     if (tcpOnly !== undefined) payload.tcpOnly = Boolean(tcpOnly);
     if (p2pEnabled !== undefined) payload.p2pEnabled = Boolean(p2pEnabled);
     if (yamuxStreamWindowKb !== undefined) payload.yamuxStreamWindowKb = Number(yamuxStreamWindowKb);
+    if (quicOnly !== undefined) payload.quicOnly = Boolean(quicOnly);
+    if (preferIpv6 !== undefined) payload.preferIpv6 = Boolean(preferIpv6);
 
     return options.setYggdrasilConfig(payload);
   });

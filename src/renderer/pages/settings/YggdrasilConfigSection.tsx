@@ -4,6 +4,8 @@ type YggConfig = {
   ifMtu: number;
   tcpOnly: boolean;
   yamuxStreamWindowKb: number;
+  quicOnly: boolean;
+  preferIpv6: boolean;
 };
 
 export default function YggdrasilConfigSection() {
@@ -13,6 +15,8 @@ export default function YggdrasilConfigSection() {
   const [ifMtu, setIfMtu] = React.useState('');
   const [tcpOnly, setTcpOnly] = React.useState(true);
   const [yamuxStreamWindowKb, setYamuxStreamWindowKb] = React.useState('16384');
+  const [quicOnly, setQuicOnly] = React.useState(false);
+  const [preferIpv6, setPreferIpv6] = React.useState(false);
 
   const refresh = React.useCallback(async () => {
     setError(null);
@@ -24,6 +28,8 @@ export default function YggdrasilConfigSection() {
       setIfMtu(String(res.ifMtu));
       setTcpOnly(res.tcpOnly);
       setYamuxStreamWindowKb(String(res.yamuxStreamWindowKb));
+      setQuicOnly(res.quicOnly);
+      setPreferIpv6(res.preferIpv6);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -46,6 +52,8 @@ export default function YggdrasilConfigSection() {
         ifMtu: mtu,
         tcpOnly,
         yamuxStreamWindowKb: Number(yamuxStreamWindowKb),
+        quicOnly,
+        preferIpv6,
       });
 
       await refresh();
@@ -119,7 +127,10 @@ export default function YggdrasilConfigSection() {
               <input
                 type="checkbox"
                 checked={tcpOnly}
-                onChange={(e) => setTcpOnly(e.target.checked)}
+                onChange={(e) => {
+                  setTcpOnly(e.target.checked);
+                  if (e.target.checked) setQuicOnly(false);
+                }}
                 disabled={saving}
               />
               <span>仅使用 TCP 传输（关闭 QUIC）</span>
@@ -127,6 +138,47 @@ export default function YggdrasilConfigSection() {
             <div className="ChatTinyHint">
               默认开启。关闭后 yggdrasil 会尝试使用 QUIC 传输，可能提升性能，
               但也可能在某些网络环境下导致连接问题。 设置后需要重启 Yggdrasil
+              服务才能生效。
+            </div>
+          </div>
+        </div>
+
+        <div className="ChatTopItem">
+          <div className="ChatTopLabel">QUIC only</div>
+          <div className="ChatStack">
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={quicOnly}
+                onChange={(e) => {
+                  setQuicOnly(e.target.checked);
+                  if (e.target.checked) setTcpOnly(false);
+                }}
+                disabled={saving}
+              />
+              <span>仅使用 QUIC 传输（关闭 TCP）</span>
+            </label>
+            <div className="ChatTinyHint">
+              默认关闭。与 TCP only 互斥，开启后自动关闭 TCP only。重启 Yggdrasil
+              服务才能生效。
+            </div>
+          </div>
+        </div>
+
+        <div className="ChatTopItem">
+          <div className="ChatTopLabel">Prefer IPv6</div>
+          <div className="ChatStack">
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={preferIpv6}
+                onChange={(e) => setPreferIpv6(e.target.checked)}
+                disabled={saving}
+              />
+              <span>IPv6 地址优先</span>
+            </label>
+            <div className="ChatTinyHint">
+              默认关闭。P2P 连接时 IPv6 地址排序优先于 IPv4。重启 Yggdrasil
               服务才能生效。
             </div>
           </div>

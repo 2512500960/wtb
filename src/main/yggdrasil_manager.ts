@@ -28,7 +28,7 @@ type YggdrasilManagerOptions = {
   getOwnerWindow: () => BrowserWindow | null;
   logger: LoggerLike;
   bootstrapNodes: string[];
-  getYggdrasilConfig?: () => { ifMtu: number; tcpOnly: boolean; p2pEnabled: boolean; yamuxStreamWindowKb: number };
+  getYggdrasilConfig?: () => { ifMtu: number; tcpOnly: boolean; p2pEnabled: boolean; yamuxStreamWindowKb: number; quicOnly: boolean; preferIpv6: boolean };
 };
 
 type PeArch = 'x86' | 'x64' | 'arm64' | 'unknown';
@@ -64,7 +64,7 @@ const yggdrasilWtbDefaults = Object.freeze({
   ifMtu: 32768,
   routeProbe: true,
   NodeInfoPrivacy: true,
-  P2P: { tcp_only: true, yamuxStreamWindowKb: 16384 },
+  P2P: { tcp_only: true, yamuxStreamWindowKb: 16384, quicOnly: false, preferIpv6: false },
 });
 
 const psSingleQuote = (value: string): string => {
@@ -641,7 +641,7 @@ export class YggdrasilManager {
     this.writeConfDocument(confPath, doc);
   }
 
-  private getYggCfg(): { ifMtu: number; tcpOnly: boolean; p2pEnabled: boolean; yamuxStreamWindowKb: number } {
+  private getYggCfg(): { ifMtu: number; tcpOnly: boolean; p2pEnabled: boolean; yamuxStreamWindowKb: number; quicOnly: boolean; preferIpv6: boolean } {
     if (this.options.getYggdrasilConfig) {
       return this.options.getYggdrasilConfig();
     }
@@ -650,6 +650,8 @@ export class YggdrasilManager {
       tcpOnly: (yggdrasilWtbDefaults.P2P && yggdrasilWtbDefaults.P2P.tcp_only) || true,
       p2pEnabled: true,
       yamuxStreamWindowKb: yggdrasilWtbDefaults.P2P?.yamuxStreamWindowKb ?? 16384,
+      quicOnly: yggdrasilWtbDefaults.P2P?.quicOnly ?? false,
+      preferIpv6: yggdrasilWtbDefaults.P2P?.preferIpv6 ?? false,
     };
   }
 
@@ -725,6 +727,16 @@ export class YggdrasilManager {
 
     if (doc.P2P.yamux_stream_window_kb !== cfg.yamuxStreamWindowKb) {
       doc.P2P.yamux_stream_window_kb = cfg.yamuxStreamWindowKb;
+      changed = true;
+    }
+
+    if (doc.P2P.quic_only !== cfg.quicOnly) {
+      doc.P2P.quic_only = cfg.quicOnly;
+      changed = true;
+    }
+
+    if (doc.P2P.prefer_ipv6 !== cfg.preferIpv6) {
+      doc.P2P.prefer_ipv6 = cfg.preferIpv6;
       changed = true;
     }
 
